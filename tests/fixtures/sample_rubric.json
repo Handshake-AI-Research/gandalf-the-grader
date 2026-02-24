@@ -1,0 +1,5 @@
+[
+  {"criteria": "The file index.html exists in the workspace", "weight": 1.0},
+  {"criteria": "The page displays 'Hello World'", "weight": 2.0},
+  {"criteria": "The HTML is valid", "weight": 0.5}
+]

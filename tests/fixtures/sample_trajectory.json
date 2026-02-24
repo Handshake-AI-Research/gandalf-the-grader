@@ -1,0 +1,17 @@
+{
+  "steps": [
+    {
+      "source": "user",
+      "message": "Build a hello world web page"
+    },
+    {
+      "source": "agent",
+      "message": "I'll create the file now.",
+      "tool_calls": [{"name": "write_file", "args": {"path": "index.html"}}]
+    },
+    {
+      "source": "agent",
+      "message": "Done! I created index.html with a Hello World page."
+    }
+  ]
+}
