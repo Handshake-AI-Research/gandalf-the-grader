@@ -3,13 +3,13 @@ name = "gandalf-grader"
 version = "0.1.0"
 description = "Agent-as-judge grading framework for evaluating AI agent outputs against rubric criteria"
 readme = "README.md"
-license = "MIT"
+license = "Apache-2.0"
 requires-python = ">=3.12"
-authors = [{ name = "Handshake AI Research" }]
+authors = [{ name = "Handshake" }]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
-    "License :: OSI Approved :: MIT License",
+    "License :: OSI Approved :: Apache Software License",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
