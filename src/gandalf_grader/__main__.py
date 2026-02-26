@@ -407,13 +407,32 @@ def _run_batch(
     return results, llm_usage
 
 
+def _is_infra_failure(results: list[CriteriaResult]) -> bool:
+    """Return True if no criterion was actually evaluated by the judge.
+
+    When every criterion failed without producing any evidence, the failures
+    are almost certainly caused by infrastructure problems (LLM API down,
+    missing API keys, workspace clone errors, etc.) rather than the agent
+    genuinely failing every check.
+    """
+    return bool(results) and not any(r.passed or r.evidence for r in results)
+
+
 def _compute_and_write_results(
     config: VerifierConfig,
     rubric: list[RubricItem],
     results: list[CriteriaResult],
     llm_usage: dict[str, Any],
+    *,
+    write_reward: bool = True,
 ) -> None:
-    """Compute the weighted score and write reward.json / info.json."""
+    """Compute the weighted score and write reward.json / info.json.
+
+    When *write_reward* is False, only ``info.json`` is written (for
+    debugging) and ``reward.json`` is deliberately omitted so the caller
+    (e.g. Harbor) can detect the missing file and treat the trial as an
+    infrastructure error rather than a legitimate score of 0.0.
+    """
     total_weight = sum(r.weight for r in results)
     score = round(
         sum(r.weight * (1.0 if r.passed else 0.0) for r in results) / total_weight if total_weight > 0 else 0.0,
@@ -425,8 +444,9 @@ def _compute_and_write_results(
     total_completion = llm_usage.get("completion_tokens", 0)
     total_cache_read = llm_usage.get("cache_read_tokens", 0)
 
-    with open(os.path.join(config.output_dir, "reward.json"), "w") as f:
-        json.dump({"score": score}, f, indent=2)
+    if write_reward:
+        with open(os.path.join(config.output_dir, "reward.json"), "w") as f:
+            json.dump({"score": score}, f, indent=2)
 
     info = EvaluationInfo(
         score=score,
@@ -488,17 +508,22 @@ def main() -> None:
     else:
         results, llm_usage = _run_sequential(config, rubric, final_output, judge_guidance)
 
-    _compute_and_write_results(config, rubric, results, llm_usage)
+    infra_failure = _is_infra_failure(results)
 
-    # If no criterion was actually evaluated by the judge (all failed due to
-    # infrastructure issues like sudo, missing API keys, workspace clone errors),
-    # exit non-zero so the caller can distinguish infrastructure errors from
-    # a legitimate score of 0.0.
-    evaluated = any(r.passed or r.evidence for r in results)
-    if results and not evaluated:
+    # Write info.json always (for debugging), but skip reward.json when every
+    # criterion failed without evidence — that indicates infrastructure errors,
+    # not a genuine evaluation.  By omitting reward.json the caller (e.g.
+    # Harbor) will raise RewardFileNotFoundError and count the trial as an
+    # error instead of silently recording score=0.0.
+    _compute_and_write_results(
+        config, rubric, results, llm_usage, write_reward=not infra_failure,
+    )
+
+    if infra_failure:
         print(
             "\nERROR: No criteria were successfully evaluated. "
-            "All failures appear to be infrastructure errors.",
+            "All failures appear to be infrastructure errors.\n"
+            "reward.json was NOT written — the caller should treat this as an error.",
             file=sys.stderr,
         )
         sys.exit(1)

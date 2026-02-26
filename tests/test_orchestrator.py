@@ -6,8 +6,15 @@ from unittest.mock import patch
 
 import pytest
 
-from gandalf_grader.__main__ import _JUDGE_ENV_ALLOWLIST, _judge_env_vars, evaluate_all_criteria, resolve_judge_guidance
-from gandalf_grader.config import BatchJudgeInput, VerifierConfig
+from gandalf_grader.__main__ import (
+    _JUDGE_ENV_ALLOWLIST,
+    _compute_and_write_results,
+    _is_infra_failure,
+    _judge_env_vars,
+    evaluate_all_criteria,
+    resolve_judge_guidance,
+)
+from gandalf_grader.config import BatchJudgeInput, CriteriaResult, RubricItem, VerifierConfig
 
 
 def _make_config(**overrides) -> VerifierConfig:
@@ -369,3 +376,101 @@ class TestEvaluateAllCriteria:
         assert len(verdicts) == 2
         assert all(v["passed"] is False for v in verdicts)
         assert usage == {}
+
+
+class TestIsInfraFailure:
+    """Tests for _is_infra_failure detection."""
+
+    def test_all_failed_no_evidence_is_infra(self):
+        results = [
+            CriteriaResult(criteria="c1", weight=1, passed=False, reasoning="Judge error", evidence=[]),
+            CriteriaResult(criteria="c2", weight=1, passed=False, reasoning="Judge error", evidence=[]),
+        ]
+        assert _is_infra_failure(results) is True
+
+    def test_one_passed_is_not_infra(self):
+        results = [
+            CriteriaResult(criteria="c1", weight=1, passed=True, reasoning="ok", evidence=[]),
+            CriteriaResult(criteria="c2", weight=1, passed=False, reasoning="no", evidence=[]),
+        ]
+        assert _is_infra_failure(results) is False
+
+    def test_failed_with_evidence_is_not_infra(self):
+        results = [
+            CriteriaResult(
+                criteria="c1", weight=1, passed=False, reasoning="no",
+                evidence=["Read file: contents were wrong"],
+            ),
+        ]
+        assert _is_infra_failure(results) is False
+
+    def test_empty_results_is_not_infra(self):
+        assert _is_infra_failure([]) is False
+
+    def test_mixed_evidence_is_not_infra(self):
+        results = [
+            CriteriaResult(criteria="c1", weight=1, passed=False, reasoning="error", evidence=[]),
+            CriteriaResult(
+                criteria="c2", weight=1, passed=False, reasoning="checked",
+                evidence=["Ran command: no output"],
+            ),
+        ]
+        assert _is_infra_failure(results) is False
+
+
+class TestComputeAndWriteResults:
+    """Tests for _compute_and_write_results reward.json / info.json output."""
+
+    def _make_results(self, passed_flags):
+        return [
+            CriteriaResult(
+                criteria=f"criterion {i}",
+                weight=1.0,
+                passed=p,
+                reasoning="ok" if p else "fail",
+                evidence=["checked"] if p else [],
+            )
+            for i, p in enumerate(passed_flags)
+        ]
+
+    def _make_rubric(self, n):
+        return [RubricItem(criteria=f"criterion {i}", weight=1.0) for i in range(n)]
+
+    def test_writes_both_files_by_default(self, tmp_path):
+        config = _make_config(output_dir=str(tmp_path))
+        results = self._make_results([True, False])
+        rubric = self._make_rubric(2)
+
+        _compute_and_write_results(config, rubric, results, {})
+
+        assert (tmp_path / "reward.json").exists()
+        assert (tmp_path / "info.json").exists()
+        reward = json.loads((tmp_path / "reward.json").read_text())
+        assert reward["score"] == 0.5
+
+    def test_skips_reward_when_write_reward_false(self, tmp_path):
+        config = _make_config(output_dir=str(tmp_path))
+        results = self._make_results([False, False])
+        rubric = self._make_rubric(2)
+
+        _compute_and_write_results(config, rubric, results, {}, write_reward=False)
+
+        assert not (tmp_path / "reward.json").exists()
+        assert (tmp_path / "info.json").exists()
+
+    def test_info_json_written_even_on_infra_failure(self, tmp_path):
+        config = _make_config(output_dir=str(tmp_path))
+        results = [
+            CriteriaResult(
+                criteria="c1", weight=1.0, passed=False,
+                reasoning="Judge execution error: API down", evidence=[],
+            ),
+        ]
+        rubric = self._make_rubric(1)
+
+        _compute_and_write_results(config, rubric, results, {}, write_reward=False)
+
+        assert not (tmp_path / "reward.json").exists()
+        info = json.loads((tmp_path / "info.json").read_text())
+        assert info["score"] == 0.0
+        assert "API down" in info["criteria_results"][0]["reasoning"]
