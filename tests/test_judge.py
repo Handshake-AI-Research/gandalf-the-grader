@@ -1,6 +1,8 @@
 """Tests for gandalf_grader.judge."""
 
 import json
+import sys
+import types
 from unittest.mock import patch
 
 from gandalf_grader.judge import (
@@ -458,3 +460,91 @@ class TestRunJudgeBatch:
         assert data["llm_usage"]["prompt_tokens"] == 1000
         assert all(v["passed"] is False for v in data["verdicts"])
         assert "Batch parsing blew up" in data["verdicts"][0]["reasoning"]
+
+
+class TestPatchActionSchemas:
+    """Tests for _patch_action_schemas_to_ignore_extra.
+
+    Uses lightweight Pydantic stand-ins so the test runs without openhands installed.
+    Each test creates *fresh* classes to avoid cross-test pollution.
+    """
+
+    def _install_fake_openhands(self):
+        """Install minimal fake openhands modules that mirror the real hierarchy.
+
+        Returns fresh classes each time so tests are fully independent.
+        """
+        from pydantic import BaseModel
+        from pydantic import ConfigDict as CD
+
+        class FakeAction(BaseModel):
+            model_config = CD(extra="forbid", frozen=True)
+
+        class FakeTerminalAction(FakeAction):
+            command: str = ""
+
+        class FakeFileEditorAction(FakeAction):
+            command: str = ""
+            path: str = ""
+
+        # Build a module tree that matches the imports in the patch function.
+        schema_mod = types.ModuleType("openhands.sdk.tool.schema")
+        schema_mod.Action = FakeAction  # type: ignore[attr-defined]
+
+        terminal_mod = types.ModuleType("openhands.tools.terminal")
+        terminal_mod.TerminalAction = FakeTerminalAction  # type: ignore[attr-defined]
+
+        file_editor_mod = types.ModuleType("openhands.tools.file_editor")
+        file_editor_mod.FileEditorAction = FakeFileEditorAction  # type: ignore[attr-defined]
+
+        # Register parent packages so Python's import machinery is happy.
+        for name in (
+            "openhands",
+            "openhands.sdk",
+            "openhands.sdk.tool",
+            "openhands.sdk.tool.schema",
+            "openhands.tools",
+            "openhands.tools.terminal",
+            "openhands.tools.file_editor",
+        ):
+            sys.modules.setdefault(name, types.ModuleType(name))
+
+        sys.modules["openhands.sdk.tool.schema"] = schema_mod
+        sys.modules["openhands.tools.terminal"] = terminal_mod
+        sys.modules["openhands.tools.file_editor"] = file_editor_mod
+
+        return FakeAction, FakeTerminalAction, FakeFileEditorAction
+
+    def test_patch_changes_extra_to_ignore(self):
+        Action, TerminalAction, FileEditorAction = self._install_fake_openhands()
+        from gandalf_grader.judge import _patch_action_schemas_to_ignore_extra
+
+        # Precondition: extra is forbid.
+        assert Action.model_config.get("extra") == "forbid"
+
+        _patch_action_schemas_to_ignore_extra()
+
+        assert Action.model_config.get("extra") == "ignore"
+        assert TerminalAction.model_config.get("extra") == "ignore"
+        assert FileEditorAction.model_config.get("extra") == "ignore"
+
+    def test_terminal_action_accepts_extra_fields_after_patch(self):
+        _, TerminalAction, _ = self._install_fake_openhands()
+        from gandalf_grader.judge import _patch_action_schemas_to_ignore_extra
+
+        _patch_action_schemas_to_ignore_extra()
+
+        # Should NOT raise -- the extra "evidence" key is silently ignored.
+        obj = TerminalAction(command="ls", evidence=["some data"])  # type: ignore[call-arg]
+        assert obj.command == "ls"
+        # The extra field should not be stored on the model.
+        assert not hasattr(obj, "evidence")
+
+    def test_patch_is_idempotent(self):
+        Action, _, _ = self._install_fake_openhands()
+        from gandalf_grader.judge import _patch_action_schemas_to_ignore_extra
+
+        _patch_action_schemas_to_ignore_extra()
+        _patch_action_schemas_to_ignore_extra()  # second call should be a no-op
+
+        assert Action.model_config.get("extra") == "ignore"

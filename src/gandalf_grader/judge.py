@@ -276,6 +276,36 @@ def _make_verdict_path(prefix: str = "verdict_") -> str:
     )
 
 
+def _patch_action_schemas_to_ignore_extra() -> None:
+    """Relax Pydantic ``extra="forbid"`` on OpenHands tool action schemas.
+
+    LLMs occasionally include unexpected keys in tool-call arguments (e.g.
+    ``evidence`` from the verdict schema leaking into a ``terminal`` call).
+    The upstream ``Action`` base sets ``extra="forbid"`` which causes a hard
+    ``ValidationError`` for any extra key.  Changing it to ``"ignore"``
+    silently drops the spurious keys and lets the tool call proceed.
+
+    This is a targeted monkey-patch applied to the ``Action`` base class
+    and the two concrete subclasses used by the judge agent.
+    """
+    from openhands.sdk.tool.schema import Action
+    from openhands.tools.file_editor import FileEditorAction
+    from openhands.tools.terminal import TerminalAction
+    from pydantic import ConfigDict
+
+    if Action.model_config.get("extra") == "ignore":
+        return  # already patched
+
+    # Pydantic bakes the config into a compiled validator at class-creation
+    # time.  We must update model_config on every class in the hierarchy
+    # and force a full rebuild so the validator is re-compiled.
+    for cls in (Action, TerminalAction, FileEditorAction):
+        cls.model_config = ConfigDict(
+            **{**cls.model_config, "extra": "ignore"},
+        )
+        cls.model_rebuild(force=True)
+
+
 def _run_agent_session(
     model: str,
     mcp_servers: list[dict[str, Any]],
@@ -290,6 +320,8 @@ def _run_agent_session(
     from openhands.sdk import LLM, Agent, Conversation, Tool
     from openhands.tools.file_editor import FileEditorTool
     from openhands.tools.terminal import TerminalTool
+
+    _patch_action_schemas_to_ignore_extra()
 
     api_key = os.environ.get("LLM_API_KEY")
     if not api_key:
