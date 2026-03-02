@@ -148,7 +148,7 @@ The OpenHands SDK has built-in OpenTelemetry tracing that automatically instrume
 echo -n "pk-lf-...:sk-lf-..." | base64
 
 # Export the variables
-export OTEL_EXPORTER_OTLP_ENDPOINT=https://cloud.langfuse.com/api/public/otel
+export OTEL_EXPORTER_OTLP_ENDPOINT=https://cloud.langfuse.com/api/public/otel/v1/traces
 export OTEL_EXPORTER_OTLP_HEADERS="Authorization=Basic%20<base64-encoded-keys>"
 export OTEL_EXPORTER_OTLP_TRACES_PROTOCOL=http/protobuf
 ```
