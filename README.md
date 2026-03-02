@@ -133,6 +133,25 @@ For a complete container architecture with task runners and agent environments, 
 | `LLM_API_KEY` | API key for the LLM provider |
 | `LLM_BASE_URL` | Base URL for the LLM API (optional) |
 | `VERIFIER_JUDGE_GUIDANCE_PATH` | Fallback path to judge guidance file (if not set in TOML) |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | OTLP endpoint URL for trace export (optional) |
+| `OTEL_EXPORTER_OTLP_HEADERS` | OTLP auth headers, URL-encoded (optional) |
+| `OTEL_EXPORTER_OTLP_TRACES_PROTOCOL` | OTLP transport protocol, e.g. `http/protobuf` (optional) |
+
+### Tracing / Observability
+
+The OpenHands SDK has built-in OpenTelemetry tracing that automatically instruments LLM calls, tool executions, and agent steps. Set the `OTEL_EXPORTER_OTLP_*` variables above to export traces to any OTEL-compatible backend — no code changes required.
+
+**Example: Langfuse**
+
+```bash
+# Encode your Langfuse keys
+echo -n "pk-lf-...:sk-lf-..." | base64
+
+# Export the variables
+export OTEL_EXPORTER_OTLP_ENDPOINT=https://cloud.langfuse.com/api/public/otel
+export OTEL_EXPORTER_OTLP_HEADERS="Authorization=Basic%20<base64-encoded-keys>"
+export OTEL_EXPORTER_OTLP_TRACES_PROTOCOL=http/protobuf
+```
 
 ## Output
 

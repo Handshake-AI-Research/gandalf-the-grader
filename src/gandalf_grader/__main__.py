@@ -48,6 +48,11 @@ _JUDGE_ENV_ALLOWLIST = (
     "UV_TOOL_DIR",
     "UV_TOOL_BIN_DIR",
     "UV_PYTHON_INSTALL_DIR",
+    # OpenTelemetry — forwarded so the inner judge can export traces
+    # to any OTEL-compatible backend (e.g. Langfuse, Jaeger, Honeycomb).
+    "OTEL_EXPORTER_OTLP_ENDPOINT",
+    "OTEL_EXPORTER_OTLP_HEADERS",
+    "OTEL_EXPORTER_OTLP_TRACES_PROTOCOL",
 )
 
 
