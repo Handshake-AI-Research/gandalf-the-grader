@@ -3,6 +3,8 @@
 import json
 import subprocess
 import sys
+import threading
+import time
 from unittest.mock import patch
 
 import pytest
@@ -181,6 +183,8 @@ class TestEvaluateAllCriteria:
         assert verdicts[0]["passed"] is True
         assert verdicts[1]["passed"] is False
         assert usage["cost_usd"] == 0.1
+        called_cmd = mock_live_trace.call_args.kwargs["cmd"]
+        assert "PYTHONUNBUFFERED=1" in called_cmd
 
     @patch("gandalf_grader.__main__._clone_workspace")
     @patch("gandalf_grader.__main__._run_with_live_trace")
@@ -395,3 +399,43 @@ class TestLiveTraceRunner:
         assert "[stdout] out-1" in trace
         assert "[stderr] err-1" in trace
         assert "exit_code: 0" in trace
+
+    def test_run_with_live_trace_writes_before_process_exit(self, tmp_path):
+        trace_path = tmp_path / "live_trace_streaming.txt"
+        cmd = [
+            sys.executable,
+            "-c",
+            (
+                "import time; "
+                "print('first-line', flush=True); "
+                "time.sleep(0.5); "
+                "print('second-line', flush=True)"
+            ),
+        ]
+
+        result_holder: dict[str, tuple[int, str, str, bool]] = {}
+
+        def _runner() -> None:
+            result_holder["result"] = _run_with_live_trace(
+                cmd=cmd,
+                cwd=str(tmp_path),
+                trace_path=str(trace_path),
+                timeout=5,
+            )
+
+        t = threading.Thread(target=_runner)
+        t.start()
+
+        saw_first_line = False
+        deadline = time.time() + 2
+        while time.time() < deadline:
+            if trace_path.exists():
+                trace = trace_path.read_text()
+                if "[stdout] first-line" in trace:
+                    saw_first_line = True
+                    break
+            time.sleep(0.02)
+
+        assert saw_first_line is True
+        t.join(timeout=5)
+        assert "result" in result_holder

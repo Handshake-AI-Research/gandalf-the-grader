@@ -186,6 +186,12 @@ def _fail_all(n: int, reason: str) -> list[dict[str, Any]]:
     return [{"index": i, "passed": False, "reasoning": reason, "evidence": []} for i in range(n)]
 
 
+def _append_trace_message(trace_path: str, message: str) -> None:
+    """Append a verifier-side diagnostic message to the trace file."""
+    with contextlib.suppress(OSError), open(trace_path, "a") as f:
+        f.write(f"[verifier] {message}\n")
+
+
 def _run_with_live_trace(
     cmd: list[str],
     cwd: str,
@@ -283,7 +289,9 @@ def evaluate_all_criteria(
     try:
         clone_dir = _clone_workspace(judge_input.workdir)
     except Exception as e:
-        return _fail_all(n_criteria, f"Failed to clone workspace: {e}"), {}
+        reason = f"Failed to clone workspace: {e}"
+        _save_trace(trace_path, "", reason, -1)
+        return _fail_all(n_criteria, reason), {}
 
     cloned_input = judge_input.model_copy(update={"workdir": clone_dir})
 
@@ -311,6 +319,7 @@ def evaluate_all_criteria(
             "-u",
             sandbox_user,
             "env",
+            "PYTHONUNBUFFERED=1",
             *_judge_env_vars(),
             "gandalf-grader-judge",
             "--input",
@@ -350,7 +359,9 @@ def evaluate_all_criteria(
             return _fail_all(n_criteria, reason), {}
 
     except (json.JSONDecodeError, FileNotFoundError, TypeError, AttributeError) as e:
-        return _fail_all(n_criteria, f"Failed to read judge output: {e}"), {}
+        reason = f"Failed to read judge output: {e}"
+        _append_trace_message(trace_path, reason)
+        return _fail_all(n_criteria, reason), {}
     finally:
         shutil.rmtree(clone_dir, ignore_errors=True)
         for path in (input_path, output_path):
