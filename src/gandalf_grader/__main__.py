@@ -186,92 +186,71 @@ def _fail_all(n: int, reason: str) -> list[dict[str, Any]]:
     return [{"index": i, "passed": False, "reasoning": reason, "evidence": []} for i in range(n)]
 
 
-def _append_trace_message(trace_path: str, message: str) -> None:
-    """Append a verifier-side diagnostic message to the trace file."""
-    with contextlib.suppress(OSError), open(trace_path, "a") as f:
-        f.write(f"[verifier] {message}\n")
-
-
-def _run_with_live_trace(
+def _run_with_live_output(
     cmd: list[str],
     cwd: str,
-    trace_path: str,
     timeout: int,
 ) -> tuple[int, str, str, bool]:
-    """Run a subprocess while streaming stdout/stderr into ``trace_path``."""
+    """Run a subprocess while streaming child output to verifier stdout/stderr."""
     stdout_chunks: list[str] = []
     stderr_chunks: list[str] = []
     write_lock = threading.Lock()
 
-    with open(trace_path, "w") as trace_f:
-        trace_f.write("exit_code: running\n")
-        trace_f.write("=== live output ===\n")
-        trace_f.flush()
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=False,
+            cwd=cwd,
+            bufsize=0,
+        )
+    except Exception as e:
+        print(f"[verifier] Failed to start judge subprocess: {e}", file=sys.stderr, flush=True)
+        return -1, "", str(e), False
 
+    def _pump(
+        stream: Any,
+        sink: list[str],
+        to_stderr: bool,
+    ) -> None:
+        if stream is None:
+            return
         try:
-            proc = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=False,
-                cwd=cwd,
-                bufsize=0,
-            )
-        except Exception as e:
-            trace_f.write(f"[verifier] Failed to start judge subprocess: {e}\n")
-            trace_f.write("exit_code: -1\n")
-            trace_f.flush()
-            return -1, "", str(e), False
-
-        def _pump(
-            stream: Any,
-            label: str,
-            sink: list[str],
-        ) -> None:
-            if stream is None:
-                return
-            try:
-                while True:
-                    chunk = stream.read(1024)
-                    if not chunk:
-                        break
-                    text = chunk.decode(errors="replace")
-                    sink.append(text)
-                    with write_lock:
-                        trace_f.write(f"[{label}] {text}")
-                        trace_f.flush()
-            finally:
-                with contextlib.suppress(Exception):
-                    stream.close()
-
-        out_thread = threading.Thread(target=_pump, args=(proc.stdout, "stdout", stdout_chunks), daemon=True)
-        err_thread = threading.Thread(target=_pump, args=(proc.stderr, "stderr", stderr_chunks), daemon=True)
-        out_thread.start()
-        err_thread.start()
-
-        timed_out = False
-        try:
-            returncode = proc.wait(timeout=timeout)
-        except subprocess.TimeoutExpired:
-            timed_out = True
+            while True:
+                chunk = stream.read(1024)
+                if not chunk:
+                    break
+                text = chunk.decode(errors="replace")
+                sink.append(text)
+                with write_lock:
+                    if to_stderr:
+                        print(text, end="", file=sys.stderr, flush=True)
+                    else:
+                        print(text, end="", file=sys.stdout, flush=True)
+        finally:
             with contextlib.suppress(Exception):
-                proc.kill()
-            with contextlib.suppress(Exception):
-                proc.wait(timeout=5)
-            returncode = -1
-            with write_lock:
-                trace_f.write("[verifier] Batch judge execution timed out.\n")
-                trace_f.flush()
+                stream.close()
 
-        out_thread.join()
-        err_thread.join()
+    out_thread = threading.Thread(target=_pump, args=(proc.stdout, stdout_chunks, False), daemon=True)
+    err_thread = threading.Thread(target=_pump, args=(proc.stderr, stderr_chunks, True), daemon=True)
+    out_thread.start()
+    err_thread.start()
 
-        with write_lock:
-            trace_f.write(f"\nexit_code: {returncode}\n")
-            if timed_out:
-                trace_f.write("timeout: true\n")
-            trace_f.flush()
+    timed_out = False
+    try:
+        returncode = proc.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        timed_out = True
+        with contextlib.suppress(Exception):
+            proc.kill()
+        with contextlib.suppress(Exception):
+            proc.wait(timeout=5)
+        returncode = -1
+        print("[verifier] Batch judge execution timed out.", file=sys.stderr, flush=True)
 
+    out_thread.join()
+    err_thread.join()
     return returncode, "".join(stdout_chunks), "".join(stderr_chunks), timed_out
 
 
@@ -300,6 +279,7 @@ def evaluate_all_criteria(
         clone_dir = _clone_workspace(judge_input.workdir)
     except Exception as e:
         reason = f"Failed to clone workspace: {e}"
+        print(f"[verifier] {reason}", file=sys.stderr, flush=True)
         _save_trace(trace_path, "", reason, -1)
         return _fail_all(n_criteria, reason), {}
 
@@ -339,12 +319,12 @@ def evaluate_all_criteria(
             "--batch",
         ]
 
-        returncode, _stdout, stderr, timed_out = _run_with_live_trace(
+        returncode, _stdout, stderr, timed_out = _run_with_live_output(
             cmd=cmd,
             cwd=clone_dir,
-            trace_path=trace_path,
             timeout=timeout,
         )
+        _save_trace(trace_path, _stdout, stderr, returncode)
 
         if timed_out:
             return _fail_all(n_criteria, "Judge execution timed out."), {}
@@ -370,11 +350,15 @@ def evaluate_all_criteria(
 
     except (json.JSONDecodeError, FileNotFoundError, TypeError, AttributeError) as e:
         reason = f"Failed to read judge output: {e}"
-        _append_trace_message(trace_path, reason)
+        print(f"[verifier] {reason}", file=sys.stderr, flush=True)
+        _append = f"\n[verifier] {reason}"
+        _save_trace(trace_path, "", _append, -1)
         return _fail_all(n_criteria, reason), {}
     except Exception as e:
         reason = f"Unexpected verifier error while running batch judge: {e}"
-        _append_trace_message(trace_path, reason)
+        print(f"[verifier] {reason}", file=sys.stderr, flush=True)
+        _append = f"\n[verifier] {reason}"
+        _save_trace(trace_path, "", _append, -1)
         return _fail_all(n_criteria, reason), {}
     finally:
         shutil.rmtree(clone_dir, ignore_errors=True)
