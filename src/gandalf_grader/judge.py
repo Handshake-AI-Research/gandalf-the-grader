@@ -277,16 +277,85 @@ def _make_verdict_path(prefix: str = "verdict_") -> str:
     )
 
 
+class AgentSessionResult:
+    """Result of an agent session, including usage metrics and event summary."""
+
+    __slots__ = ("llm_usage", "execution_status", "event_summary")
+
+    def __init__(
+        self,
+        llm_usage: dict[str, Any],
+        execution_status: str,
+        event_summary: str,
+    ):
+        self.llm_usage = llm_usage
+        self.execution_status = execution_status
+        self.event_summary = event_summary
+
+
+def _summarize_events(conversation: Any) -> str:
+    """Build a compact human-readable summary of the agent's event log.
+
+    Captures tool calls, their results (truncated), and any errors —
+    exactly the information needed to diagnose why the agent didn't
+    write a verdict file.
+    """
+    from openhands.sdk.event import (
+        ActionEvent,
+        AgentErrorEvent,
+        MessageEvent,
+        ObservationEvent,
+    )
+
+    lines: list[str] = []
+    try:
+        events = conversation.state.events
+        lines.append(f"Events: {len(events)} total")
+
+        for event in events:
+            if isinstance(event, MessageEvent):
+                sender = getattr(event, "sender", "?")
+                msg_text = str(getattr(event, "llm_message", ""))[:200]
+                lines.append(f"  [{sender}] message: {msg_text}")
+
+            elif isinstance(event, ActionEvent):
+                tool = getattr(event, "tool_name", "?")
+                thought = str(getattr(event, "thought", "") or "")[:150]
+                action = str(getattr(event, "action", ""))[:300]
+                lines.append(f"  [action] tool={tool}")
+                if thought:
+                    lines.append(f"    thought: {thought}")
+                lines.append(f"    action: {action}")
+
+            elif isinstance(event, ObservationEvent):
+                tool = getattr(event, "tool_name", "?")
+                obs = str(getattr(event, "observation", ""))
+                # Truncate long observations but keep enough to be useful
+                if len(obs) > 500:
+                    obs = obs[:250] + f"\n    ... ({len(obs)} chars total) ...\n    " + obs[-250:]
+                lines.append(f"  [observation] tool={tool}: {obs}")
+
+            elif isinstance(event, AgentErrorEvent):
+                err = str(getattr(event, "error", ""))[:500]
+                lines.append(f"  [ERROR] {err}")
+
+    except Exception as e:
+        lines.append(f"  (failed to extract events: {e})")
+
+    return "\n".join(lines)
+
+
 def _run_agent_session(
     model: str,
     mcp_servers: list[dict[str, Any]],
     workdir: str,
     prompt: str,
-) -> dict[str, Any]:
+) -> AgentSessionResult:
     """Create an OpenHands agent and run a single conversation.
 
     The agent writes its output to a file (path embedded in *prompt*).
-    Returns a dict of LLM usage metrics (may be empty if extraction fails).
+    Returns an AgentSessionResult with usage metrics, execution status,
+    and a summary of the agent's event log.
     """
     from openhands.sdk import LLM, Agent, Conversation, Tool
     from openhands.tools.file_editor import FileEditorTool
@@ -330,6 +399,17 @@ def _run_agent_session(
     conversation.send_message(prompt)  # type: ignore[attr-defined]
     conversation.run()  # type: ignore[attr-defined]
 
+    # Extract execution status
+    execution_status = "unknown"
+    try:
+        execution_status = str(conversation.state.execution_status)
+    except Exception:
+        pass
+
+    # Extract event summary
+    event_summary = _summarize_events(conversation)
+
+    # Extract LLM usage metrics
     llm_usage: dict[str, Any] = {}
     try:
         token_usage = llm.metrics.accumulated_token_usage
@@ -341,7 +421,12 @@ def _run_agent_session(
         }
     except Exception:
         pass
-    return llm_usage
+
+    return AgentSessionResult(
+        llm_usage=llm_usage,
+        execution_status=execution_status,
+        event_summary=event_summary,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -375,9 +460,20 @@ def run_judge(input_path: str, output_path: str) -> None:
 
     llm_usage: dict[str, Any] = {}
     try:
-        llm_usage = _run_agent_session(
+        session = _run_agent_session(
             judge_input.model, mcp_servers, judge_input.workdir, prompt
         )
+        llm_usage = session.llm_usage
+
+        verdict_exists = os.path.isfile(verdict_path)
+        if not verdict_exists:
+            print(
+                f"[gandalf-judge] Agent did not write verdict file.\n"
+                f"  status: {session.execution_status}\n"
+                f"  agent event log:\n{session.event_summary}",
+                file=sys.stderr,
+            )
+
         verdict = _read_verdict(verdict_path)
         output = {
             "passed": verdict.passed,
@@ -443,9 +539,20 @@ def run_judge_batch(input_path: str, output_path: str) -> None:
 
     llm_usage: dict[str, Any] = {}
     try:
-        llm_usage = _run_agent_session(
+        session = _run_agent_session(
             judge_input.model, mcp_servers, judge_input.workdir, prompt
         )
+        llm_usage = session.llm_usage
+
+        verdict_exists = os.path.isfile(verdict_path)
+        if not verdict_exists:
+            print(
+                f"[gandalf-judge] [batch] Agent did not write verdict file.\n"
+                f"  status: {session.execution_status}\n"
+                f"  agent event log:\n{session.event_summary}",
+                file=sys.stderr,
+            )
+
         verdicts = _read_batch_verdict(verdict_path, n_criteria)
     except Exception as e:
         import traceback
