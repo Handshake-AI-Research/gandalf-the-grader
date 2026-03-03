@@ -208,14 +208,20 @@ def _run_with_live_trace(
         trace_f.write("=== live output ===\n")
         trace_f.flush()
 
-        proc = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            cwd=cwd,
-            bufsize=1,
-        )
+        try:
+            proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=False,
+                cwd=cwd,
+                bufsize=0,
+            )
+        except Exception as e:
+            trace_f.write(f"[verifier] Failed to start judge subprocess: {e}\n")
+            trace_f.write("exit_code: -1\n")
+            trace_f.flush()
+            return -1, "", str(e), False
 
         def _pump(
             stream: Any,
@@ -225,10 +231,14 @@ def _run_with_live_trace(
             if stream is None:
                 return
             try:
-                for line in iter(stream.readline, ""):
-                    sink.append(line)
+                while True:
+                    chunk = stream.read(1024)
+                    if not chunk:
+                        break
+                    text = chunk.decode(errors="replace")
+                    sink.append(text)
                     with write_lock:
-                        trace_f.write(f"[{label}] {line}")
+                        trace_f.write(f"[{label}] {text}")
                         trace_f.flush()
             finally:
                 with contextlib.suppress(Exception):
@@ -360,6 +370,10 @@ def evaluate_all_criteria(
 
     except (json.JSONDecodeError, FileNotFoundError, TypeError, AttributeError) as e:
         reason = f"Failed to read judge output: {e}"
+        _append_trace_message(trace_path, reason)
+        return _fail_all(n_criteria, reason), {}
+    except Exception as e:
+        reason = f"Unexpected verifier error while running batch judge: {e}"
         _append_trace_message(trace_path, reason)
         return _fail_all(n_criteria, reason), {}
     finally:

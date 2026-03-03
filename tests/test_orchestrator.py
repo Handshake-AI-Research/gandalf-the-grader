@@ -439,3 +439,43 @@ class TestLiveTraceRunner:
         assert saw_first_line is True
         t.join(timeout=5)
         assert "result" in result_holder
+
+    def test_run_with_live_trace_writes_partial_chunk_before_newline(self, tmp_path):
+        trace_path = tmp_path / "live_trace_partial.txt"
+        cmd = [
+            sys.executable,
+            "-c",
+            (
+                "import sys,time; "
+                "sys.stdout.write('partial'); sys.stdout.flush(); "
+                "time.sleep(0.5); "
+                "sys.stdout.write('-done\\n'); sys.stdout.flush()"
+            ),
+        ]
+
+        result_holder: dict[str, tuple[int, str, str, bool]] = {}
+
+        def _runner() -> None:
+            result_holder["result"] = _run_with_live_trace(
+                cmd=cmd,
+                cwd=str(tmp_path),
+                trace_path=str(trace_path),
+                timeout=5,
+            )
+
+        t = threading.Thread(target=_runner)
+        t.start()
+
+        saw_partial = False
+        deadline = time.time() + 2
+        while time.time() < deadline:
+            if trace_path.exists():
+                trace = trace_path.read_text()
+                if "partial" in trace:
+                    saw_partial = True
+                    break
+            time.sleep(0.02)
+
+        assert saw_partial is True
+        t.join(timeout=5)
+        assert "result" in result_holder
