@@ -158,6 +158,11 @@ def evaluate_criteria(
 
         _save_trace(trace_path, result.stdout, result.stderr, result.returncode)
 
+        # Always forward judge stderr so diagnostic output (event logs,
+        # warnings) is visible to the caller regardless of exit code.
+        if result.stderr:
+            sys.stderr.write(result.stderr)
+
         if result.returncode != 0:
             stderr_tail = result.stderr.strip()[-1000:] if result.stderr else "(empty)"
             stdout_tail = result.stdout.strip()[-500:] if result.stdout else "(empty)"
@@ -264,6 +269,11 @@ def evaluate_all_criteria(
         )
 
         _save_trace(trace_path, result.stdout, result.stderr, result.returncode)
+
+        # Always forward judge stderr so diagnostic output (event logs,
+        # warnings) is visible to the caller regardless of exit code.
+        if result.stderr:
+            sys.stderr.write(result.stderr)
 
         if result.returncode != 0:
             stderr_tail = result.stderr.strip()[-1000:] if result.stderr else "(empty)"
