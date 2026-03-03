@@ -345,6 +345,65 @@ def _summarize_events(conversation: Any) -> str:
     return "\n".join(lines)
 
 
+def _log_agent_diagnostics(agent: Any, llm: Any, model: str) -> None:
+    """Log resolved tool schemas and API path for debugging tool delivery issues.
+
+    Prints to stderr so the outer orchestrator can forward the diagnostics.
+    """
+    lines: list[str] = [f"[gandalf-judge] Agent diagnostics (model={model})"]
+
+    # 1. Which API path is used?
+    try:
+        uses_responses = llm.uses_responses_api()
+        lines.append(f"  api_path: {'responses' if uses_responses else 'chat_completions'}")
+    except Exception as e:
+        lines.append(f"  api_path: unknown ({e})")
+
+    # 2. What tools were resolved after initialization?
+    try:
+        tools_map = agent.tools_map  # dict[str, ToolDefinition]
+        tool_names = sorted(tools_map.keys())
+        lines.append(f"  resolved_tools ({len(tool_names)}): {tool_names}")
+
+        # For each tool, check that the schema has actual parameters
+        for name, tool_def in tools_map.items():
+            try:
+                schema = tool_def.to_openai_tool()
+                func = schema.get("function", {}) if isinstance(schema, dict) else {}
+                params = func.get("parameters", {})
+                prop_count = len(params.get("properties", {})) if isinstance(params, dict) else 0
+                has_desc = bool(func.get("description"))
+                if prop_count == 0 or not has_desc:
+                    lines.append(
+                        f"  WARNING: tool '{name}' has empty schema "
+                        f"(properties={prop_count}, has_description={has_desc})"
+                    )
+            except Exception as e:
+                lines.append(f"  WARNING: tool '{name}' schema extraction failed: {e}")
+    except Exception as e:
+        lines.append(f"  resolved_tools: could not inspect ({e})")
+
+    # 3. Check if responses-path tools differ from chat-completions-path
+    try:
+        uses_responses = llm.uses_responses_api()
+        if uses_responses:
+            for name, tool_def in agent.tools_map.items():
+                try:
+                    resp_schema = tool_def.to_responses_tool()
+                    resp_params = resp_schema.get("parameters", {})
+                    resp_prop_count = len(resp_params.get("properties", {})) if isinstance(resp_params, dict) else 0
+                    if resp_prop_count == 0:
+                        lines.append(
+                            f"  WARNING: tool '{name}' responses_api schema has 0 properties!"
+                        )
+                except Exception as e:
+                    lines.append(f"  WARNING: tool '{name}' responses schema failed: {e}")
+    except Exception:
+        pass
+
+    print("\n".join(lines), file=sys.stderr)
+
+
 def _run_agent_session(
     model: str,
     mcp_servers: list[dict[str, Any]],
@@ -398,6 +457,9 @@ def _run_agent_session(
     conversation = Conversation(agent=agent, workspace=workdir)
     conversation.send_message(prompt)  # type: ignore[attr-defined]
     conversation.run()  # type: ignore[attr-defined]
+
+    # ---------- Diagnostic: tool & API path inspection ----------
+    _log_agent_diagnostics(agent, llm, model)
 
     # Extract execution status
     execution_status = "unknown"
