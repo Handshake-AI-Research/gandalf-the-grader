@@ -2,11 +2,18 @@
 
 import json
 import subprocess
+import sys
 from unittest.mock import patch
 
 import pytest
 
-from gandalf_grader.__main__ import _JUDGE_ENV_ALLOWLIST, _judge_env_vars, evaluate_all_criteria, resolve_judge_guidance
+from gandalf_grader.__main__ import (
+    _JUDGE_ENV_ALLOWLIST,
+    _judge_env_vars,
+    _run_with_live_trace,
+    evaluate_all_criteria,
+    resolve_judge_guidance,
+)
 from gandalf_grader.config import BatchJudgeInput, VerifierConfig
 
 
@@ -145,8 +152,8 @@ class TestEvaluateAllCriteria:
     """Tests for evaluate_all_criteria IPC contract: dict, list, invalid shapes, failures."""
 
     @patch("gandalf_grader.__main__._clone_workspace")
-    @patch("gandalf_grader.__main__.subprocess.run")
-    def test_new_dict_shape(self, mock_run, mock_clone, tmp_path):
+    @patch("gandalf_grader.__main__._run_with_live_trace")
+    def test_new_dict_shape(self, mock_live_trace, mock_clone, tmp_path):
         """New object format: {verdicts: [...], llm_usage: {...}}."""
         mock_clone.return_value = str(tmp_path)
         output_content = {
@@ -157,9 +164,7 @@ class TestEvaluateAllCriteria:
             "llm_usage": {"cost_usd": 0.1, "prompt_tokens": 500},
         }
 
-        mock_run.return_value = subprocess.CompletedProcess(
-            args=[], returncode=0, stdout="", stderr=""
-        )
+        mock_live_trace.return_value = (0, "", "", False)
         judge_input = _make_batch_input(tmp_path, n=2)
         trace_path = str(tmp_path / "trace.txt")
 
@@ -178,13 +183,11 @@ class TestEvaluateAllCriteria:
         assert usage["cost_usd"] == 0.1
 
     @patch("gandalf_grader.__main__._clone_workspace")
-    @patch("gandalf_grader.__main__.subprocess.run")
-    def test_legacy_array_shape(self, mock_run, mock_clone, tmp_path):
+    @patch("gandalf_grader.__main__._run_with_live_trace")
+    def test_legacy_array_shape(self, mock_live_trace, mock_clone, tmp_path):
         """Legacy format: bare JSON array of verdicts, no usage info."""
         mock_clone.return_value = str(tmp_path)
-        mock_run.return_value = subprocess.CompletedProcess(
-            args=[], returncode=0, stdout="", stderr=""
-        )
+        mock_live_trace.return_value = (0, "", "", False)
 
         legacy_verdicts = [
             {"index": 0, "passed": True, "reasoning": "ok", "evidence": []},
@@ -206,13 +209,11 @@ class TestEvaluateAllCriteria:
         assert usage == {}
 
     @patch("gandalf_grader.__main__._clone_workspace")
-    @patch("gandalf_grader.__main__.subprocess.run")
-    def test_unexpected_json_type_string(self, mock_run, mock_clone, tmp_path):
+    @patch("gandalf_grader.__main__._run_with_live_trace")
+    def test_unexpected_json_type_string(self, mock_live_trace, mock_clone, tmp_path):
         """If the output file contains a JSON string, return fail-all."""
         mock_clone.return_value = str(tmp_path)
-        mock_run.return_value = subprocess.CompletedProcess(
-            args=[], returncode=0, stdout="", stderr=""
-        )
+        mock_live_trace.return_value = (0, "", "", False)
 
         output_file = tmp_path / "batch_output.json"
         output_file.write_text(json.dumps("just a string"))
@@ -231,13 +232,11 @@ class TestEvaluateAllCriteria:
         assert usage == {}
 
     @patch("gandalf_grader.__main__._clone_workspace")
-    @patch("gandalf_grader.__main__.subprocess.run")
-    def test_unexpected_json_type_number(self, mock_run, mock_clone, tmp_path):
+    @patch("gandalf_grader.__main__._run_with_live_trace")
+    def test_unexpected_json_type_number(self, mock_live_trace, mock_clone, tmp_path):
         """If the output file contains a JSON number, return fail-all."""
         mock_clone.return_value = str(tmp_path)
-        mock_run.return_value = subprocess.CompletedProcess(
-            args=[], returncode=0, stdout="", stderr=""
-        )
+        mock_live_trace.return_value = (0, "", "", False)
 
         output_file = tmp_path / "batch_output.json"
         output_file.write_text(json.dumps(42))
@@ -255,13 +254,11 @@ class TestEvaluateAllCriteria:
         assert usage == {}
 
     @patch("gandalf_grader.__main__._clone_workspace")
-    @patch("gandalf_grader.__main__.subprocess.run")
-    def test_dict_without_expected_keys(self, mock_run, mock_clone, tmp_path):
+    @patch("gandalf_grader.__main__._run_with_live_trace")
+    def test_dict_without_expected_keys(self, mock_live_trace, mock_clone, tmp_path):
         """Dict output missing 'verdicts' key: defaults to empty verdicts list."""
         mock_clone.return_value = str(tmp_path)
-        mock_run.return_value = subprocess.CompletedProcess(
-            args=[], returncode=0, stdout="", stderr=""
-        )
+        mock_live_trace.return_value = (0, "", "", False)
 
         output_file = tmp_path / "batch_output.json"
         output_file.write_text(json.dumps({"unexpected": "shape"}))
@@ -278,13 +275,11 @@ class TestEvaluateAllCriteria:
         assert usage == {}
 
     @patch("gandalf_grader.__main__._clone_workspace")
-    @patch("gandalf_grader.__main__.subprocess.run")
-    def test_nonzero_exit_returns_fail_all(self, mock_run, mock_clone, tmp_path):
+    @patch("gandalf_grader.__main__._run_with_live_trace")
+    def test_nonzero_exit_returns_fail_all(self, mock_live_trace, mock_clone, tmp_path):
         """Non-zero exit code from subprocess returns fail-all with empty usage."""
         mock_clone.return_value = str(tmp_path)
-        mock_run.return_value = subprocess.CompletedProcess(
-            args=[], returncode=1, stdout="", stderr="segfault"
-        )
+        mock_live_trace.return_value = (1, "", "segfault", False)
 
         judge_input = _make_batch_input(tmp_path, n=2)
         trace_path = str(tmp_path / "trace.txt")
@@ -301,11 +296,11 @@ class TestEvaluateAllCriteria:
         assert usage == {}
 
     @patch("gandalf_grader.__main__._clone_workspace")
-    @patch("gandalf_grader.__main__.subprocess.run")
-    def test_timeout_returns_fail_all(self, mock_run, mock_clone, tmp_path):
+    @patch("gandalf_grader.__main__._run_with_live_trace")
+    def test_timeout_returns_fail_all(self, mock_live_trace, mock_clone, tmp_path):
         """Subprocess timeout returns fail-all with empty usage."""
         mock_clone.return_value = str(tmp_path)
-        mock_run.side_effect = subprocess.TimeoutExpired(cmd="judge", timeout=300)
+        mock_live_trace.return_value = (-1, "", "", True)
 
         judge_input = _make_batch_input(tmp_path, n=2)
         trace_path = str(tmp_path / "trace.txt")
@@ -322,13 +317,11 @@ class TestEvaluateAllCriteria:
         assert usage == {}
 
     @patch("gandalf_grader.__main__._clone_workspace")
-    @patch("gandalf_grader.__main__.subprocess.run")
-    def test_invalid_json_in_output_file(self, mock_run, mock_clone, tmp_path):
+    @patch("gandalf_grader.__main__._run_with_live_trace")
+    def test_invalid_json_in_output_file(self, mock_live_trace, mock_clone, tmp_path):
         """Non-JSON content in output file returns fail-all."""
         mock_clone.return_value = str(tmp_path)
-        mock_run.return_value = subprocess.CompletedProcess(
-            args=[], returncode=0, stdout="", stderr=""
-        )
+        mock_live_trace.return_value = (0, "", "", False)
 
         output_file = tmp_path / "batch_output.json"
         output_file.write_text("not valid json {{{")
@@ -346,13 +339,11 @@ class TestEvaluateAllCriteria:
         assert usage == {}
 
     @patch("gandalf_grader.__main__._clone_workspace")
-    @patch("gandalf_grader.__main__.subprocess.run")
-    def test_missing_output_file(self, mock_run, mock_clone, tmp_path):
+    @patch("gandalf_grader.__main__._run_with_live_trace")
+    def test_missing_output_file(self, mock_live_trace, mock_clone, tmp_path):
         """If the judge never wrote the output file, return fail-all."""
         mock_clone.return_value = str(tmp_path)
-        mock_run.return_value = subprocess.CompletedProcess(
-            args=[], returncode=0, stdout="", stderr=""
-        )
+        mock_live_trace.return_value = (0, "", "", False)
 
         judge_input = _make_batch_input(tmp_path, n=2)
         trace_path = str(tmp_path / "trace.txt")
@@ -369,3 +360,38 @@ class TestEvaluateAllCriteria:
         assert len(verdicts) == 2
         assert all(v["passed"] is False for v in verdicts)
         assert usage == {}
+
+
+class TestLiveTraceRunner:
+    def test_run_with_live_trace_captures_stdout_stderr(self, tmp_path):
+        trace_path = tmp_path / "live_trace.txt"
+        cmd = [
+            sys.executable,
+            "-c",
+            (
+                "import sys,time; "
+                "print('out-1', flush=True); "
+                "print('err-1', file=sys.stderr, flush=True); "
+                "time.sleep(0.05); "
+                "print('out-2', flush=True)"
+            ),
+        ]
+
+        returncode, stdout, stderr, timed_out = _run_with_live_trace(
+            cmd=cmd,
+            cwd=str(tmp_path),
+            trace_path=str(trace_path),
+            timeout=5,
+        )
+
+        assert returncode == 0
+        assert timed_out is False
+        assert "out-1" in stdout
+        assert "out-2" in stdout
+        assert "err-1" in stderr
+
+        trace = trace_path.read_text()
+        assert "exit_code: running" in trace
+        assert "[stdout] out-1" in trace
+        assert "[stderr] err-1" in trace
+        assert "exit_code: 0" in trace

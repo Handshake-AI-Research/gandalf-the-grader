@@ -22,6 +22,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 from typing import Any
 
 from gandalf_grader.config import (
@@ -185,6 +186,79 @@ def _fail_all(n: int, reason: str) -> list[dict[str, Any]]:
     return [{"index": i, "passed": False, "reasoning": reason, "evidence": []} for i in range(n)]
 
 
+def _run_with_live_trace(
+    cmd: list[str],
+    cwd: str,
+    trace_path: str,
+    timeout: int,
+) -> tuple[int, str, str, bool]:
+    """Run a subprocess while streaming stdout/stderr into ``trace_path``."""
+    stdout_chunks: list[str] = []
+    stderr_chunks: list[str] = []
+    write_lock = threading.Lock()
+
+    with open(trace_path, "w") as trace_f:
+        trace_f.write("exit_code: running\n")
+        trace_f.write("=== live output ===\n")
+        trace_f.flush()
+
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            cwd=cwd,
+            bufsize=1,
+        )
+
+        def _pump(
+            stream: Any,
+            label: str,
+            sink: list[str],
+        ) -> None:
+            if stream is None:
+                return
+            try:
+                for line in iter(stream.readline, ""):
+                    sink.append(line)
+                    with write_lock:
+                        trace_f.write(f"[{label}] {line}")
+                        trace_f.flush()
+            finally:
+                with contextlib.suppress(Exception):
+                    stream.close()
+
+        out_thread = threading.Thread(target=_pump, args=(proc.stdout, "stdout", stdout_chunks), daemon=True)
+        err_thread = threading.Thread(target=_pump, args=(proc.stderr, "stderr", stderr_chunks), daemon=True)
+        out_thread.start()
+        err_thread.start()
+
+        timed_out = False
+        try:
+            returncode = proc.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            timed_out = True
+            with contextlib.suppress(Exception):
+                proc.kill()
+            with contextlib.suppress(Exception):
+                proc.wait(timeout=5)
+            returncode = -1
+            with write_lock:
+                trace_f.write("[verifier] Batch judge execution timed out.\n")
+                trace_f.flush()
+
+        out_thread.join()
+        err_thread.join()
+
+        with write_lock:
+            trace_f.write(f"\nexit_code: {returncode}\n")
+            if timed_out:
+                trace_f.write("timeout: true\n")
+            trace_f.flush()
+
+    return returncode, "".join(stdout_chunks), "".join(stderr_chunks), timed_out
+
+
 def evaluate_all_criteria(
     judge_input: BatchJudgeInput,
     sandbox_user: str,
@@ -246,18 +320,18 @@ def evaluate_all_criteria(
             "--batch",
         ]
 
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
+        returncode, _stdout, stderr, timed_out = _run_with_live_trace(
+            cmd=cmd,
             cwd=clone_dir,
+            trace_path=trace_path,
+            timeout=timeout,
         )
 
-        _save_trace(trace_path, result.stdout, result.stderr, result.returncode)
+        if timed_out:
+            return _fail_all(n_criteria, "Judge execution timed out."), {}
 
-        if result.returncode != 0:
-            reason = f"Judge process failed (exit {result.returncode}): {result.stderr[:500]}"
+        if returncode != 0:
+            reason = f"Judge process failed (exit {returncode}): {stderr[:500]}"
             return _fail_all(n_criteria, reason), {}
 
         with open(output_path) as f:
@@ -275,9 +349,6 @@ def evaluate_all_criteria(
             reason = f"Unexpected JSON type from judge: {type(data).__name__}"
             return _fail_all(n_criteria, reason), {}
 
-    except subprocess.TimeoutExpired:
-        _save_trace(trace_path, "", "Batch judge execution timed out.", -1)
-        return _fail_all(n_criteria, "Judge execution timed out."), {}
     except (json.JSONDecodeError, FileNotFoundError, TypeError, AttributeError) as e:
         return _fail_all(n_criteria, f"Failed to read judge output: {e}"), {}
     finally:
