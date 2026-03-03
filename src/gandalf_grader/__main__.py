@@ -159,20 +159,29 @@ def evaluate_criteria(
         _save_trace(trace_path, result.stdout, result.stderr, result.returncode)
 
         if result.returncode != 0:
-            return {
-                "passed": False,
-                "reasoning": f"Judge process failed (exit {result.returncode}): {result.stderr[:500]}",
-            }
+            stderr_tail = result.stderr.strip()[-1000:] if result.stderr else "(empty)"
+            stdout_tail = result.stdout.strip()[-500:] if result.stdout else "(empty)"
+            reason = (
+                f"Judge process failed (exit {result.returncode})\n"
+                f"  stderr: {stderr_tail}\n"
+                f"  stdout (tail): {stdout_tail}"
+            )
+            print(f"[gandalf] {reason}", file=sys.stderr)
+            return {"passed": False, "reasoning": reason}
 
         with open(output_path) as f:
             result_data: dict[str, Any] = json.load(f)
             return result_data
 
     except subprocess.TimeoutExpired:
-        _save_trace(trace_path, "", "Judge execution timed out.", -1)
-        return {"passed": False, "reasoning": "Judge execution timed out."}
+        reason = f"Judge execution timed out after {timeout}s."
+        _save_trace(trace_path, "", reason, -1)
+        print(f"[gandalf] {reason}", file=sys.stderr)
+        return {"passed": False, "reasoning": reason}
     except (json.JSONDecodeError, FileNotFoundError) as e:
-        return {"passed": False, "reasoning": f"Failed to read judge output: {e}"}
+        reason = f"Failed to read judge output: {e}"
+        print(f"[gandalf] {reason}", file=sys.stderr)
+        return {"passed": False, "reasoning": reason}
     finally:
         shutil.rmtree(clone_dir, ignore_errors=True)
         for path in (input_path, output_path):
@@ -257,7 +266,14 @@ def evaluate_all_criteria(
         _save_trace(trace_path, result.stdout, result.stderr, result.returncode)
 
         if result.returncode != 0:
-            reason = f"Judge process failed (exit {result.returncode}): {result.stderr[:500]}"
+            stderr_tail = result.stderr.strip()[-1000:] if result.stderr else "(empty)"
+            stdout_tail = result.stdout.strip()[-500:] if result.stdout else "(empty)"
+            reason = (
+                f"Judge process failed (exit {result.returncode})\n"
+                f"  stderr: {stderr_tail}\n"
+                f"  stdout (tail): {stdout_tail}"
+            )
+            print(f"[gandalf] [batch] {reason}", file=sys.stderr)
             return _fail_all(n_criteria, reason), {}
 
         with open(output_path) as f:
@@ -276,10 +292,14 @@ def evaluate_all_criteria(
             return _fail_all(n_criteria, reason), {}
 
     except subprocess.TimeoutExpired:
-        _save_trace(trace_path, "", "Batch judge execution timed out.", -1)
-        return _fail_all(n_criteria, "Judge execution timed out."), {}
+        reason = f"Batch judge execution timed out after {timeout}s."
+        _save_trace(trace_path, "", reason, -1)
+        print(f"[gandalf] [batch] {reason}", file=sys.stderr)
+        return _fail_all(n_criteria, reason), {}
     except (json.JSONDecodeError, FileNotFoundError, TypeError, AttributeError) as e:
-        return _fail_all(n_criteria, f"Failed to read judge output: {e}"), {}
+        reason = f"Failed to read judge output: {e}"
+        print(f"[gandalf] [batch] {reason}", file=sys.stderr)
+        return _fail_all(n_criteria, reason), {}
     finally:
         shutil.rmtree(clone_dir, ignore_errors=True)
         for path in (input_path, output_path):
@@ -501,9 +521,18 @@ def main() -> None:
     # a legitimate score of 0.0.
     evaluated = any(r.passed or r.evidence for r in results)
     if results and not evaluated:
+        # Collect distinct failure reasons to help diagnose infrastructure issues.
+        unique_reasons = list(dict.fromkeys(r.reasoning for r in results))
+        reasons_block = "\n".join(f"  - {reason}" for reason in unique_reasons[:10])
+
         print(
-            "\nERROR: No criteria were successfully evaluated. "
-            "All failures appear to be infrastructure errors.",
+            f"\nERROR: No criteria were successfully evaluated ({len(results)} criteria, all failed).\n"
+            f"All failures appear to be infrastructure errors.\n"
+            f"\nDistinct failure reasons:\n{reasons_block}\n"
+            f"\nConfig: model={config.model}, mode={config.mode}, "
+            f"sandbox_user={config.sandbox_user}, "
+            f"judge_timeout={config.judge_timeout}s\n"
+            f"Output dir: {config.output_dir} (info.json was still written)",
             file=sys.stderr,
         )
         sys.exit(1)
