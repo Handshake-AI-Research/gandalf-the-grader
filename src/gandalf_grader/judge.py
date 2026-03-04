@@ -174,24 +174,25 @@ def _read_verdict(verdict_path: str) -> Verdict:
         with open(verdict_path) as f:
             content = f.read().strip()
         if not content:
-            return Verdict(passed=False, reasoning="Judge agent wrote an empty verdict file.")
+            return Verdict(passed=None, reasoning="Judge agent wrote an empty verdict file.")
         data = json.loads(content)
         if "passed" not in data:
-            return Verdict(passed=False, reasoning=f"Verdict missing 'passed' field: {content[:200]}")
+            return Verdict(passed=None, reasoning=f"Verdict missing 'passed' field: {content[:200]}")
+        raw_passed = data["passed"]
         return Verdict(
-            passed=bool(data["passed"]),
+            passed=bool(raw_passed) if raw_passed is not None else None,
             reasoning=str(data.get("reasoning", "No reasoning provided.")),
             evidence=list(data.get("evidence", [])),
         )
     except FileNotFoundError:
-        return Verdict(passed=False, reasoning="Judge agent did not write a verdict file.")
+        return Verdict(passed=None, reasoning="Judge agent did not write a verdict file.")
     except json.JSONDecodeError as e:
-        return Verdict(passed=False, reasoning=f"Judge agent wrote invalid JSON: {e}")
+        return Verdict(passed=None, reasoning=f"Judge agent wrote invalid JSON: {e}")
 
 
 def _fail_all_verdicts(n: int, reason: str) -> list[dict[str, Any]]:
     """Return *n* fail verdict dicts sharing the same reason."""
-    return [{"index": i, "passed": False, "reasoning": reason, "evidence": []} for i in range(n)]
+    return [{"index": i, "passed": None, "reasoning": reason, "evidence": []} for i in range(n)]
 
 
 def _read_batch_verdict(verdict_path: str, n_criteria: int) -> list[dict[str, Any]]:
@@ -226,8 +227,9 @@ def _read_batch_verdict(verdict_path: str, n_criteria: int) -> list[dict[str, An
             except (ValueError, TypeError):
                 continue
             if 0 <= idx < n_criteria:
+                raw_passed = v.get("passed")
                 by_index[idx] = {
-                    "passed": bool(v.get("passed", False)),
+                    "passed": bool(raw_passed) if raw_passed is not None else None,
                     "reasoning": str(v.get("reasoning", "No reasoning provided.")),
                     "evidence": list(v.get("evidence", [])),
                 }
@@ -240,7 +242,7 @@ def _read_batch_verdict(verdict_path: str, n_criteria: int) -> list[dict[str, An
                 results.append(
                     {
                         "index": i,
-                        "passed": False,
+                        "passed": None,
                         "reasoning": f"Judge did not return a verdict for criterion {i}.",
                         "evidence": [],
                     }
@@ -386,7 +388,7 @@ def run_judge(input_path: str, output_path: str) -> None:
         }
     except Exception as e:
         output = {
-            "passed": False,
+            "passed": None,
             "reasoning": f"Judge execution error: {e}",
             "evidence": [],
             "llm_usage": llm_usage,
