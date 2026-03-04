@@ -6,8 +6,14 @@ from unittest.mock import patch
 
 import pytest
 
-from gandalf_grader.__main__ import _JUDGE_ENV_ALLOWLIST, _judge_env_vars, evaluate_all_criteria, resolve_judge_guidance
-from gandalf_grader.config import BatchJudgeInput, VerifierConfig
+from gandalf_grader.__main__ import (
+    _JUDGE_ENV_ALLOWLIST,
+    _compute_and_write_results,
+    _judge_env_vars,
+    evaluate_all_criteria,
+    resolve_judge_guidance,
+)
+from gandalf_grader.config import BatchJudgeInput, CriteriaResult, RubricItem, VerifierConfig
 
 
 def _make_config(**overrides) -> VerifierConfig:
@@ -369,3 +375,94 @@ class TestEvaluateAllCriteria:
         assert len(verdicts) == 2
         assert all(v["passed"] is False for v in verdicts)
         assert usage == {}
+
+
+def _cr(weight: float, passed: bool, negative: bool = False) -> CriteriaResult:
+    """Helper to build a CriteriaResult for scoring tests."""
+    return CriteriaResult(
+        criteria="test",
+        weight=weight,
+        negative=negative,
+        passed=passed,
+        reasoning="test",
+    )
+
+
+class TestScoring:
+    """Tests for _compute_and_write_results scoring formula."""
+
+    def _score(self, results: list[CriteriaResult], tmp_path) -> float:
+        """Run _compute_and_write_results and return the score from reward.json."""
+        config = _make_config(output_dir=str(tmp_path))
+        rubric = [RubricItem(criteria=r.criteria, weight=r.weight, negative=r.negative) for r in results]
+        _compute_and_write_results(config, rubric, results, {})
+        with open(tmp_path / "reward.json") as f:
+            return json.load(f)["score"]
+
+    def test_all_positive_all_pass(self, tmp_path):
+        results = [_cr(2.0, True), _cr(3.0, True)]
+        assert self._score(results, tmp_path) == 1.0
+
+    def test_all_positive_none_pass(self, tmp_path):
+        results = [_cr(2.0, False), _cr(3.0, False)]
+        assert self._score(results, tmp_path) == 0.0
+
+    def test_all_positive_partial(self, tmp_path):
+        results = [_cr(2.0, True), _cr(3.0, False)]
+        assert self._score(results, tmp_path) == 0.4  # 2/5
+
+    def test_negative_passed_is_penalty(self, tmp_path):
+        """Negative criterion passed (bad thing happened) → 0 points."""
+        results = [
+            _cr(3.0, True),                       # +3/6
+            _cr(3.0, True, negative=True),         # +0/6 (penalty)
+        ]
+        assert self._score(results, tmp_path) == 0.5  # 3/6
+
+    def test_negative_failed_is_reward(self, tmp_path):
+        """Negative criterion failed (bad thing avoided) → earns points."""
+        results = [
+            _cr(3.0, True),                        # +3/6
+            _cr(3.0, False, negative=True),         # +3/6 (avoided)
+        ]
+        assert self._score(results, tmp_path) == 1.0  # 6/6
+
+    def test_all_negative_all_avoided(self, tmp_path):
+        results = [_cr(2.0, False, negative=True), _cr(3.0, False, negative=True)]
+        assert self._score(results, tmp_path) == 1.0
+
+    def test_all_negative_all_triggered(self, tmp_path):
+        results = [_cr(2.0, True, negative=True), _cr(3.0, True, negative=True)]
+        assert self._score(results, tmp_path) == 0.0
+
+    def test_mixed_scenario(self, tmp_path):
+        """Positive pass + positive fail + negative avoided + negative triggered."""
+        results = [
+            _cr(10.0, True),                       # +10
+            _cr(5.0, False),                        # +0
+            _cr(3.0, False, negative=True),         # +3 (avoided)
+            _cr(2.0, True, negative=True),          # +0 (triggered)
+        ]
+        # total_weight = 10+5+3+2 = 20, earned = 13
+        assert self._score(results, tmp_path) == 0.65
+
+    def test_backward_compat_no_negative_field(self, tmp_path):
+        """Results without explicit negative flag score identically to old formula."""
+        results = [
+            CriteriaResult(criteria="a", weight=2.0, passed=True, reasoning="ok"),
+            CriteriaResult(criteria="b", weight=3.0, passed=False, reasoning="no"),
+        ]
+        assert self._score(results, tmp_path) == 0.4  # 2/5
+
+    def test_empty_results(self, tmp_path):
+        assert self._score([], tmp_path) == 0.0
+
+    def test_info_json_includes_negative(self, tmp_path):
+        """Verify info.json preserves the negative flag on criteria_results."""
+        config = _make_config(output_dir=str(tmp_path))
+        results = [_cr(1.0, True, negative=True)]
+        rubric = [RubricItem(criteria="test", weight=1.0, negative=True)]
+        _compute_and_write_results(config, rubric, results, {})
+        with open(tmp_path / "info.json") as f:
+            info = json.load(f)
+        assert info["criteria_results"][0]["negative"] is True

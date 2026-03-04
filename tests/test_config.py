@@ -97,6 +97,18 @@ class TestLoadRubric:
         with pytest.raises(FileNotFoundError):
             load_rubric("/nonexistent/rubric.json")
 
+    def test_negative_defaults_to_false(self):
+        rubric = load_rubric(os.path.join(FIXTURES, "sample_rubric.json"))
+        assert all(item.negative is False for item in rubric)
+
+    def test_parses_negative_items(self):
+        rubric = load_rubric(os.path.join(FIXTURES, "sample_rubric_with_negatives.json"))
+        assert len(rubric) == 3
+        assert rubric[0].negative is False
+        assert rubric[1].negative is False
+        assert rubric[2].negative is True
+        assert rubric[2].weight == 1.0
+
 
 class TestPydanticModels:
     def test_mcp_server_defaults(self):
@@ -189,6 +201,17 @@ class TestPydanticModels:
             reasoning="ok",
         )
         assert r.evidence == []
+        assert r.negative is False
+
+    def test_criteria_result_negative(self):
+        r = CriteriaResult(
+            criteria="used hardcoded values",
+            weight=1.0,
+            negative=True,
+            passed=True,
+            reasoning="found hardcoded values",
+        )
+        assert r.negative is True
 
     def test_evaluation_info(self):
         info = EvaluationInfo(

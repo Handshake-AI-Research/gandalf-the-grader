@@ -50,10 +50,17 @@ class VerifierConfig(BaseModel):
 
 
 class RubricItem(BaseModel):
-    """A single rubric item with evaluation criteria and weight."""
+    """A single rubric item with evaluation criteria and weight.
+
+    When ``negative`` is True the criterion describes an undesired outcome.
+    Passing a negative criterion means the bad thing *happened*, so the
+    scoring formula awards 0 points; failing it (the bad thing was avoided)
+    awards ``abs(weight)`` points.
+    """
 
     criteria: str
     weight: float
+    negative: bool = False
 
 
 class JudgeInput(BaseModel):
@@ -74,6 +81,7 @@ class BatchCriterion(BaseModel):
     index: int
     criteria: str
     weight: float
+    negative: bool = False
 
 
 class BatchJudgeInput(BaseModel):
@@ -101,6 +109,7 @@ class CriteriaResult(BaseModel):
 
     criteria: str
     weight: float
+    negative: bool = False
     passed: bool
     reasoning: str
     evidence: list[str] = Field(default_factory=list)

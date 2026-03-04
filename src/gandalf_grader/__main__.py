@@ -338,6 +338,7 @@ def _run_sequential(
         result = CriteriaResult(
             criteria=item.criteria,
             weight=item.weight,
+            negative=item.negative,
             passed=verdict.get("passed", False),
             reasoning=verdict.get("reasoning", "No reasoning provided."),
             evidence=verdict.get("evidence", []),
@@ -362,7 +363,7 @@ def _run_batch(
     totals from the single batch agent session.
     """
     criteria_list = [
-        BatchCriterion(index=i, criteria=item.criteria, weight=item.weight)
+        BatchCriterion(index=i, criteria=item.criteria, weight=item.weight, negative=item.negative)
         for i, item in enumerate(rubric)
     ]
 
@@ -400,6 +401,7 @@ def _run_batch(
         result = CriteriaResult(
             criteria=item.criteria,
             weight=item.weight,
+            negative=item.negative,
             passed=v.get("passed", False),
             reasoning=v.get("reasoning", "No reasoning provided."),
             evidence=v.get("evidence", []),
@@ -418,10 +420,23 @@ def _compute_and_write_results(
     results: list[CriteriaResult],
     llm_usage: dict[str, Any],
 ) -> None:
-    """Compute the weighted score and write reward.json / info.json."""
-    total_weight = sum(r.weight for r in results)
+    """Compute the weighted score and write reward.json / info.json.
+
+    Scoring supports both positive and negative criteria:
+      - Positive: ``passed=True`` earns ``abs(weight)`` points.
+      - Negative: ``passed=False`` (bad thing avoided) earns ``abs(weight)`` points;
+        ``passed=True`` (bad thing happened) earns 0.
+    Denominator is always ``sum(abs(weight))``, so the score is in [0, 1].
+    """
+    total_weight = sum(abs(r.weight) for r in results)
+
+    def _earned(r: CriteriaResult) -> float:
+        if r.negative:
+            return abs(r.weight) if not r.passed else 0.0
+        return abs(r.weight) if r.passed else 0.0
+
     score = round(
-        sum(r.weight * (1.0 if r.passed else 0.0) for r in results) / total_weight if total_weight > 0 else 0.0,
+        sum(_earned(r) for r in results) / total_weight if total_weight > 0 else 0.0,
         4,
     )
 
