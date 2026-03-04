@@ -424,8 +424,6 @@ class TestRetryLogic:
 
         reward = json.loads((tmp_path / "output" / "reward.json").read_text())
         assert reward["score"] == 1.0
-        assert reward["errored_criteria_count"] == 1
-        assert reward["evaluated_criteria_pct"] == 100.0
 
     @patch("gandalf_grader.__main__.resolve_judge_guidance", return_value="")
     @patch("gandalf_grader.__main__.load_trajectory_final_output", return_value="done")
@@ -610,8 +608,6 @@ class TestRetryLogic:
 
         reward = json.loads((tmp_path / "output" / "reward.json").read_text())
         assert reward["score"] == 0.5
-        assert reward["errored_criteria_count"] == 1
-        assert reward["evaluated_criteria_pct"] == 100.0
 
         info = json.loads((tmp_path / "output" / "info.json").read_text())
         assert info["errored_criteria_count"] == 0

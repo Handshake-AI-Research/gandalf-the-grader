@@ -635,11 +635,9 @@ def main() -> None:
         print(f"info.json written to {config.output_dir}/ (reward.json NOT written)", file=sys.stderr)
         sys.exit(1)
 
-    # 6. All resolved — write reward.json (stable schema: always include error fields)
+    # 6. All resolved — write reward.json (Harbor expects exactly {"score": <float>})
     reward = {
         "score": score,
-        "errored_criteria_count": initial_errored,
-        "evaluated_criteria_pct": 100.0,
     }
     with open(os.path.join(config.output_dir, "reward.json"), "w") as f:
         json.dump(reward, f, indent=2)
