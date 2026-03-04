@@ -181,6 +181,18 @@ class TestPydanticModels:
         v = Verdict(passed=False, reasoning="fail", evidence=["check1", "check2"])
         assert len(v.evidence) == 2
 
+    def test_verdict_passed_none(self):
+        v = Verdict(passed=None, reasoning="error")
+        assert v.passed is None
+        data = v.model_dump()
+        assert data["passed"] is None
+
+    def test_verdict_none_serialization_roundtrip(self):
+        v = Verdict(passed=None, reasoning="error")
+        raw = v.model_dump_json()
+        restored = Verdict.model_validate_json(raw)
+        assert restored.passed is None
+
     def test_criteria_result(self):
         r = CriteriaResult(
             criteria="test",
@@ -189,6 +201,12 @@ class TestPydanticModels:
             reasoning="ok",
         )
         assert r.evidence == []
+
+    def test_criteria_result_passed_none(self):
+        r = CriteriaResult(criteria="test", weight=1.0, passed=None, reasoning="error")
+        assert r.passed is None
+        data = r.model_dump()
+        assert data["passed"] is None
 
     def test_evaluation_info(self):
         info = EvaluationInfo(
@@ -200,6 +218,50 @@ class TestPydanticModels:
         )
         assert info.score == 0.75
         assert len(info.criteria_results) == 2
+
+    def test_verifier_config_judge_retries_default(self):
+        cfg = VerifierConfig(
+            instructions="test",
+            rubric_path="/rubric.json",
+            workdir="/workspace",
+            trajectory_path="/logs/trajectory.json",
+            sandbox_user="sandbox",
+        )
+        assert cfg.judge_retries == 1
+
+    def test_verifier_config_judge_retries_explicit(self):
+        cfg = VerifierConfig(
+            instructions="test",
+            rubric_path="/rubric.json",
+            workdir="/workspace",
+            trajectory_path="/logs/trajectory.json",
+            sandbox_user="sandbox",
+            judge_retries=3,
+        )
+        assert cfg.judge_retries == 3
+
+    def test_evaluation_info_errored_fields(self):
+        info = EvaluationInfo(
+            score=0.5,
+            criteria_results=[
+                CriteriaResult(criteria="c1", weight=1.0, passed=True, reasoning="ok"),
+                CriteriaResult(criteria="c2", weight=1.0, passed=None, reasoning="error"),
+            ],
+            errored_criteria_count=1,
+            evaluated_criteria_pct=50.0,
+        )
+        assert info.errored_criteria_count == 1
+        assert info.evaluated_criteria_pct == 50.0
+
+    def test_evaluation_info_errored_fields_default(self):
+        info = EvaluationInfo(
+            score=1.0,
+            criteria_results=[
+                CriteriaResult(criteria="c1", weight=1.0, passed=True, reasoning="ok"),
+            ],
+        )
+        assert info.errored_criteria_count == 0
+        assert info.evaluated_criteria_pct == 100.0
 
     def test_judge_input_model_copy(self):
         ji = JudgeInput(

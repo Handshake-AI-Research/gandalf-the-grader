@@ -117,7 +117,7 @@ def evaluate_criteria(
     try:
         clone_dir = _clone_workspace(judge_input.workdir)
     except Exception as e:
-        return {"passed": False, "reasoning": f"Failed to clone workspace: {e}"}
+        return {"passed": None, "reasoning": f"Failed to clone workspace: {e}"}
 
     cloned_input = judge_input.model_copy(update={"workdir": clone_dir})
 
@@ -160,7 +160,7 @@ def evaluate_criteria(
 
         if result.returncode != 0:
             return {
-                "passed": False,
+                "passed": None,
                 "reasoning": f"Judge process failed (exit {result.returncode}): {result.stderr[:500]}",
             }
 
@@ -170,9 +170,9 @@ def evaluate_criteria(
 
     except subprocess.TimeoutExpired:
         _save_trace(trace_path, "", "Judge execution timed out.", -1)
-        return {"passed": False, "reasoning": "Judge execution timed out."}
+        return {"passed": None, "reasoning": "Judge execution timed out."}
     except (json.JSONDecodeError, FileNotFoundError) as e:
-        return {"passed": False, "reasoning": f"Failed to read judge output: {e}"}
+        return {"passed": None, "reasoning": f"Failed to read judge output: {e}"}
     finally:
         shutil.rmtree(clone_dir, ignore_errors=True)
         for path in (input_path, output_path):
@@ -182,7 +182,7 @@ def evaluate_criteria(
 
 def _fail_all(n: int, reason: str) -> list[dict[str, Any]]:
     """Return *n* fail verdicts that all share the same reason."""
-    return [{"index": i, "passed": False, "reasoning": reason, "evidence": []} for i in range(n)]
+    return [{"index": i, "passed": None, "reasoning": reason, "evidence": []} for i in range(n)]
 
 
 def evaluate_all_criteria(
@@ -338,13 +338,13 @@ def _run_sequential(
         result = CriteriaResult(
             criteria=item.criteria,
             weight=item.weight,
-            passed=verdict.get("passed", False),
+            passed=verdict.get("passed"),
             reasoning=verdict.get("reasoning", "No reasoning provided."),
             evidence=verdict.get("evidence", []),
         )
         results.append(result)
 
-        status = "PASS" if result.passed else "FAIL"
+        status = "PASS" if result.passed is True else ("ERROR" if result.passed is None else "FAIL")
         print(f"  -> {status}: {result.reasoning[:120]}")
 
     return results, total_usage
@@ -400,62 +400,170 @@ def _run_batch(
         result = CriteriaResult(
             criteria=item.criteria,
             weight=item.weight,
-            passed=v.get("passed", False),
+            passed=v.get("passed"),
             reasoning=v.get("reasoning", "No reasoning provided."),
             evidence=v.get("evidence", []),
         )
         results.append(result)
 
-        status = "PASS" if result.passed else "FAIL"
+        status = "PASS" if result.passed is True else ("ERROR" if result.passed is None else "FAIL")
         print(f"  [{i + 1}/{len(rubric)}] {status}: {result.reasoning[:120]}")
 
     return results, llm_usage
 
 
-def _compute_and_write_results(
+def _get_errored_indices(results: list[CriteriaResult]) -> list[int]:
+    """Return indices of criteria where passed is None (infrastructure error)."""
+    return [i for i, r in enumerate(results) if r.passed is None]
+
+
+def _retry_sequential(
     config: VerifierConfig,
     rubric: list[RubricItem],
     results: list[CriteriaResult],
     llm_usage: dict[str, Any],
+    final_output: str,
+    judge_guidance: str,
+    errored_indices: list[int],
 ) -> None:
-    """Compute the weighted score and write reward.json / info.json."""
+    """Re-run each errored criterion individually and merge results in-place."""
+    for idx in errored_indices:
+        item = rubric[idx]
+        print(f"  [retry {idx}] Evaluating: {item.criteria[:80]}...")
+
+        judge_input = JudgeInput(
+            model=config.model,
+            instructions=config.instructions,
+            final_output=final_output,
+            criteria=item.criteria,
+            workdir=config.workdir,
+            mcp_servers=config.mcp_servers,
+            judge_guidance=judge_guidance,
+        )
+
+        trace_path = os.path.join(config.output_dir, f"judge_trace_{idx}_retry.txt")
+        verdict = evaluate_criteria(
+            judge_input,
+            sandbox_user=config.sandbox_user,
+            trace_path=trace_path,
+            timeout=config.judge_timeout,
+        )
+
+        usage = verdict.get("llm_usage", {})
+        for key in ("cost_usd", "prompt_tokens", "completion_tokens", "cache_read_tokens"):
+            llm_usage[key] = llm_usage.get(key, 0) + usage.get(key, 0)
+
+        results[idx] = CriteriaResult(
+            criteria=item.criteria,
+            weight=item.weight,
+            passed=verdict.get("passed"),
+            reasoning=verdict.get("reasoning", "No reasoning provided."),
+            evidence=verdict.get("evidence", []),
+        )
+
+        status = "PASS" if results[idx].passed is True else ("ERROR" if results[idx].passed is None else "FAIL")
+        print(f"    -> {status}: {results[idx].reasoning[:120]}")
+
+
+def _retry_batch(
+    config: VerifierConfig,
+    rubric: list[RubricItem],
+    results: list[CriteriaResult],
+    llm_usage: dict[str, Any],
+    final_output: str,
+    judge_guidance: str,
+    errored_indices: list[int],
+) -> None:
+    """Re-run errored criteria as a batch and merge results in-place."""
+    # Build 0-based re-indexed criteria for the retry batch
+    retry_criteria = [
+        BatchCriterion(index=new_idx, criteria=rubric[orig_idx].criteria, weight=rubric[orig_idx].weight)
+        for new_idx, orig_idx in enumerate(errored_indices)
+    ]
+
+    n_retry = len(retry_criteria)
+    batch_timeout = config.judge_timeout * n_retry
+    if config.batch_timeout is not None:
+        batch_timeout = min(batch_timeout, config.batch_timeout)
+
+    print(f"  [retry batch] Re-evaluating {n_retry} criteria (timeout={batch_timeout}s)...")
+
+    judge_input = BatchJudgeInput(
+        model=config.model,
+        instructions=config.instructions,
+        final_output=final_output,
+        criteria=retry_criteria,
+        workdir=config.workdir,
+        mcp_servers=config.mcp_servers,
+        judge_guidance=judge_guidance,
+    )
+
+    trace_path = os.path.join(config.output_dir, "judge_trace_batch_retry.txt")
+    verdicts, retry_usage = evaluate_all_criteria(
+        judge_input,
+        sandbox_user=config.sandbox_user,
+        trace_path=trace_path,
+        timeout=batch_timeout,
+    )
+
+    for key in ("cost_usd", "prompt_tokens", "completion_tokens", "cache_read_tokens"):
+        llm_usage[key] = llm_usage.get(key, 0) + retry_usage.get(key, 0)
+
+    # Map retry results (0-based) back to original indices
+    for new_idx, orig_idx in enumerate(errored_indices):
+        v = verdicts[new_idx] if new_idx < len(verdicts) else {}
+        results[orig_idx] = CriteriaResult(
+            criteria=rubric[orig_idx].criteria,
+            weight=rubric[orig_idx].weight,
+            passed=v.get("passed"),
+            reasoning=v.get("reasoning", "No reasoning provided."),
+            evidence=v.get("evidence", []),
+        )
+
+        passed = results[orig_idx].passed
+        status = "PASS" if passed is True else ("ERROR" if passed is None else "FAIL")
+        print(f"    [{orig_idx}] {status}: {results[orig_idx].reasoning[:120]}")
+
+
+def _write_info(
+    config: VerifierConfig,
+    results: list[CriteriaResult],
+    llm_usage: dict[str, Any],
+    errored_criteria_count: int,
+) -> float:
+    """Compute score and ALWAYS write info.json. Returns the score."""
     total_weight = sum(r.weight for r in results)
+    # Errored criteria (passed=None) contribute 0 and stay in the denominator,
+    # so the score is pessimistic.  This is fine because hard-fail paths skip
+    # reward.json — info.json is diagnostic only.
     score = round(
-        sum(r.weight * (1.0 if r.passed else 0.0) for r in results) / total_weight if total_weight > 0 else 0.0,
+        sum(r.weight * (1.0 if r.passed is True else 0.0) for r in results) / total_weight
+        if total_weight > 0
+        else 0.0,
         4,
     )
 
-    total_cost = llm_usage.get("cost_usd", 0)
-    total_prompt = llm_usage.get("prompt_tokens", 0)
-    total_completion = llm_usage.get("completion_tokens", 0)
-    total_cache_read = llm_usage.get("cache_read_tokens", 0)
-
-    with open(os.path.join(config.output_dir, "reward.json"), "w") as f:
-        json.dump({"score": score}, f, indent=2)
+    n_total = len(results)
+    n_evaluated = n_total - errored_criteria_count
+    evaluated_pct = round((n_evaluated / n_total * 100.0) if n_total > 0 else 100.0, 2)
 
     info = EvaluationInfo(
         score=score,
         criteria_results=results,
         llm_usage={
             "model": config.model,
-            "total_cost_usd": total_cost,
-            "total_prompt_tokens": total_prompt,
-            "total_completion_tokens": total_completion,
-            "total_cache_read_tokens": total_cache_read,
+            "total_cost_usd": llm_usage.get("cost_usd", 0),
+            "total_prompt_tokens": llm_usage.get("prompt_tokens", 0),
+            "total_completion_tokens": llm_usage.get("completion_tokens", 0),
+            "total_cache_read_tokens": llm_usage.get("cache_read_tokens", 0),
         },
+        errored_criteria_count=errored_criteria_count,
+        evaluated_criteria_pct=evaluated_pct,
     )
     with open(os.path.join(config.output_dir, "info.json"), "w") as f:
         f.write(info.model_dump_json(indent=2))
 
-    print(f"\nScore: {score}")
-    if total_cost > 0:
-        print(
-            f"Verifier LLM cost: ${total_cost:.4f} "
-            f"({len(rubric)} criteria, "
-            f"{total_prompt} prompt + {total_completion} completion tokens)"
-        )
-    print(f"Mode: {config.mode}")
-    print(f"Results written to {config.output_dir}/")
+    return score
 
 
 def main() -> None:
@@ -488,25 +596,65 @@ def main() -> None:
 
     os.makedirs(config.output_dir, exist_ok=True)
 
+    # 1. Initial evaluation
     if config.mode == "batch":
         results, llm_usage = _run_batch(config, rubric, final_output, judge_guidance)
     else:
         results, llm_usage = _run_sequential(config, rubric, final_output, judge_guidance)
 
-    _compute_and_write_results(config, rubric, results, llm_usage)
+    # 2. Record initial error count for observability
+    initial_errored = len(_get_errored_indices(results))
 
-    # If no criterion was actually evaluated by the judge (all failed due to
-    # infrastructure issues like sudo, missing API keys, workspace clone errors),
-    # exit non-zero so the caller can distinguish infrastructure errors from
-    # a legitimate score of 0.0.
-    evaluated = any(r.passed or r.evidence for r in results)
-    if results and not evaluated:
+    # 3. Retry loop
+    for attempt in range(config.judge_retries):
+        errored = _get_errored_indices(results)
+        if not errored:
+            break
+        print(f"\n[retry {attempt + 1}/{config.judge_retries}] Retrying {len(errored)} errored criteria...")
+        if config.mode == "batch":
+            _retry_batch(config, rubric, results, llm_usage, final_output, judge_guidance, errored)
+        else:
+            _retry_sequential(config, rubric, results, llm_usage, final_output, judge_guidance, errored)
+
+    # 4. ALWAYS write info.json (even on hard fail)
+    final_errored = _get_errored_indices(results)
+    errored_count = len(final_errored)
+    score = _write_info(config, results, llm_usage, errored_count)
+
+    total_cost = llm_usage.get("cost_usd", 0)
+    total_prompt = llm_usage.get("prompt_tokens", 0)
+    total_completion = llm_usage.get("completion_tokens", 0)
+
+    # 5. If any criteria still errored: do NOT write reward.json, exit 1
+    if final_errored:
         print(
-            "\nERROR: No criteria were successfully evaluated. "
-            "All failures appear to be infrastructure errors.",
+            f"\nERROR: {errored_count} criteria could not be evaluated "
+            f"(initial errors: {initial_errored}, after retries: {errored_count}).",
             file=sys.stderr,
         )
+        print(f"info.json written to {config.output_dir}/ (reward.json NOT written)", file=sys.stderr)
         sys.exit(1)
+
+    # 6. All resolved — write reward.json (stable schema: always include error fields)
+    reward = {
+        "score": score,
+        "errored_criteria_count": initial_errored,
+        "evaluated_criteria_pct": 100.0,
+    }
+    with open(os.path.join(config.output_dir, "reward.json"), "w") as f:
+        json.dump(reward, f, indent=2)
+
+    print(f"\nScore: {score}")
+    if total_cost > 0:
+        print(
+            f"Verifier LLM cost: ${total_cost:.4f} "
+            f"({len(rubric)} criteria, "
+            f"{total_prompt} prompt + {total_completion} completion tokens)"
+        )
+    print(f"Mode: {config.mode}")
+    if initial_errored > 0:
+        print(f"Retried: {initial_errored} criteria recovered after retry")
+    print(f"Results written to {config.output_dir}/")
 
 
 if __name__ == "__main__":

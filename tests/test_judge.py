@@ -131,30 +131,37 @@ class TestReadVerdict:
         assert result.passed is True
         assert result.evidence == []
 
+    def test_judge_writes_null_passed_preserved(self, tmp_path):
+        """If the judge writes {"passed": null}, it must stay None, not become False."""
+        p = tmp_path / "verdict.json"
+        p.write_text(json.dumps({"passed": None, "reasoning": "judge errored internally"}))
+        result = _read_verdict(str(p))
+        assert result.passed is None
+
     def test_empty_file(self, tmp_path):
         p = tmp_path / "verdict.json"
         p.write_text("")
         result = _read_verdict(str(p))
-        assert result.passed is False
+        assert result.passed is None
         assert "empty" in result.reasoning.lower()
 
     def test_missing_file(self):
         result = _read_verdict("/nonexistent/verdict.json")
-        assert result.passed is False
+        assert result.passed is None
         assert "did not write" in result.reasoning.lower()
 
     def test_invalid_json(self, tmp_path):
         p = tmp_path / "verdict.json"
         p.write_text("not json at all")
         result = _read_verdict(str(p))
-        assert result.passed is False
+        assert result.passed is None
         assert "invalid JSON" in result.reasoning
 
     def test_missing_passed_field(self, tmp_path):
         p = tmp_path / "verdict.json"
         p.write_text(json.dumps({"reasoning": "no passed field"}))
         result = _read_verdict(str(p))
-        assert result.passed is False
+        assert result.passed is None
         assert "missing" in result.reasoning.lower()
 
 
@@ -179,7 +186,7 @@ class TestReadBatchVerdict:
         p.write_text(json.dumps([{"index": 0, "passed": True, "reasoning": "ok"}]))
         results = _read_batch_verdict(str(p), 2)
         assert results[0]["passed"] is True
-        assert results[1]["passed"] is False
+        assert results[1]["passed"] is None
         assert "did not return" in results[1]["reasoning"].lower()
 
     def test_non_integer_index_skipped(self, tmp_path):
@@ -188,13 +195,13 @@ class TestReadBatchVerdict:
             json.dumps([{"index": "zero", "passed": True, "reasoning": "ok"}])
         )
         results = _read_batch_verdict(str(p), 1)
-        assert results[0]["passed"] is False
+        assert results[0]["passed"] is None
 
     def test_out_of_range_index_skipped(self, tmp_path):
         p = tmp_path / "verdict.json"
         p.write_text(json.dumps([{"index": 5, "passed": True, "reasoning": "ok"}]))
         results = _read_batch_verdict(str(p), 2)
-        assert all(r["passed"] is False for r in results)
+        assert all(r["passed"] is None for r in results)
 
     def test_duplicate_index_last_wins(self, tmp_path):
         p = tmp_path / "verdict.json"
@@ -215,24 +222,24 @@ class TestReadBatchVerdict:
         p.write_text("")
         results = _read_batch_verdict(str(p), 2)
         assert len(results) == 2
-        assert all(r["passed"] is False for r in results)
+        assert all(r["passed"] is None for r in results)
 
     def test_missing_file(self):
         results = _read_batch_verdict("/nonexistent/verdict.json", 2)
         assert len(results) == 2
-        assert all(r["passed"] is False for r in results)
+        assert all(r["passed"] is None for r in results)
 
     def test_invalid_json(self, tmp_path):
         p = tmp_path / "verdict.json"
         p.write_text("not json")
         results = _read_batch_verdict(str(p), 1)
-        assert results[0]["passed"] is False
+        assert results[0]["passed"] is None
 
     def test_non_array_json(self, tmp_path):
         p = tmp_path / "verdict.json"
         p.write_text(json.dumps({"not": "an array"}))
         results = _read_batch_verdict(str(p), 1)
-        assert results[0]["passed"] is False
+        assert results[0]["passed"] is None
 
 
 MOCK_USAGE = {
@@ -309,7 +316,7 @@ class TestRunJudge:
             run_judge(input_path, output_path)
 
         result = json.loads((tmp_path / "output.json").read_text())
-        assert result["passed"] is False
+        assert result["passed"] is None
         assert result["llm_usage"]["cost_usd"] == 0.05
         assert result["llm_usage"]["prompt_tokens"] == 1000
 
@@ -329,7 +336,7 @@ class TestRunJudge:
             run_judge(input_path, output_path)
 
         result = json.loads((tmp_path / "output.json").read_text())
-        assert result["passed"] is False
+        assert result["passed"] is None
         assert result["llm_usage"] == {}
         assert "LLM exploded" in result["reasoning"]
 
@@ -352,7 +359,7 @@ class TestRunJudge:
             run_judge(input_path, output_path)
 
         result = json.loads((tmp_path / "output.json").read_text())
-        assert result["passed"] is False
+        assert result["passed"] is None
         assert result["llm_usage"]["cost_usd"] == 0.05
         assert result["llm_usage"]["prompt_tokens"] == 1000
         assert "Unexpected parsing error" in result["reasoning"]
@@ -415,7 +422,7 @@ class TestRunJudgeBatch:
 
         data = json.loads((tmp_path / "output.json").read_text())
         assert data["llm_usage"]["cost_usd"] == 0.05
-        assert all(v["passed"] is False for v in data["verdicts"])
+        assert all(v["passed"] is None for v in data["verdicts"])
 
     @patch(
         "gandalf_grader.judge._run_agent_session",
@@ -433,7 +440,7 @@ class TestRunJudgeBatch:
 
         data = json.loads((tmp_path / "output.json").read_text())
         assert data["llm_usage"] == {}
-        assert all(v["passed"] is False for v in data["verdicts"])
+        assert all(v["passed"] is None for v in data["verdicts"])
 
     @patch("gandalf_grader.judge._run_agent_session", return_value=MOCK_USAGE)
     @patch(
@@ -456,5 +463,5 @@ class TestRunJudgeBatch:
         data = json.loads((tmp_path / "output.json").read_text())
         assert data["llm_usage"]["cost_usd"] == 0.05
         assert data["llm_usage"]["prompt_tokens"] == 1000
-        assert all(v["passed"] is False for v in data["verdicts"])
+        assert all(v["passed"] is None for v in data["verdicts"])
         assert "Batch parsing blew up" in data["verdicts"][0]["reasoning"]

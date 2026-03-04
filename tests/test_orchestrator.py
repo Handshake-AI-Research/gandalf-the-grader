@@ -1,6 +1,7 @@
 """Tests for orchestrator-level functions (resolve_judge_guidance, evaluate_all_criteria)."""
 
 import json
+import os
 import subprocess
 from unittest.mock import patch
 
@@ -226,7 +227,7 @@ class TestEvaluateAllCriteria:
             )
 
         assert len(verdicts) == 2
-        assert all(v["passed"] is False for v in verdicts)
+        assert all(v["passed"] is None for v in verdicts)
         assert "Unexpected JSON type" in verdicts[0]["reasoning"]
         assert usage == {}
 
@@ -251,7 +252,7 @@ class TestEvaluateAllCriteria:
             )
 
         assert len(verdicts) == 1
-        assert verdicts[0]["passed"] is False
+        assert verdicts[0]["passed"] is None
         assert usage == {}
 
     @patch("gandalf_grader.__main__._clone_workspace")
@@ -296,7 +297,7 @@ class TestEvaluateAllCriteria:
             )
 
         assert len(verdicts) == 2
-        assert all(v["passed"] is False for v in verdicts)
+        assert all(v["passed"] is None for v in verdicts)
         assert "exit 1" in verdicts[0]["reasoning"]
         assert usage == {}
 
@@ -317,7 +318,7 @@ class TestEvaluateAllCriteria:
             )
 
         assert len(verdicts) == 2
-        assert all(v["passed"] is False for v in verdicts)
+        assert all(v["passed"] is None for v in verdicts)
         assert "timed out" in verdicts[0]["reasoning"].lower()
         assert usage == {}
 
@@ -342,7 +343,7 @@ class TestEvaluateAllCriteria:
             )
 
         assert len(verdicts) == 1
-        assert verdicts[0]["passed"] is False
+        assert verdicts[0]["passed"] is None
         assert usage == {}
 
     @patch("gandalf_grader.__main__._clone_workspace")
@@ -367,5 +368,250 @@ class TestEvaluateAllCriteria:
             )
 
         assert len(verdicts) == 2
-        assert all(v["passed"] is False for v in verdicts)
+        assert all(v["passed"] is None for v in verdicts)
         assert usage == {}
+
+
+class TestRetryLogic:
+    """Tests for retry and hard-fail logic in main()."""
+
+    @patch("gandalf_grader.__main__.resolve_judge_guidance", return_value="")
+    @patch("gandalf_grader.__main__.load_trajectory_final_output", return_value="done")
+    @patch("gandalf_grader.__main__.load_rubric")
+    @patch("gandalf_grader.__main__.load_config")
+    @patch("gandalf_grader.__main__.evaluate_criteria")
+    def test_sequential_retry_resolves_errored_criterion(
+        self, mock_eval, mock_config, mock_rubric, mock_trajectory, mock_guidance, tmp_path
+    ):
+        """Sequential retry resolves an errored criterion on the second attempt."""
+        from gandalf_grader.config import RubricItem
+
+        output_dir = str(tmp_path / "output")
+        os.makedirs(output_dir, exist_ok=True)
+
+        mock_config.return_value = VerifierConfig(
+            instructions="test",
+            rubric_path="/rubric.json",
+            workdir=str(tmp_path),
+            trajectory_path="/logs/trajectory.json",
+            sandbox_user="sandbox",
+            output_dir=output_dir,
+            judge_retries=1,
+            mode="sequential",
+        )
+        mock_rubric.return_value = [
+            RubricItem(criteria="c1", weight=1.0),
+            RubricItem(criteria="c2", weight=1.0),
+        ]
+
+        # First call: c1 passes, c2 errors. Retry: c2 passes.
+        mock_eval.side_effect = [
+            {"passed": True, "reasoning": "ok", "evidence": ["e1"]},
+            {"passed": None, "reasoning": "timeout"},
+            # retry for c2
+            {"passed": True, "reasoning": "ok on retry", "evidence": ["e2"]},
+        ]
+
+        from gandalf_grader.__main__ import main
+
+        with patch("sys.argv", ["prog", "--config", "dummy.toml"]):
+            main()
+
+        info = json.loads((tmp_path / "output" / "info.json").read_text())
+        assert info["criteria_results"][0]["passed"] is True
+        assert info["criteria_results"][1]["passed"] is True
+        assert info["errored_criteria_count"] == 0
+
+        reward = json.loads((tmp_path / "output" / "reward.json").read_text())
+        assert reward["score"] == 1.0
+        assert reward["errored_criteria_count"] == 1
+        assert reward["evaluated_criteria_pct"] == 100.0
+
+    @patch("gandalf_grader.__main__.resolve_judge_guidance", return_value="")
+    @patch("gandalf_grader.__main__.load_trajectory_final_output", return_value="done")
+    @patch("gandalf_grader.__main__.load_rubric")
+    @patch("gandalf_grader.__main__.load_config")
+    @patch("gandalf_grader.__main__.evaluate_all_criteria")
+    def test_batch_retry_resolves_errored_criteria(
+        self, mock_eval_all, mock_config, mock_rubric, mock_trajectory, mock_guidance, tmp_path
+    ):
+        """Batch retry resolves errored criteria with correct re-indexing."""
+        from gandalf_grader.config import RubricItem
+
+        output_dir = str(tmp_path / "output")
+        os.makedirs(output_dir, exist_ok=True)
+
+        mock_config.return_value = VerifierConfig(
+            instructions="test",
+            rubric_path="/rubric.json",
+            workdir=str(tmp_path),
+            trajectory_path="/logs/trajectory.json",
+            sandbox_user="sandbox",
+            output_dir=output_dir,
+            judge_retries=1,
+            mode="batch",
+        )
+        mock_rubric.return_value = [
+            RubricItem(criteria="c1", weight=1.0),
+            RubricItem(criteria="c2", weight=1.0),
+            RubricItem(criteria="c3", weight=1.0),
+        ]
+
+        # Initial batch: c1 passes, c2 errors, c3 errors
+        initial_verdicts = [
+            {"index": 0, "passed": True, "reasoning": "ok", "evidence": []},
+            {"index": 1, "passed": None, "reasoning": "timeout", "evidence": []},
+            {"index": 2, "passed": None, "reasoning": "crash", "evidence": []},
+        ]
+        # Retry batch (re-indexed 0,1 -> original 1,2): both pass
+        retry_verdicts = [
+            {"index": 0, "passed": True, "reasoning": "ok retry", "evidence": []},
+            {"index": 1, "passed": True, "reasoning": "ok retry 2", "evidence": []},
+        ]
+        mock_eval_all.side_effect = [
+            (initial_verdicts, {"cost_usd": 0.1}),
+            (retry_verdicts, {"cost_usd": 0.05}),
+        ]
+
+        from gandalf_grader.__main__ import main
+
+        with patch("sys.argv", ["prog", "--config", "dummy.toml"]):
+            main()
+
+        info = json.loads((tmp_path / "output" / "info.json").read_text())
+        assert all(r["passed"] is True for r in info["criteria_results"])
+        assert info["errored_criteria_count"] == 0
+
+        reward = json.loads((tmp_path / "output" / "reward.json").read_text())
+        assert reward["score"] == 1.0
+
+    @patch("gandalf_grader.__main__.resolve_judge_guidance", return_value="")
+    @patch("gandalf_grader.__main__.load_trajectory_final_output", return_value="done")
+    @patch("gandalf_grader.__main__.load_rubric")
+    @patch("gandalf_grader.__main__.load_config")
+    @patch("gandalf_grader.__main__.evaluate_criteria")
+    def test_judge_retries_zero_disables_retry(
+        self, mock_eval, mock_config, mock_rubric, mock_trajectory, mock_guidance, tmp_path
+    ):
+        """judge_retries=0 skips retry loop entirely — errors cause hard fail."""
+        from gandalf_grader.config import RubricItem
+
+        output_dir = str(tmp_path / "output")
+        os.makedirs(output_dir, exist_ok=True)
+
+        mock_config.return_value = VerifierConfig(
+            instructions="test",
+            rubric_path="/rubric.json",
+            workdir=str(tmp_path),
+            trajectory_path="/logs/trajectory.json",
+            sandbox_user="sandbox",
+            output_dir=output_dir,
+            judge_retries=0,
+            mode="sequential",
+        )
+        mock_rubric.return_value = [RubricItem(criteria="c1", weight=1.0)]
+        mock_eval.return_value = {"passed": None, "reasoning": "timeout"}
+
+        from gandalf_grader.__main__ import main
+
+        with patch("sys.argv", ["prog", "--config", "dummy.toml"]):
+            with pytest.raises(SystemExit) as exc_info:
+                main()
+            assert exc_info.value.code == 1
+
+        # info.json MUST be written even on hard fail
+        assert (tmp_path / "output" / "info.json").exists()
+        # reward.json must NOT be written
+        assert not (tmp_path / "output" / "reward.json").exists()
+
+        # Only 1 call — no retry
+        assert mock_eval.call_count == 1
+
+    @patch("gandalf_grader.__main__.resolve_judge_guidance", return_value="")
+    @patch("gandalf_grader.__main__.load_trajectory_final_output", return_value="done")
+    @patch("gandalf_grader.__main__.load_rubric")
+    @patch("gandalf_grader.__main__.load_config")
+    @patch("gandalf_grader.__main__.evaluate_criteria")
+    def test_hard_fail_writes_info_not_reward(
+        self, mock_eval, mock_config, mock_rubric, mock_trajectory, mock_guidance, tmp_path
+    ):
+        """Persistent errors: info.json written, reward.json NOT written, exit 1."""
+        from gandalf_grader.config import RubricItem
+
+        output_dir = str(tmp_path / "output")
+        os.makedirs(output_dir, exist_ok=True)
+
+        mock_config.return_value = VerifierConfig(
+            instructions="test",
+            rubric_path="/rubric.json",
+            workdir=str(tmp_path),
+            trajectory_path="/logs/trajectory.json",
+            sandbox_user="sandbox",
+            output_dir=output_dir,
+            judge_retries=1,
+            mode="sequential",
+        )
+        mock_rubric.return_value = [RubricItem(criteria="c1", weight=1.0)]
+        # Both initial and retry fail
+        mock_eval.return_value = {"passed": None, "reasoning": "always fails"}
+
+        from gandalf_grader.__main__ import main
+
+        with patch("sys.argv", ["prog", "--config", "dummy.toml"]):
+            with pytest.raises(SystemExit) as exc_info:
+                main()
+            assert exc_info.value.code == 1
+
+        info = json.loads((tmp_path / "output" / "info.json").read_text())
+        assert info["criteria_results"][0]["passed"] is None
+        assert info["errored_criteria_count"] == 1
+        assert not (tmp_path / "output" / "reward.json").exists()
+
+    @patch("gandalf_grader.__main__.resolve_judge_guidance", return_value="")
+    @patch("gandalf_grader.__main__.load_trajectory_final_output", return_value="done")
+    @patch("gandalf_grader.__main__.load_rubric")
+    @patch("gandalf_grader.__main__.load_config")
+    @patch("gandalf_grader.__main__.evaluate_criteria")
+    def test_all_resolved_after_retry_includes_errored_count_in_reward(
+        self, mock_eval, mock_config, mock_rubric, mock_trajectory, mock_guidance, tmp_path
+    ):
+        """After retry resolves all errors: reward.json includes errored_criteria_count."""
+        from gandalf_grader.config import RubricItem
+
+        output_dir = str(tmp_path / "output")
+        os.makedirs(output_dir, exist_ok=True)
+
+        mock_config.return_value = VerifierConfig(
+            instructions="test",
+            rubric_path="/rubric.json",
+            workdir=str(tmp_path),
+            trajectory_path="/logs/trajectory.json",
+            sandbox_user="sandbox",
+            output_dir=output_dir,
+            judge_retries=1,
+            mode="sequential",
+        )
+        mock_rubric.return_value = [
+            RubricItem(criteria="c1", weight=1.0),
+            RubricItem(criteria="c2", weight=1.0),
+        ]
+
+        # c1 passes, c2 errors initially, succeeds on retry (passes as False = legit fail)
+        mock_eval.side_effect = [
+            {"passed": True, "reasoning": "ok", "evidence": []},
+            {"passed": None, "reasoning": "timeout"},
+            {"passed": False, "reasoning": "genuinely failed", "evidence": []},
+        ]
+
+        from gandalf_grader.__main__ import main
+
+        with patch("sys.argv", ["prog", "--config", "dummy.toml"]):
+            main()
+
+        reward = json.loads((tmp_path / "output" / "reward.json").read_text())
+        assert reward["score"] == 0.5
+        assert reward["errored_criteria_count"] == 1
+        assert reward["evaluated_criteria_pct"] == 100.0
+
+        info = json.loads((tmp_path / "output" / "info.json").read_text())
+        assert info["errored_criteria_count"] == 0
