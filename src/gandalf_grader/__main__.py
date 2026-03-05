@@ -338,7 +338,6 @@ def _run_sequential(
         result = CriteriaResult(
             criteria=item.criteria,
             weight=item.weight,
-            negative=item.negative,
             passed=verdict.get("passed"),
             reasoning=verdict.get("reasoning", "No reasoning provided."),
             evidence=verdict.get("evidence", []),
@@ -363,7 +362,7 @@ def _run_batch(
     totals from the single batch agent session.
     """
     criteria_list = [
-        BatchCriterion(index=i, criteria=item.criteria, weight=item.weight, negative=item.negative)
+        BatchCriterion(index=i, criteria=item.criteria)
         for i, item in enumerate(rubric)
     ]
 
@@ -401,7 +400,6 @@ def _run_batch(
         result = CriteriaResult(
             criteria=item.criteria,
             weight=item.weight,
-            negative=item.negative,
             passed=v.get("passed"),
             reasoning=v.get("reasoning", "No reasoning provided."),
             evidence=v.get("evidence", []),
@@ -458,7 +456,6 @@ def _retry_sequential(
         results[idx] = CriteriaResult(
             criteria=item.criteria,
             weight=item.weight,
-            negative=item.negative,
             passed=verdict.get("passed"),
             reasoning=verdict.get("reasoning", "No reasoning provided."),
             evidence=verdict.get("evidence", []),
@@ -479,7 +476,7 @@ def _retry_batch(
 ) -> None:
     """Re-run errored criteria as a batch and merge results in-place."""
     retry_criteria = [
-        BatchCriterion(index=new_idx, criteria=rubric[orig_idx].criteria, weight=rubric[orig_idx].weight, negative=rubric[orig_idx].negative)
+        BatchCriterion(index=new_idx, criteria=rubric[orig_idx].criteria)
         for new_idx, orig_idx in enumerate(errored_indices)
     ]
 
@@ -516,7 +513,6 @@ def _retry_batch(
         results[orig_idx] = CriteriaResult(
             criteria=rubric[orig_idx].criteria,
             weight=rubric[orig_idx].weight,
-            negative=rubric[orig_idx].negative,
             passed=v.get("passed"),
             reasoning=v.get("reasoning", "No reasoning provided."),
             evidence=v.get("evidence", []),
@@ -533,28 +529,18 @@ def _write_info(
     llm_usage: dict[str, Any],
     errored_criteria_count: int,
 ) -> float:
-    """Compute score and ALWAYS write info.json. Returns the score.
+    """Compute raw score and ALWAYS write info.json. Returns the score.
 
-    Scoring supports both positive and negative criteria:
-      - Positive: ``passed=True`` earns ``abs(weight)`` points.
-      - Negative: ``passed=False`` (bad thing avoided) earns ``abs(weight)`` points;
-        ``passed=True`` (bad thing happened) earns 0.
-    Errored criteria (passed=None) contribute 0.
-    Denominator is always ``sum(abs(weight))``, so the score is in [0, 1].
+    Raw score: sum of weights for passed criteria (negative weights contribute
+    when their criterion passes).  Errored criteria (passed=None) contribute 0.
     """
-    total_weight = sum(abs(r.weight) for r in results)
-
-    def _earned(r: CriteriaResult) -> float:
-        if r.passed is None:
-            return 0.0
-        if r.negative:
-            return abs(r.weight) if not r.passed else 0.0
-        return abs(r.weight) if r.passed else 0.0
-
     score = round(
-        sum(_earned(r) for r in results) / total_weight if total_weight > 0 else 0.0,
+        sum(r.weight for r in results if r.passed is True),
         4,
     )
+
+    minimum_score = round(sum(r.weight for r in results if r.weight < 0), 4)
+    maximum_score = round(sum(r.weight for r in results if r.weight > 0), 4)
 
     n_total = len(results)
     n_evaluated = n_total - errored_criteria_count
@@ -562,6 +548,8 @@ def _write_info(
 
     info = EvaluationInfo(
         score=score,
+        minimum_score=minimum_score,
+        maximum_score=maximum_score,
         criteria_results=results,
         llm_usage={
             "model": config.model,

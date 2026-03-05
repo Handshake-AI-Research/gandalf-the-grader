@@ -133,7 +133,7 @@ def _make_batch_input(tmp_path, n=2) -> BatchJudgeInput:
         instructions="do a thing",
         final_output="done",
         criteria=[
-            {"index": i, "criteria": f"criterion {i}", "weight": 1.0}
+            {"index": i, "criteria": f"criterion {i}"}
             for i in range(n)
         ],
         workdir=str(tmp_path),
@@ -378,31 +378,33 @@ class TestEvaluateAllCriteria:
         assert usage == {}
 
 
-def _cr(weight: float, passed: bool | None, negative: bool = False) -> CriteriaResult:
+def _cr(weight: float, passed: bool | None) -> CriteriaResult:
     """Helper to build a CriteriaResult for scoring tests."""
     return CriteriaResult(
         criteria="test",
         weight=weight,
-        negative=negative,
         passed=passed,
         reasoning="test",
     )
 
 
 class TestScoring:
-    """Tests for _write_info scoring formula."""
+    """Tests for _write_info raw scoring formula."""
 
-    def _score(self, results: list[CriteriaResult], tmp_path) -> float:
-        """Run _write_info and return the score from info.json."""
+    def _score_and_info(self, results: list[CriteriaResult], tmp_path) -> dict:
+        """Run _write_info and return parsed info.json."""
         config = _make_config(output_dir=str(tmp_path))
         errored = sum(1 for r in results if r.passed is None)
         _write_info(config, results, {}, errored)
         with open(tmp_path / "info.json") as f:
-            return json.load(f)["score"]
+            return json.load(f)
+
+    def _score(self, results: list[CriteriaResult], tmp_path) -> float:
+        return self._score_and_info(results, tmp_path)["score"]
 
     def test_all_positive_all_pass(self, tmp_path):
         results = [_cr(2.0, True), _cr(3.0, True)]
-        assert self._score(results, tmp_path) == 1.0
+        assert self._score(results, tmp_path) == 5.0
 
     def test_all_positive_none_pass(self, tmp_path):
         results = [_cr(2.0, False), _cr(3.0, False)]
@@ -410,67 +412,55 @@ class TestScoring:
 
     def test_all_positive_partial(self, tmp_path):
         results = [_cr(2.0, True), _cr(3.0, False)]
-        assert self._score(results, tmp_path) == 0.4  # 2/5
+        assert self._score(results, tmp_path) == 2.0
 
-    def test_negative_passed_is_penalty(self, tmp_path):
-        """Negative criterion passed (bad thing happened) → 0 points."""
-        results = [
-            _cr(3.0, True),                       # +3/6
-            _cr(3.0, True, negative=True),         # +0/6 (penalty)
-        ]
-        assert self._score(results, tmp_path) == 0.5  # 3/6
+    def test_negative_weight_passed_is_penalty(self, tmp_path):
+        """Negative weight criterion passed → weight added (negative contribution)."""
+        results = [_cr(3.0, True), _cr(-1.0, True)]
+        assert self._score(results, tmp_path) == 2.0  # 3 + (-1)
 
-    def test_negative_failed_is_reward(self, tmp_path):
-        """Negative criterion failed (bad thing avoided) → earns points."""
-        results = [
-            _cr(3.0, True),                        # +3/6
-            _cr(3.0, False, negative=True),         # +3/6 (avoided)
-        ]
-        assert self._score(results, tmp_path) == 1.0  # 6/6
+    def test_negative_weight_failed_no_penalty(self, tmp_path):
+        """Negative weight criterion failed → no contribution."""
+        results = [_cr(3.0, True), _cr(-1.0, False)]
+        assert self._score(results, tmp_path) == 3.0
 
-    def test_all_negative_all_avoided(self, tmp_path):
-        results = [_cr(2.0, False, negative=True), _cr(3.0, False, negative=True)]
-        assert self._score(results, tmp_path) == 1.0
+    def test_all_negative_all_passed(self, tmp_path):
+        results = [_cr(-2.0, True), _cr(-3.0, True)]
+        assert self._score(results, tmp_path) == -5.0
 
-    def test_all_negative_all_triggered(self, tmp_path):
-        results = [_cr(2.0, True, negative=True), _cr(3.0, True, negative=True)]
+    def test_all_negative_none_passed(self, tmp_path):
+        results = [_cr(-2.0, False), _cr(-3.0, False)]
         assert self._score(results, tmp_path) == 0.0
 
     def test_mixed_scenario(self, tmp_path):
-        """Positive pass + positive fail + negative avoided + negative triggered."""
+        """Positive pass + positive fail + negative pass + negative fail."""
         results = [
-            _cr(10.0, True),                       # +10
-            _cr(5.0, False),                        # +0
-            _cr(3.0, False, negative=True),         # +3 (avoided)
-            _cr(2.0, True, negative=True),          # +0 (triggered)
+            _cr(10.0, True),   # +10
+            _cr(5.0, False),   # +0
+            _cr(-3.0, True),   # -3
+            _cr(-2.0, False),  # +0
         ]
-        # total_weight = 10+5+3+2 = 20, earned = 13
-        assert self._score(results, tmp_path) == 0.65
-
-    def test_backward_compat_no_negative_field(self, tmp_path):
-        """Results without explicit negative flag score identically to old formula."""
-        results = [
-            CriteriaResult(criteria="a", weight=2.0, passed=True, reasoning="ok"),
-            CriteriaResult(criteria="b", weight=3.0, passed=False, reasoning="no"),
-        ]
-        assert self._score(results, tmp_path) == 0.4  # 2/5
+        assert self._score(results, tmp_path) == 7.0
 
     def test_empty_results(self, tmp_path):
         assert self._score([], tmp_path) == 0.0
 
+    def test_minimum_and_maximum_score(self, tmp_path):
+        results = [_cr(10.0, True), _cr(5.0, False), _cr(-3.0, True)]
+        info = self._score_and_info(results, tmp_path)
+        assert info["minimum_score"] == -3.0
+        assert info["maximum_score"] == 15.0
+
+    def test_minimum_maximum_all_positive(self, tmp_path):
+        results = [_cr(2.0, True), _cr(3.0, True)]
+        info = self._score_and_info(results, tmp_path)
+        assert info["minimum_score"] == 0.0
+        assert info["maximum_score"] == 5.0
+
     def test_errored_criteria_contribute_zero(self, tmp_path):
         """Errored criteria (passed=None) contribute 0 to score."""
         results = [_cr(3.0, True), _cr(2.0, None)]
-        assert self._score(results, tmp_path) == 0.6  # 3/5
-
-    def test_info_json_includes_negative(self, tmp_path):
-        """Verify info.json preserves the negative flag on criteria_results."""
-        config = _make_config(output_dir=str(tmp_path))
-        results = [_cr(1.0, True, negative=True)]
-        _write_info(config, results, {}, 0)
-        with open(tmp_path / "info.json") as f:
-            info = json.load(f)
-        assert info["criteria_results"][0]["negative"] is True
+        assert self._score(results, tmp_path) == 3.0
 
 
 class TestRetryLogic:
@@ -524,7 +514,7 @@ class TestRetryLogic:
         assert info["errored_criteria_count"] == 0
 
         reward = json.loads((tmp_path / "output" / "reward.json").read_text())
-        assert reward["score"] == 1.0
+        assert reward["score"] == 2.0  # raw: 1.0 + 1.0
 
     @patch("gandalf_grader.__main__.resolve_judge_guidance", return_value="")
     @patch("gandalf_grader.__main__.load_trajectory_final_output", return_value="done")
@@ -580,7 +570,7 @@ class TestRetryLogic:
         assert info["errored_criteria_count"] == 0
 
         reward = json.loads((tmp_path / "output" / "reward.json").read_text())
-        assert reward["score"] == 1.0
+        assert reward["score"] == 3.0
 
     @patch("gandalf_grader.__main__.resolve_judge_guidance", return_value="")
     @patch("gandalf_grader.__main__.load_trajectory_final_output", return_value="done")
@@ -700,7 +690,7 @@ class TestRetryLogic:
             main()
 
         reward = json.loads((tmp_path / "output" / "reward.json").read_text())
-        assert reward["score"] == 0.5
+        assert reward["score"] == 1.0
 
         info = json.loads((tmp_path / "output" / "info.json").read_text())
         assert info["errored_criteria_count"] == 0

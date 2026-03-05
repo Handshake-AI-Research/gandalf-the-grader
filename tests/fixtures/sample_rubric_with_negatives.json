@@ -1,5 +1,5 @@
 [
   {"criteria": "Created the output file", "weight": 2.0},
   {"criteria": "Output contains correct totals", "weight": 3.0},
-  {"criteria": "Used hardcoded values instead of computing", "weight": 1.0, "negative": true}
+  {"criteria": "Used hardcoded values instead of computing", "weight": -1.0}
 ]

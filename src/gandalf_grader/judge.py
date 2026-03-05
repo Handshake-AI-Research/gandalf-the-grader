@@ -96,7 +96,7 @@ def build_batch_judge_prompt(
 
     criteria_lines = []
     for c in criteria:
-        criteria_lines.append(f"  [{c['index']}] (weight={c['weight']}) {c['criteria']}")
+        criteria_lines.append(f"  [{c['index']}] {c['criteria']}")
     criteria_block = "\n".join(criteria_lines)
     n_max = len(criteria) - 1
 
@@ -115,8 +115,7 @@ directory and can inspect files, run commands, and use tools to investigate.
 
 {criteria_block}
 
-Each criterion has a weight indicating relative importance. Your verdict for each is \
-binary: passed or failed.
+Your verdict for each criterion is binary: passed or failed.
 
 ## Your Task
 Investigate the current state of the environment to determine whether each of the above \
@@ -405,7 +404,7 @@ def run_judge_batch(input_path: str, output_path: str) -> None:
     """Run the agent-as-judge for all rubric criteria in a single session.
 
     The input JSON must contain a ``criteria`` key whose value is a list of
-    dicts, each with ``index``, ``criteria``, and ``weight`` fields.
+    dicts, each with ``index`` and ``criteria`` fields.
 
     The output file will contain a JSON object with ``verdicts`` (array of
     verdict objects, one per criterion index) and ``llm_usage`` (aggregate
