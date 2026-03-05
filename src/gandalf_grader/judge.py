@@ -17,6 +17,7 @@ import contextlib
 import json
 import os
 import secrets
+import sys
 import tempfile
 from typing import Any
 
@@ -379,6 +380,14 @@ def run_judge(input_path: str, output_path: str) -> None:
         llm_usage = _run_agent_session(
             judge_input.model, mcp_servers, judge_input.workdir, prompt
         )
+
+        verdict_exists = os.path.isfile(verdict_path)
+        if not verdict_exists:
+            print(
+                f"[gandalf-judge] Agent did not write verdict file: {verdict_path}",
+                file=sys.stderr,
+            )
+
         verdict = _read_verdict(verdict_path)
         output = {
             "passed": verdict.passed,
@@ -387,9 +396,15 @@ def run_judge(input_path: str, output_path: str) -> None:
             "llm_usage": llm_usage,
         }
     except Exception as e:
+        import traceback
+
+        tb = traceback.format_exc()
+        error_type = type(e).__name__
+        reason = f"Judge execution error ({error_type}): {e}"
+        print(f"[gandalf-judge] {reason}\n{tb}", file=sys.stderr)
         output = {
             "passed": None,
-            "reasoning": f"Judge execution error: {e}",
+            "reasoning": reason,
             "evidence": [],
             "llm_usage": llm_usage,
         }
@@ -441,12 +456,23 @@ def run_judge_batch(input_path: str, output_path: str) -> None:
         llm_usage = _run_agent_session(
             judge_input.model, mcp_servers, judge_input.workdir, prompt
         )
+
+        verdict_exists = os.path.isfile(verdict_path)
+        if not verdict_exists:
+            print(
+                f"[gandalf-judge] [batch] Agent did not write verdict file: {verdict_path}",
+                file=sys.stderr,
+            )
+
         verdicts = _read_batch_verdict(verdict_path, n_criteria)
     except Exception as e:
-        verdicts = _fail_all_verdicts(
-            n_criteria,
-            f"Judge execution error: {e}",
-        )
+        import traceback
+
+        tb = traceback.format_exc()
+        error_type = type(e).__name__
+        reason = f"Judge execution error ({error_type}): {e}"
+        print(f"[gandalf-judge] [batch] {reason}\n{tb}", file=sys.stderr)
+        verdicts = _fail_all_verdicts(n_criteria, reason)
     finally:
         with contextlib.suppress(OSError):
             os.unlink(verdict_path)
