@@ -362,7 +362,7 @@ def _run_batch(
     totals from the single batch agent session.
     """
     criteria_list = [
-        BatchCriterion(index=i, criteria=item.criteria, weight=item.weight)
+        BatchCriterion(index=i, criteria=item.criteria)
         for i, item in enumerate(rubric)
     ]
 
@@ -475,9 +475,8 @@ def _retry_batch(
     errored_indices: list[int],
 ) -> None:
     """Re-run errored criteria as a batch and merge results in-place."""
-    # Build 0-based re-indexed criteria for the retry batch
     retry_criteria = [
-        BatchCriterion(index=new_idx, criteria=rubric[orig_idx].criteria, weight=rubric[orig_idx].weight)
+        BatchCriterion(index=new_idx, criteria=rubric[orig_idx].criteria)
         for new_idx, orig_idx in enumerate(errored_indices)
     ]
 
@@ -509,7 +508,6 @@ def _retry_batch(
     for key in ("cost_usd", "prompt_tokens", "completion_tokens", "cache_read_tokens"):
         llm_usage[key] = llm_usage.get(key, 0) + retry_usage.get(key, 0)
 
-    # Map retry results (0-based) back to original indices
     for new_idx, orig_idx in enumerate(errored_indices):
         v = verdicts[new_idx] if new_idx < len(verdicts) else {}
         results[orig_idx] = CriteriaResult(
@@ -531,17 +529,18 @@ def _write_info(
     llm_usage: dict[str, Any],
     errored_criteria_count: int,
 ) -> float:
-    """Compute score and ALWAYS write info.json. Returns the score."""
-    total_weight = sum(r.weight for r in results)
-    # Errored criteria (passed=None) contribute 0 and stay in the denominator,
-    # so the score is pessimistic.  This is fine because hard-fail paths skip
-    # reward.json — info.json is diagnostic only.
+    """Compute raw score and ALWAYS write info.json. Returns the score.
+
+    Raw score: sum of weights for passed criteria (negative weights contribute
+    when their criterion passes).  Errored criteria (passed=None) contribute 0.
+    """
     score = round(
-        sum(r.weight * (1.0 if r.passed is True else 0.0) for r in results) / total_weight
-        if total_weight > 0
-        else 0.0,
+        sum(r.weight for r in results if r.passed is True),
         4,
     )
+
+    minimum_score = round(sum(r.weight for r in results if r.weight < 0), 4)
+    maximum_score = round(sum(r.weight for r in results if r.weight > 0), 4)
 
     n_total = len(results)
     n_evaluated = n_total - errored_criteria_count
@@ -549,6 +548,8 @@ def _write_info(
 
     info = EvaluationInfo(
         score=score,
+        minimum_score=minimum_score,
+        maximum_score=maximum_score,
         criteria_results=results,
         llm_usage={
             "model": config.model,

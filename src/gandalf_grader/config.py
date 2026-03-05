@@ -51,7 +51,12 @@ class VerifierConfig(BaseModel):
 
 
 class RubricItem(BaseModel):
-    """A single rubric item with evaluation criteria and weight."""
+    """A single rubric item with evaluation criteria and weight.
+
+    Weight can be negative to penalise undesired outcomes.  The sign of the
+    weight carries the semantics: positive means "reward when passed", negative
+    means "penalise when passed".
+    """
 
     criteria: str
     weight: float
@@ -70,11 +75,14 @@ class JudgeInput(BaseModel):
 
 
 class BatchCriterion(BaseModel):
-    """A single criterion entry within a batch judge input."""
+    """A single criterion entry within a batch judge input.
+
+    The judge sees only the index and criteria text — weights are intentionally
+    omitted so the judge evaluates each criterion on its own merits.
+    """
 
     index: int
     criteria: str
-    weight: float
 
 
 class BatchJudgeInput(BaseModel):
@@ -111,6 +119,8 @@ class EvaluationInfo(BaseModel):
     """Full evaluation output with score, per-criteria results, and LLM usage."""
 
     score: float
+    minimum_score: float = 0.0
+    maximum_score: float = 0.0
     criteria_results: list[CriteriaResult]
     llm_usage: dict[str, float | int | str] = Field(default_factory=dict)
     errored_criteria_count: int = 0

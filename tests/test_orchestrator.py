@@ -7,8 +7,14 @@ from unittest.mock import patch
 
 import pytest
 
-from gandalf_grader.__main__ import _JUDGE_ENV_ALLOWLIST, _judge_env_vars, evaluate_all_criteria, resolve_judge_guidance
-from gandalf_grader.config import BatchJudgeInput, VerifierConfig
+from gandalf_grader.__main__ import (
+    _JUDGE_ENV_ALLOWLIST,
+    _judge_env_vars,
+    _write_info,
+    evaluate_all_criteria,
+    resolve_judge_guidance,
+)
+from gandalf_grader.config import BatchJudgeInput, CriteriaResult, RubricItem, VerifierConfig
 
 
 def _make_config(**overrides) -> VerifierConfig:
@@ -127,7 +133,7 @@ def _make_batch_input(tmp_path, n=2) -> BatchJudgeInput:
         instructions="do a thing",
         final_output="done",
         criteria=[
-            {"index": i, "criteria": f"criterion {i}", "weight": 1.0}
+            {"index": i, "criteria": f"criterion {i}"}
             for i in range(n)
         ],
         workdir=str(tmp_path),
@@ -372,6 +378,91 @@ class TestEvaluateAllCriteria:
         assert usage == {}
 
 
+def _cr(weight: float, passed: bool | None) -> CriteriaResult:
+    """Helper to build a CriteriaResult for scoring tests."""
+    return CriteriaResult(
+        criteria="test",
+        weight=weight,
+        passed=passed,
+        reasoning="test",
+    )
+
+
+class TestScoring:
+    """Tests for _write_info raw scoring formula."""
+
+    def _score_and_info(self, results: list[CriteriaResult], tmp_path) -> dict:
+        """Run _write_info and return parsed info.json."""
+        config = _make_config(output_dir=str(tmp_path))
+        errored = sum(1 for r in results if r.passed is None)
+        _write_info(config, results, {}, errored)
+        with open(tmp_path / "info.json") as f:
+            return json.load(f)
+
+    def _score(self, results: list[CriteriaResult], tmp_path) -> float:
+        return self._score_and_info(results, tmp_path)["score"]
+
+    def test_all_positive_all_pass(self, tmp_path):
+        results = [_cr(2.0, True), _cr(3.0, True)]
+        assert self._score(results, tmp_path) == 5.0
+
+    def test_all_positive_none_pass(self, tmp_path):
+        results = [_cr(2.0, False), _cr(3.0, False)]
+        assert self._score(results, tmp_path) == 0.0
+
+    def test_all_positive_partial(self, tmp_path):
+        results = [_cr(2.0, True), _cr(3.0, False)]
+        assert self._score(results, tmp_path) == 2.0
+
+    def test_negative_weight_passed_is_penalty(self, tmp_path):
+        """Negative weight criterion passed → weight added (negative contribution)."""
+        results = [_cr(3.0, True), _cr(-1.0, True)]
+        assert self._score(results, tmp_path) == 2.0  # 3 + (-1)
+
+    def test_negative_weight_failed_no_penalty(self, tmp_path):
+        """Negative weight criterion failed → no contribution."""
+        results = [_cr(3.0, True), _cr(-1.0, False)]
+        assert self._score(results, tmp_path) == 3.0
+
+    def test_all_negative_all_passed(self, tmp_path):
+        results = [_cr(-2.0, True), _cr(-3.0, True)]
+        assert self._score(results, tmp_path) == -5.0
+
+    def test_all_negative_none_passed(self, tmp_path):
+        results = [_cr(-2.0, False), _cr(-3.0, False)]
+        assert self._score(results, tmp_path) == 0.0
+
+    def test_mixed_scenario(self, tmp_path):
+        """Positive pass + positive fail + negative pass + negative fail."""
+        results = [
+            _cr(10.0, True),   # +10
+            _cr(5.0, False),   # +0
+            _cr(-3.0, True),   # -3
+            _cr(-2.0, False),  # +0
+        ]
+        assert self._score(results, tmp_path) == 7.0
+
+    def test_empty_results(self, tmp_path):
+        assert self._score([], tmp_path) == 0.0
+
+    def test_minimum_and_maximum_score(self, tmp_path):
+        results = [_cr(10.0, True), _cr(5.0, False), _cr(-3.0, True)]
+        info = self._score_and_info(results, tmp_path)
+        assert info["minimum_score"] == -3.0
+        assert info["maximum_score"] == 15.0
+
+    def test_minimum_maximum_all_positive(self, tmp_path):
+        results = [_cr(2.0, True), _cr(3.0, True)]
+        info = self._score_and_info(results, tmp_path)
+        assert info["minimum_score"] == 0.0
+        assert info["maximum_score"] == 5.0
+
+    def test_errored_criteria_contribute_zero(self, tmp_path):
+        """Errored criteria (passed=None) contribute 0 to score."""
+        results = [_cr(3.0, True), _cr(2.0, None)]
+        assert self._score(results, tmp_path) == 3.0
+
+
 class TestRetryLogic:
     """Tests for retry and hard-fail logic in main()."""
 
@@ -423,7 +514,7 @@ class TestRetryLogic:
         assert info["errored_criteria_count"] == 0
 
         reward = json.loads((tmp_path / "output" / "reward.json").read_text())
-        assert reward["score"] == 1.0
+        assert reward["score"] == 2.0  # raw: 1.0 + 1.0
 
     @patch("gandalf_grader.__main__.resolve_judge_guidance", return_value="")
     @patch("gandalf_grader.__main__.load_trajectory_final_output", return_value="done")
@@ -455,13 +546,11 @@ class TestRetryLogic:
             RubricItem(criteria="c3", weight=1.0),
         ]
 
-        # Initial batch: c1 passes, c2 errors, c3 errors
         initial_verdicts = [
             {"index": 0, "passed": True, "reasoning": "ok", "evidence": []},
             {"index": 1, "passed": None, "reasoning": "timeout", "evidence": []},
             {"index": 2, "passed": None, "reasoning": "crash", "evidence": []},
         ]
-        # Retry batch (re-indexed 0,1 -> original 1,2): both pass
         retry_verdicts = [
             {"index": 0, "passed": True, "reasoning": "ok retry", "evidence": []},
             {"index": 1, "passed": True, "reasoning": "ok retry 2", "evidence": []},
@@ -481,7 +570,7 @@ class TestRetryLogic:
         assert info["errored_criteria_count"] == 0
 
         reward = json.loads((tmp_path / "output" / "reward.json").read_text())
-        assert reward["score"] == 1.0
+        assert reward["score"] == 3.0
 
     @patch("gandalf_grader.__main__.resolve_judge_guidance", return_value="")
     @patch("gandalf_grader.__main__.load_trajectory_final_output", return_value="done")
@@ -517,12 +606,8 @@ class TestRetryLogic:
                 main()
             assert exc_info.value.code == 1
 
-        # info.json MUST be written even on hard fail
         assert (tmp_path / "output" / "info.json").exists()
-        # reward.json must NOT be written
         assert not (tmp_path / "output" / "reward.json").exists()
-
-        # Only 1 call — no retry
         assert mock_eval.call_count == 1
 
     @patch("gandalf_grader.__main__.resolve_judge_guidance", return_value="")
@@ -550,7 +635,6 @@ class TestRetryLogic:
             mode="sequential",
         )
         mock_rubric.return_value = [RubricItem(criteria="c1", weight=1.0)]
-        # Both initial and retry fail
         mock_eval.return_value = {"passed": None, "reasoning": "always fails"}
 
         from gandalf_grader.__main__ import main
@@ -570,10 +654,10 @@ class TestRetryLogic:
     @patch("gandalf_grader.__main__.load_rubric")
     @patch("gandalf_grader.__main__.load_config")
     @patch("gandalf_grader.__main__.evaluate_criteria")
-    def test_all_resolved_after_retry_includes_errored_count_in_reward(
+    def test_all_resolved_after_retry(
         self, mock_eval, mock_config, mock_rubric, mock_trajectory, mock_guidance, tmp_path
     ):
-        """After retry resolves all errors: reward.json includes errored_criteria_count."""
+        """After retry resolves all errors: reward.json written with correct score."""
         from gandalf_grader.config import RubricItem
 
         output_dir = str(tmp_path / "output")
@@ -594,7 +678,6 @@ class TestRetryLogic:
             RubricItem(criteria="c2", weight=1.0),
         ]
 
-        # c1 passes, c2 errors initially, succeeds on retry (passes as False = legit fail)
         mock_eval.side_effect = [
             {"passed": True, "reasoning": "ok", "evidence": []},
             {"passed": None, "reasoning": "timeout"},
@@ -607,7 +690,7 @@ class TestRetryLogic:
             main()
 
         reward = json.loads((tmp_path / "output" / "reward.json").read_text())
-        assert reward["score"] == 0.5
+        assert reward["score"] == 1.0
 
         info = json.loads((tmp_path / "output" / "info.json").read_text())
         assert info["errored_criteria_count"] == 0

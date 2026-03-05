@@ -97,6 +97,13 @@ class TestLoadRubric:
         with pytest.raises(FileNotFoundError):
             load_rubric("/nonexistent/rubric.json")
 
+    def test_parses_negative_weight_items(self):
+        rubric = load_rubric(os.path.join(FIXTURES, "sample_rubric_with_negatives.json"))
+        assert len(rubric) == 3
+        assert rubric[0].weight == 2.0
+        assert rubric[1].weight == 3.0
+        assert rubric[2].weight == -1.0
+
 
 class TestPydanticModels:
     def test_mcp_server_defaults(self):
@@ -202,6 +209,15 @@ class TestPydanticModels:
         )
         assert r.evidence == []
 
+    def test_criteria_result_negative_weight(self):
+        r = CriteriaResult(
+            criteria="used hardcoded values",
+            weight=-1.0,
+            passed=True,
+            reasoning="found hardcoded values",
+        )
+        assert r.weight == -1.0
+
     def test_criteria_result_passed_none(self):
         r = CriteriaResult(criteria="test", weight=1.0, passed=None, reasoning="error")
         assert r.passed is None
@@ -210,14 +226,19 @@ class TestPydanticModels:
 
     def test_evaluation_info(self):
         info = EvaluationInfo(
-            score=0.75,
+            score=5.0,
+            minimum_score=-1.0,
+            maximum_score=6.0,
             criteria_results=[
-                CriteriaResult(criteria="c1", weight=1.0, passed=True, reasoning="ok"),
-                CriteriaResult(criteria="c2", weight=1.0, passed=False, reasoning="fail"),
+                CriteriaResult(criteria="c1", weight=3.0, passed=True, reasoning="ok"),
+                CriteriaResult(criteria="c2", weight=3.0, passed=False, reasoning="fail"),
+                CriteriaResult(criteria="c3", weight=-1.0, passed=False, reasoning="avoided"),
             ],
         )
-        assert info.score == 0.75
-        assert len(info.criteria_results) == 2
+        assert info.score == 5.0
+        assert info.minimum_score == -1.0
+        assert info.maximum_score == 6.0
+        assert len(info.criteria_results) == 3
 
     def test_verifier_config_judge_retries_default(self):
         cfg = VerifierConfig(
