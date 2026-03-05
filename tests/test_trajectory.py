@@ -29,6 +29,41 @@ class TestLoadTrajectoryFinalOutput:
         with pytest.raises(FileNotFoundError):
             load_trajectory_final_output("/nonexistent/trajectory.json")
 
+    def test_skips_trailing_empty_message(self, tmp_path):
+        """When the last agent message has empty content (e.g. reasoning-only
+        turn), the function should return the preceding non-empty message."""
+        p = tmp_path / "trailing_empty.json"
+        p.write_text(json.dumps({
+            "steps": [
+                {"source": "user", "message": "Do the task"},
+                {"source": "agent", "message": "Here is the result."},
+                {"source": "agent", "message": ""},
+            ]
+        }))
+        assert load_trajectory_final_output(str(p)) == "Here is the result."
+
+    def test_skips_trailing_whitespace_only_message(self, tmp_path):
+        p = tmp_path / "trailing_ws.json"
+        p.write_text(json.dumps({
+            "steps": [
+                {"source": "user", "message": "Do the task"},
+                {"source": "agent", "message": "Here is the result."},
+                {"source": "agent", "message": "   \n  "},
+            ]
+        }))
+        assert load_trajectory_final_output(str(p)) == "Here is the result."
+
+    def test_all_agent_messages_empty(self, tmp_path):
+        p = tmp_path / "all_empty.json"
+        p.write_text(json.dumps({
+            "steps": [
+                {"source": "user", "message": "Do the task"},
+                {"source": "agent", "message": ""},
+                {"source": "agent", "message": ""},
+            ]
+        }))
+        assert load_trajectory_final_output(str(p)) == ""
+
     def test_no_agent_messages(self, tmp_path):
         p = tmp_path / "user_only.json"
         p.write_text(json.dumps({
