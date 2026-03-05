@@ -10,9 +10,7 @@ def load_trajectory_final_output(path: str) -> str:
 
     steps = data.get("steps", [])
 
-    # Extract final agent message (last agent message without tool calls
-    # and with non-empty content). Some models emit a trailing assistant
-    # turn containing only reasoning with an empty message field.
+    # Extract final agent message (last with non-empty content, no tool calls)
     final_output = ""
     for step in reversed(steps):
         if step.get("source") == "agent" and not step.get("tool_calls"):
