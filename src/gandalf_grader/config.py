@@ -47,6 +47,7 @@ class VerifierConfig(BaseModel):
     judge_guidance_path: str | None = None
     batch_timeout: int | None = None
     mode: Literal["sequential", "batch"] = "sequential"
+    judge_retries: int = 1
 
 
 class RubricItem(BaseModel):
@@ -99,7 +100,7 @@ class BatchJudgeInput(BaseModel):
 class Verdict(BaseModel):
     """Verdict returned by the inner judge."""
 
-    passed: bool
+    passed: bool | None
     reasoning: str
     evidence: list[str] = Field(default_factory=list)
 
@@ -110,7 +111,7 @@ class CriteriaResult(BaseModel):
     criteria: str
     weight: float
     negative: bool = False
-    passed: bool
+    passed: bool | None
     reasoning: str
     evidence: list[str] = Field(default_factory=list)
 
@@ -121,6 +122,8 @@ class EvaluationInfo(BaseModel):
     score: float
     criteria_results: list[CriteriaResult]
     llm_usage: dict[str, float | int | str] = Field(default_factory=dict)
+    errored_criteria_count: int = 0
+    evaluated_criteria_pct: float = 100.0
 
 
 def load_config(path: str) -> VerifierConfig:
