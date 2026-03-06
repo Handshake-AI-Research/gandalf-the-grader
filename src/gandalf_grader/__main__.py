@@ -92,10 +92,41 @@ def resolve_judge_guidance(config: VerifierConfig) -> str:
         return f.read()
 
 
+def _copy_or_skip(skipped: list[str]):
+    """Return a copy function that records and skips unreadable files."""
+
+    def _copy(src: str, dst: str, **kwargs):
+        try:
+            shutil.copy2(src, dst, **kwargs)
+        except PermissionError:
+            skipped.append(src)
+
+    return _copy
+
+
 def _clone_workspace(src: str) -> str:
-    """Clone workspace into a temp directory accessible to the sandbox user."""
+    """Clone workspace into a temp directory accessible to the sandbox user.
+
+    Uses a permissive copy handler so that files unreadable by the current user
+    (e.g. tool caches created by the agent with restrictive permissions) are
+    skipped with a warning rather than causing the entire clone to fail.  This
+    respects the user-isolation model where the verifier may not have access to
+    every file the agent created.
+    """
     clone_dir = tempfile.mkdtemp(prefix="judge_workspace_", dir="/tmp")
-    shutil.copytree(src, clone_dir, dirs_exist_ok=True)
+    skipped: list[str] = []
+
+    shutil.copytree(src, clone_dir, dirs_exist_ok=True, copy_function=_copy_or_skip(skipped))
+
+    if skipped:
+        print(
+            f"[gandalf] workspace clone: skipped {len(skipped)} unreadable path(s):",
+            file=sys.stderr,
+        )
+        for p in skipped[:20]:
+            print(f"  - {p}", file=sys.stderr)
+        if len(skipped) > 20:
+            print(f"  ... and {len(skipped) - 20} more", file=sys.stderr)
 
     # Make the clone group-writable so the sandbox user (in the verifier group)
     # can use it as a normal workspace.

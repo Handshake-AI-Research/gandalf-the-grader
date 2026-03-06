@@ -2,12 +2,20 @@
 
 import json
 import os
+import pathlib
+import shutil
 import subprocess
 from unittest.mock import patch
 
 import pytest
 
-from gandalf_grader.__main__ import _JUDGE_ENV_ALLOWLIST, _judge_env_vars, evaluate_all_criteria, resolve_judge_guidance
+from gandalf_grader.__main__ import (
+    _JUDGE_ENV_ALLOWLIST,
+    _clone_workspace,
+    _judge_env_vars,
+    evaluate_all_criteria,
+    resolve_judge_guidance,
+)
 from gandalf_grader.config import BatchJudgeInput, VerifierConfig
 
 
@@ -611,3 +619,69 @@ class TestRetryLogic:
 
         info = json.loads((tmp_path / "output" / "info.json").read_text())
         assert info["errored_criteria_count"] == 0
+
+
+class TestCloneWorkspace:
+    """Tests for _clone_workspace resilience to unreadable files."""
+
+    def test_readable_files_are_cloned(self, tmp_path):
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        (workspace / "file.txt").write_text("hello")
+        (workspace / "subdir").mkdir()
+        (workspace / "subdir" / "nested.txt").write_text("world")
+
+        clone_dir = _clone_workspace(str(workspace))
+        try:
+            assert (pathlib.Path(clone_dir) / "file.txt").read_text() == "hello"
+            assert (pathlib.Path(clone_dir) / "subdir" / "nested.txt").read_text() == "world"
+        finally:
+            shutil.rmtree(clone_dir, ignore_errors=True)
+
+    def test_unreadable_files_are_skipped_not_fatal(self, tmp_path):
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        (workspace / "readable.txt").write_text("ok")
+
+        restricted = workspace / "restricted.txt"
+        restricted.write_text("secret")
+        restricted.chmod(0o000)
+
+        try:
+            clone_dir = _clone_workspace(str(workspace))
+            cloned = pathlib.Path(clone_dir)
+            assert (cloned / "readable.txt").read_text() == "ok"
+            assert not (cloned / "restricted.txt").exists()
+        finally:
+            restricted.chmod(0o644)
+            shutil.rmtree(clone_dir, ignore_errors=True)
+
+    def test_skipped_files_are_logged(self, tmp_path, capsys):
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        restricted = workspace / "noperm.txt"
+        restricted.write_text("x")
+        restricted.chmod(0o000)
+
+        try:
+            clone_dir = _clone_workspace(str(workspace))
+            stderr = capsys.readouterr().err
+            assert "skipped 1 unreadable path(s)" in stderr
+            assert "noperm.txt" in stderr
+        finally:
+            restricted.chmod(0o644)
+            shutil.rmtree(clone_dir, ignore_errors=True)
+
+    def test_clone_is_group_writable(self, tmp_path):
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        (workspace / "file.txt").write_text("data")
+
+        clone_dir = _clone_workspace(str(workspace))
+        try:
+            cloned = pathlib.Path(clone_dir)
+            assert os.stat(clone_dir).st_mode & 0o070 == 0o070
+            fstat = os.stat(cloned / "file.txt")
+            assert fstat.st_mode & 0o060 == 0o060
+        finally:
+            shutil.rmtree(clone_dir, ignore_errors=True)
