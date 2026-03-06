@@ -92,31 +92,46 @@ def resolve_judge_guidance(config: VerifierConfig) -> str:
         return f.read()
 
 
-def _copy_or_skip(skipped: list[str]):
-    """Return a copy function that records and skips unreadable files."""
-
-    def _copy(src: str, dst: str, **kwargs):
-        try:
-            shutil.copy2(src, dst, **kwargs)
-        except PermissionError:
-            skipped.append(src)
-
-    return _copy
-
-
 def _clone_workspace(src: str) -> str:
     """Clone workspace into a temp directory accessible to the sandbox user.
 
-    Uses a permissive copy handler so that files unreadable by the current user
-    (e.g. tool caches created by the agent with restrictive permissions) are
-    skipped with a warning rather than causing the entire clone to fail.  This
-    respects the user-isolation model where the verifier may not have access to
-    every file the agent created.
+    Walks the source tree manually so that both unreadable directories and
+    unreadable files are skipped with a warning rather than causing the entire
+    clone to fail.  ``shutil.copytree`` only supports a per-file
+    ``copy_function`` hook — directory traversal errors are not caught — so we
+    use ``os.walk(onerror=...)`` instead.
+
+    This respects the user-isolation model where the verifier may not have
+    access to every file the agent created.
     """
     clone_dir = tempfile.mkdtemp(prefix="judge_workspace_", dir="/tmp")
     skipped: list[str] = []
 
-    shutil.copytree(src, clone_dir, dirs_exist_ok=True, copy_function=_copy_or_skip(skipped))
+    def _on_walk_error(err: OSError) -> None:
+        skipped.append(err.filename or str(err))
+
+    for dirpath, dirnames, filenames in os.walk(src, onerror=_on_walk_error):
+        rel = os.path.relpath(dirpath, src)
+        dst_dir = os.path.join(clone_dir, rel)
+        os.makedirs(dst_dir, exist_ok=True)
+
+        # Prune subdirectories we cannot enter so os.walk doesn't descend.
+        accessible = []
+        for d in dirnames:
+            full = os.path.join(dirpath, d)
+            if os.access(full, os.R_OK | os.X_OK):
+                accessible.append(d)
+            else:
+                skipped.append(full)
+        dirnames[:] = accessible
+
+        for fname in filenames:
+            src_file = os.path.join(dirpath, fname)
+            dst_file = os.path.join(dst_dir, fname)
+            try:
+                shutil.copy2(src_file, dst_file)
+            except PermissionError:
+                skipped.append(src_file)
 
     if skipped:
         print(

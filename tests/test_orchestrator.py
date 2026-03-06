@@ -672,6 +672,43 @@ class TestCloneWorkspace:
             restricted.chmod(0o644)
             shutil.rmtree(clone_dir, ignore_errors=True)
 
+    def test_unreadable_directory_is_skipped_not_fatal(self, tmp_path):
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        (workspace / "readable.txt").write_text("ok")
+
+        # Create a directory tree and make the parent unreadable
+        restricted_dir = workspace / ".tool_cache"
+        restricted_dir.mkdir()
+        (restricted_dir / "data.bin").write_text("cached")
+        restricted_dir.chmod(0o000)
+
+        try:
+            clone_dir = _clone_workspace(str(workspace))
+            cloned = pathlib.Path(clone_dir)
+            assert (cloned / "readable.txt").read_text() == "ok"
+            # The restricted directory's contents should not appear
+            assert not (cloned / ".tool_cache" / "data.bin").exists()
+        finally:
+            restricted_dir.chmod(0o755)
+            shutil.rmtree(clone_dir, ignore_errors=True)
+
+    def test_unreadable_directory_is_logged(self, tmp_path, capsys):
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        restricted_dir = workspace / ".cache"
+        restricted_dir.mkdir()
+        restricted_dir.chmod(0o000)
+
+        try:
+            clone_dir = _clone_workspace(str(workspace))
+            stderr = capsys.readouterr().err
+            assert "skipped 1 unreadable path(s)" in stderr
+            assert ".cache" in stderr
+        finally:
+            restricted_dir.chmod(0o755)
+            shutil.rmtree(clone_dir, ignore_errors=True)
+
     def test_clone_is_group_writable(self, tmp_path):
         workspace = tmp_path / "workspace"
         workspace.mkdir()
