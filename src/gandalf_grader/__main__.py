@@ -163,7 +163,7 @@ def evaluate_criteria(
         mode="w",
         suffix=".json",
         prefix="judge_input_",
-        dir="/tmp",
+        dir=clone_dir,
         delete=False,
     ) as input_f:
         input_f.write(cloned_input.model_dump_json())
@@ -175,7 +175,7 @@ def evaluate_criteria(
         mode="w",
         suffix=".json",
         prefix="judge_output_",
-        dir="/tmp",
+        dir=clone_dir,
         delete=False,
     ) as output_f:
         output_path = output_f.name
@@ -265,7 +265,7 @@ def evaluate_all_criteria(
         mode="w",
         suffix=".json",
         prefix="judge_batch_input_",
-        dir="/tmp",
+        dir=clone_dir,
         delete=False,
     ) as input_f:
         input_f.write(cloned_input.model_dump_json())
@@ -277,7 +277,7 @@ def evaluate_all_criteria(
         mode="w",
         suffix=".json",
         prefix="judge_batch_output_",
-        dir="/tmp",
+        dir=clone_dir,
         delete=False,
     ) as output_f:
         output_path = output_f.name
