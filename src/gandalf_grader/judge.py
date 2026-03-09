@@ -266,16 +266,19 @@ def _read_batch_verdict(verdict_path: str, n_criteria: int) -> list[dict[str, An
 # ---------------------------------------------------------------------------
 
 
-def _make_verdict_path(prefix: str = "verdict_") -> str:
+def _make_verdict_path(prefix: str = "verdict_", dir: str | None = None) -> str:
     """Generate a unique path for the judge to write verdicts to.
 
     Unlike mkstemp, this does NOT pre-create the file — allowing the agent
     to use file_editor create rather than error-prone shell echo fallbacks.
+
+    Uses *dir* as the base directory when provided (e.g. the workdir, which
+    the verifier has already made world-writable), falling back to the system
+    temp dir.  This avoids requiring sandbox_user to have general write access
+    to /tmp.
     """
-    return os.path.join(
-        tempfile.gettempdir(),
-        f"{prefix}{secrets.token_hex(8)}.json",
-    )
+    base = dir if dir is not None else tempfile.gettempdir()
+    return os.path.join(base, f"{prefix}{secrets.token_hex(8)}.json")
 
 
 def _run_agent_session(
@@ -355,7 +358,7 @@ def run_judge(input_path: str, output_path: str) -> None:
     with open(input_path) as f:
         judge_input = JudgeInput.model_validate_json(f.read())
 
-    verdict_path = _make_verdict_path(prefix="verdict_")
+    verdict_path = _make_verdict_path(prefix="verdict_", dir=judge_input.workdir)
 
     prompt = build_judge_prompt(
         instructions=judge_input.instructions,
@@ -417,7 +420,7 @@ def run_judge_batch(input_path: str, output_path: str) -> None:
     criteria_dicts = [c.model_dump() for c in judge_input.criteria]
     n_criteria = len(criteria_dicts)
 
-    verdict_path = _make_verdict_path(prefix="verdict_batch_")
+    verdict_path = _make_verdict_path(prefix="verdict_batch_", dir=judge_input.workdir)
 
     prompt = build_batch_judge_prompt(
         instructions=judge_input.instructions,

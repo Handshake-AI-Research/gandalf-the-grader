@@ -95,42 +95,41 @@ def resolve_judge_guidance(config: VerifierConfig) -> str:
 def _clone_workspace(src: str) -> str:
     """Clone workspace into a temp directory accessible to the sandbox user.
 
-    Walks the source tree manually so that both unreadable directories and
-    unreadable files are skipped with a warning rather than causing the entire
-    clone to fail.  ``shutil.copytree`` only supports a per-file
-    ``copy_function`` hook — directory traversal errors are not caught — so we
-    use ``os.walk(onerror=...)`` instead.
+    Walks the source tree once, skipping unreadable directories and files with
+    a warning.  Each directory and file is made world-accessible inline so no
+    second pass is needed.
 
-    This respects the user-isolation model where the verifier may not have
-    access to every file the agent created.
+    ``shutil.copytree`` is not used because its ``copy_function`` hook only
+    covers per-file errors — directory listing errors (e.g. a 0o700 dir owned
+    by the agent) cannot be caught there.
     """
     clone_dir = tempfile.mkdtemp(prefix="judge_workspace_", dir="/tmp")
+    # Root dir is created by mkdtemp at 0o700; open it up immediately so
+    # sandbox_user can traverse and write to it.
+    os.chmod(clone_dir, 0o777)
     skipped: list[str] = []
 
     def _on_walk_error(err: OSError) -> None:
         skipped.append(err.filename or str(err))
 
-    for dirpath, dirnames, filenames in os.walk(src, onerror=_on_walk_error):
+    for dirpath, _dirnames, filenames in os.walk(src, onerror=_on_walk_error):
         rel = os.path.relpath(dirpath, src)
         dst_dir = os.path.join(clone_dir, rel)
         os.makedirs(dst_dir, exist_ok=True)
-
-        # Prune subdirectories we cannot enter so os.walk doesn't descend.
-        accessible = []
-        for d in dirnames:
-            full = os.path.join(dirpath, d)
-            if os.access(full, os.R_OK | os.X_OK):
-                accessible.append(d)
-            else:
-                skipped.append(full)
-        dirnames[:] = accessible
+        os.chmod(dst_dir, 0o777)
 
         for fname in filenames:
             src_file = os.path.join(dirpath, fname)
             dst_file = os.path.join(dst_dir, fname)
             try:
-                shutil.copy2(src_file, dst_file)
-            except PermissionError:
+                shutil.copyfile(src_file, dst_file)
+                # Preserve execute bits from source so scripts/binaries
+                # remain runnable, while granting world read/write.
+                src_mode = os.stat(src_file).st_mode
+                os.chmod(dst_file, 0o666 | (src_mode & 0o111))
+            except OSError:
+                # Covers PermissionError, FileNotFoundError (broken symlinks),
+                # IsADirectoryError (symlinks to dirs in filenames), etc.
                 skipped.append(src_file)
 
     if skipped:
@@ -143,13 +142,6 @@ def _clone_workspace(src: str) -> str:
         if len(skipped) > 20:
             print(f"  ... and {len(skipped) - 20} more", file=sys.stderr)
 
-    # Make the clone group-writable so the sandbox user (in the verifier group)
-    # can use it as a normal workspace.
-    for dirpath, _dirnames, filenames in os.walk(clone_dir):
-        os.chmod(dirpath, os.stat(dirpath).st_mode | 0o070)
-        for fname in filenames:
-            fpath = os.path.join(dirpath, fname)
-            os.chmod(fpath, os.stat(fpath).st_mode | 0o060)
     return clone_dir
 
 
@@ -177,7 +169,17 @@ def evaluate_criteria(
         input_f.write(cloned_input.model_dump_json())
         input_path = input_f.name
 
-    output_path = tempfile.mktemp(suffix=".json", prefix="judge_output_", dir="/tmp")
+    # Pre-create the output file so sandbox_user can write to it without
+    # needing general write access to /tmp (which may not be world-writable).
+    with tempfile.NamedTemporaryFile(
+        mode="w",
+        suffix=".json",
+        prefix="judge_output_",
+        dir="/tmp",
+        delete=False,
+    ) as output_f:
+        output_path = output_f.name
+    os.chmod(output_path, 0o666)
 
     try:
         os.chmod(input_path, 0o644)
@@ -269,11 +271,17 @@ def evaluate_all_criteria(
         input_f.write(cloned_input.model_dump_json())
         input_path = input_f.name
 
-    output_path = tempfile.mktemp(
+    # Pre-create the output file so sandbox_user can write to it without
+    # needing general write access to /tmp (which may not be world-writable).
+    with tempfile.NamedTemporaryFile(
+        mode="w",
         suffix=".json",
         prefix="judge_batch_output_",
         dir="/tmp",
-    )
+        delete=False,
+    ) as output_f:
+        output_path = output_f.name
+    os.chmod(output_path, 0o666)
 
     try:
         os.chmod(input_path, 0o644)
