@@ -93,9 +93,55 @@ def resolve_judge_guidance(config: VerifierConfig) -> str:
 
 
 def _clone_workspace(src: str) -> str:
-    """Clone workspace into a temp directory accessible to the sandbox user."""
+    """Clone workspace into a temp directory accessible to the sandbox user.
+
+    Walks the source tree manually so that both unreadable directories and
+    unreadable files are skipped with a warning rather than causing the entire
+    clone to fail.  ``shutil.copytree`` only supports a per-file
+    ``copy_function`` hook — directory traversal errors are not caught — so we
+    use ``os.walk(onerror=...)`` instead.
+
+    This respects the user-isolation model where the verifier may not have
+    access to every file the agent created.
+    """
     clone_dir = tempfile.mkdtemp(prefix="judge_workspace_", dir="/tmp")
-    shutil.copytree(src, clone_dir, dirs_exist_ok=True)
+    skipped: list[str] = []
+
+    def _on_walk_error(err: OSError) -> None:
+        skipped.append(err.filename or str(err))
+
+    for dirpath, dirnames, filenames in os.walk(src, onerror=_on_walk_error):
+        rel = os.path.relpath(dirpath, src)
+        dst_dir = os.path.join(clone_dir, rel)
+        os.makedirs(dst_dir, exist_ok=True)
+
+        # Prune subdirectories we cannot enter so os.walk doesn't descend.
+        accessible = []
+        for d in dirnames:
+            full = os.path.join(dirpath, d)
+            if os.access(full, os.R_OK | os.X_OK):
+                accessible.append(d)
+            else:
+                skipped.append(full)
+        dirnames[:] = accessible
+
+        for fname in filenames:
+            src_file = os.path.join(dirpath, fname)
+            dst_file = os.path.join(dst_dir, fname)
+            try:
+                shutil.copy2(src_file, dst_file)
+            except PermissionError:
+                skipped.append(src_file)
+
+    if skipped:
+        print(
+            f"[gandalf] workspace clone: skipped {len(skipped)} unreadable path(s):",
+            file=sys.stderr,
+        )
+        for p in skipped[:20]:
+            print(f"  - {p}", file=sys.stderr)
+        if len(skipped) > 20:
+            print(f"  ... and {len(skipped) - 20} more", file=sys.stderr)
 
     # Make the clone group-writable so the sandbox user (in the verifier group)
     # can use it as a normal workspace.
