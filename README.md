@@ -1,6 +1,9 @@
 # gandalf-the-grader
 
-Agent-as-judge grading framework for evaluating AI agent outputs against rubric criteria.
+Agent-as-a-Judge grading framework for evaluating AI outputs against rubric criteria.
+Unlike simple LLM-as-a-Judge verifiers, this verifier can grade outputs that are complex files (such as Excel or Powerpoint deliverables).
+
+
 
 ## Overview
 
