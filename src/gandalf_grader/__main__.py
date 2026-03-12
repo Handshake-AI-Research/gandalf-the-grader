@@ -8,7 +8,7 @@ Supports two evaluation modes (configured via ``mode`` in the TOML config):
   - **batch**: all criteria evaluated in a single agent session.
 
 Produces:
-  /logs/verifier/reward.json  - Reward file (weighted score)
+  /logs/verifier/reward.json  - Reward file (normalised [0,1] reward)
   /logs/verifier/info.json    - Detailed per-criteria results + LLM usage
 """
 
@@ -701,7 +701,7 @@ def main() -> None:
 
     # 6. All resolved — write reward.json
     with open(os.path.join(config.output_dir, "reward.json"), "w") as f:
-        json.dump({"score": reward}, f, indent=2)
+        json.dump({"reward": reward}, f, indent=2)
 
     print(f"\nReward: {reward} (raw: {raw_score})")
     if total_cost > 0:

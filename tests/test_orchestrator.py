@@ -593,7 +593,7 @@ class TestRetryLogic:
         assert info["errored_criteria_count"] == 0
 
         reward = json.loads((tmp_path / "output" / "reward.json").read_text())
-        assert reward["score"] == 1.0  # all met: 2.0 / 2.0 = 1.0
+        assert reward["reward"] == 1.0  # all met: 2.0 / 2.0 = 1.0
 
     @patch("gandalf_grader.__main__.resolve_judge_guidance", return_value="")
     @patch("gandalf_grader.__main__.load_trajectory_final_output", return_value="done")
@@ -649,7 +649,7 @@ class TestRetryLogic:
         assert info["errored_criteria_count"] == 0
 
         reward = json.loads((tmp_path / "output" / "reward.json").read_text())
-        assert reward["score"] == 1.0  # all met: 3.0 / 3.0 = 1.0
+        assert reward["reward"] == 1.0  # all met: 3.0 / 3.0 = 1.0
 
     @patch("gandalf_grader.__main__.resolve_judge_guidance", return_value="")
     @patch("gandalf_grader.__main__.load_trajectory_final_output", return_value="done")
@@ -769,7 +769,7 @@ class TestRetryLogic:
             main()
 
         reward = json.loads((tmp_path / "output" / "reward.json").read_text())
-        assert reward["score"] == 0.5  # c1 met, c2 not: 1.0 / 2.0 = 0.5
+        assert reward["reward"] == 0.5  # c1 met, c2 not: 1.0 / 2.0 = 0.5
 
         info = json.loads((tmp_path / "output" / "info.json").read_text())
         assert info["errored_criteria_count"] == 0
@@ -818,10 +818,10 @@ class TestRetryLogic:
         reward = json.loads((tmp_path / "output" / "reward.json").read_text())
         info = json.loads((tmp_path / "output" / "info.json").read_text())
 
-        assert reward["score"] == 0.6667
+        assert reward["reward"] == 0.6667
         assert info["raw_score"] == 2.0
         assert info["reward"] == 0.6667
-        assert reward["score"] == info["reward"]
+        assert reward["reward"] == info["reward"]
 
 
 class TestCloneWorkspace:

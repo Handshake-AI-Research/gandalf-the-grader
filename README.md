@@ -163,7 +163,7 @@ export OTEL_EXPORTER_OTLP_TRACES_PROTOCOL=http/protobuf
 
 The grader writes to `output_dir` (default `/logs/verifier`):
 
-- `reward.json` — Reward file: `{"score": 0.75}` (normalised to [0, 1])
+- `reward.json` — Reward file: `{"reward": 0.75}` (normalised to [0, 1])
 - `info.json` — Per-criteria results with `met`/not-met, reasoning, evidence, LLM usage, plus `reward`, `raw_score`, `minimum_score`, and `maximum_score`
 - `judge_trace_<i>.txt` — stdout/stderr capture for each judge invocation
 
