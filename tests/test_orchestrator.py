@@ -736,7 +736,7 @@ class TestRetryLogic:
     def test_all_resolved_after_retry(
         self, mock_eval, mock_config, mock_rubric, mock_trajectory, mock_guidance, tmp_path
     ):
-        """After retry resolves all errors: reward.json written with correct score."""
+        """After retry resolves all errors: reward.json written with correct reward."""
         from gandalf_grader.config import RubricItem
 
         output_dir = str(tmp_path / "output")

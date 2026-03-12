@@ -116,7 +116,7 @@ class CriteriaResult(BaseModel):
 
 
 class EvaluationInfo(BaseModel):
-    """Full evaluation output with score, per-criteria results, and LLM usage."""
+    """Full evaluation output with reward/raw score, per-criteria results, and LLM usage."""
 
     reward: float
     raw_score: float
