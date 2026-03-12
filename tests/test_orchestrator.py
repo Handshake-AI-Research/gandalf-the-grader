@@ -462,6 +462,11 @@ class TestScoring:
         results = [_cr(3.0, True), _cr(2.0, None)]
         assert self._score(results, tmp_path) == 3.0
 
+    def test_errored_negative_criteria_contribute_zero(self, tmp_path):
+        """Errored negative-weight criteria (passed=None) contribute 0, not the penalty."""
+        results = [_cr(3.0, True), _cr(-2.0, None)]
+        assert self._score(results, tmp_path) == 3.0
+
 
 class TestRetryLogic:
     """Tests for retry and hard-fail logic in main()."""
