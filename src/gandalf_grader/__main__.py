@@ -155,7 +155,7 @@ def evaluate_criteria(
     try:
         clone_dir = _clone_workspace(judge_input.workdir)
     except Exception as e:
-        return {"passed": None, "reasoning": f"Failed to clone workspace: {e}"}
+        return {"met": None, "reasoning": f"Failed to clone workspace: {e}"}
 
     cloned_input = judge_input.model_copy(update={"workdir": clone_dir})
 
@@ -208,7 +208,7 @@ def evaluate_criteria(
 
         if result.returncode != 0:
             return {
-                "passed": None,
+                "met": None,
                 "reasoning": f"Judge process failed (exit {result.returncode}): {result.stderr[:500]}",
             }
 
@@ -218,9 +218,9 @@ def evaluate_criteria(
 
     except subprocess.TimeoutExpired:
         _save_trace(trace_path, "", "Judge execution timed out.", -1)
-        return {"passed": None, "reasoning": "Judge execution timed out."}
+        return {"met": None, "reasoning": "Judge execution timed out."}
     except (json.JSONDecodeError, FileNotFoundError) as e:
-        return {"passed": None, "reasoning": f"Failed to read judge output: {e}"}
+        return {"met": None, "reasoning": f"Failed to read judge output: {e}"}
     finally:
         shutil.rmtree(clone_dir, ignore_errors=True)
         for path in (input_path, output_path):
@@ -230,7 +230,7 @@ def evaluate_criteria(
 
 def _fail_all(n: int, reason: str) -> list[dict[str, Any]]:
     """Return *n* fail verdicts that all share the same reason."""
-    return [{"index": i, "passed": None, "reasoning": reason, "evidence": []} for i in range(n)]
+    return [{"index": i, "met": None, "reasoning": reason, "evidence": []} for i in range(n)]
 
 
 def evaluate_all_criteria(
@@ -249,7 +249,7 @@ def evaluate_all_criteria(
 
     Returns:
         (verdicts, llm_usage) where verdicts is a list of dicts each with
-        ``index``, ``passed``, ``reasoning``, ``evidence``, and llm_usage
+        ``index``, ``met``, ``reasoning``, ``evidence``, and llm_usage
         is the aggregate token/cost dict for the single batch session.
     """
     n_criteria = len(judge_input.criteria)
@@ -392,13 +392,13 @@ def _run_sequential(
         result = CriteriaResult(
             criteria=item.criteria,
             weight=item.weight,
-            passed=verdict.get("passed"),
+            met=verdict.get("met"),
             reasoning=verdict.get("reasoning", "No reasoning provided."),
             evidence=verdict.get("evidence", []),
         )
         results.append(result)
 
-        status = "PASS" if result.passed is True else ("ERROR" if result.passed is None else "FAIL")
+        status = "PASS" if result.met is True else ("ERROR" if result.met is None else "FAIL")
         print(f"  -> {status}: {result.reasoning[:120]}")
 
     return results, total_usage
@@ -454,21 +454,21 @@ def _run_batch(
         result = CriteriaResult(
             criteria=item.criteria,
             weight=item.weight,
-            passed=v.get("passed"),
+            met=v.get("met"),
             reasoning=v.get("reasoning", "No reasoning provided."),
             evidence=v.get("evidence", []),
         )
         results.append(result)
 
-        status = "PASS" if result.passed is True else ("ERROR" if result.passed is None else "FAIL")
+        status = "PASS" if result.met is True else ("ERROR" if result.met is None else "FAIL")
         print(f"  [{i + 1}/{len(rubric)}] {status}: {result.reasoning[:120]}")
 
     return results, llm_usage
 
 
 def _get_errored_indices(results: list[CriteriaResult]) -> list[int]:
-    """Return indices of criteria where passed is None (infrastructure error)."""
-    return [i for i, r in enumerate(results) if r.passed is None]
+    """Return indices of criteria where met is None (infrastructure error)."""
+    return [i for i, r in enumerate(results) if r.met is None]
 
 
 def _retry_sequential(
@@ -510,12 +510,12 @@ def _retry_sequential(
         results[idx] = CriteriaResult(
             criteria=item.criteria,
             weight=item.weight,
-            passed=verdict.get("passed"),
+            met=verdict.get("met"),
             reasoning=verdict.get("reasoning", "No reasoning provided."),
             evidence=verdict.get("evidence", []),
         )
 
-        status = "PASS" if results[idx].passed is True else ("ERROR" if results[idx].passed is None else "FAIL")
+        status = "PASS" if results[idx].met is True else ("ERROR" if results[idx].met is None else "FAIL")
         print(f"    -> {status}: {results[idx].reasoning[:120]}")
 
 
@@ -567,13 +567,13 @@ def _retry_batch(
         results[orig_idx] = CriteriaResult(
             criteria=rubric[orig_idx].criteria,
             weight=rubric[orig_idx].weight,
-            passed=v.get("passed"),
+            met=v.get("met"),
             reasoning=v.get("reasoning", "No reasoning provided."),
             evidence=v.get("evidence", []),
         )
 
-        passed = results[orig_idx].passed
-        status = "PASS" if passed is True else ("ERROR" if passed is None else "FAIL")
+        met = results[orig_idx].met
+        status = "PASS" if met is True else ("ERROR" if met is None else "FAIL")
         print(f"    [{orig_idx}] {status}: {results[orig_idx].reasoning[:120]}")
 
 
@@ -585,11 +585,11 @@ def _write_info(
 ) -> float:
     """Compute raw score and ALWAYS write info.json. Returns the score.
 
-    Raw score: sum of weights for passed criteria (negative weights contribute
-    when their criterion passes).  Errored criteria (passed=None) contribute 0.
+    Raw score: sum of weights for criteria whose condition was met (negative weights
+    contribute when their criterion is met).  Errored criteria (met=None) contribute 0.
     """
     score = round(
-        sum(r.weight for r in results if r.passed is True),
+        sum(r.weight for r in results if r.met is True),
         4,
     )
 

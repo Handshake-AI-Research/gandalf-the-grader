@@ -6,7 +6,7 @@ Agent-as-judge grading framework for evaluating AI agent outputs against rubric 
 
 `gandalf-grader` uses LLM-powered judge agents to evaluate whether an AI agent successfully completed a task. It is the production verifier component of the [rle-pkg](https://github.com/Handshake-AI-Research/rle-pkg) architecture.
 
-Given a task description, a rubric of evaluation criteria, and the agent's trajectory, the grader spawns judge agents that inspect the agent's workspace — reading files, running commands, and using tools — to produce a binary pass/fail verdict for each criterion. The final score is the weighted average of all verdicts.
+Given a task description, a rubric of evaluation criteria, and the agent's trajectory, the grader spawns judge agents that inspect the agent's workspace — reading files, running commands, and using tools — to determine whether each criterion's condition is met. The final score is the raw sum of weights for all criteria whose condition was met.
 
 ## How It Works
 
@@ -90,13 +90,19 @@ args = ["--verbose"]
 
 ### Rubric JSON
 
-A JSON array of objects with `criteria` (string) and `weight` (float):
+A JSON array of objects with `criteria` (string) and `weight` (float). Weights can be negative to penalise undesired outcomes:
 
 ```json
 [
-  {"criteria": "Description of what to check", "weight": 1.0}
+  {"criteria": "The output file exists", "weight": 2.0},
+  {"criteria": "The output contains correct totals", "weight": 3.0},
+  {"criteria": "The agent used hardcoded values instead of computing", "weight": -1.0}
 ]
 ```
+
+- **Positive weight**: adds to the score when the criterion's condition is met
+- **Negative weight**: deducts from the score when the criterion's condition is met (the bad thing happened)
+- The judge evaluates each criterion on its own merits — it never sees weights
 
 ## Trajectory Format (ATIF)
 
@@ -157,11 +163,11 @@ export OTEL_EXPORTER_OTLP_TRACES_PROTOCOL=http/protobuf
 
 The grader writes to `output_dir` (default `/logs/verifier`):
 
-- `reward.json` — Reward file: `{"score": 0.75}`
-- `info.json` — Per-criteria results with pass/fail, reasoning, evidence, and LLM usage
+- `reward.json` — Reward file: `{"score": 2.5}` (raw sum of weights for met criteria; can be negative)
+- `info.json` — Per-criteria results with `met`/not-met, reasoning, evidence, LLM usage, and `minimum_score`/`maximum_score` bounds
 - `judge_trace_<i>.txt` — stdout/stderr capture for each judge invocation
 
-Score is computed as a weighted average of binary criterion results, rounded to 4 decimal places.
+Score is the raw sum of weights for all criteria whose condition was met, rounded to 4 decimal places. The calling framework is responsible for any normalization. `info.json` includes `minimum_score` (sum of negative weights) and `maximum_score` (sum of positive weights) for reference.
 
 ## Development
 

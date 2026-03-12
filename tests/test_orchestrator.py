@@ -175,8 +175,8 @@ class TestEvaluateAllCriteria:
         mock_clone.return_value = str(tmp_path)
         output_content = {
             "verdicts": [
-                {"index": 0, "passed": True, "reasoning": "ok", "evidence": []},
-                {"index": 1, "passed": False, "reasoning": "no", "evidence": []},
+                {"index": 0, "met": True, "reasoning": "ok", "evidence": []},
+                {"index": 1, "met": False, "reasoning": "no", "evidence": []},
             ],
             "llm_usage": {"cost_usd": 0.1, "prompt_tokens": 500},
         }
@@ -190,8 +190,8 @@ class TestEvaluateAllCriteria:
         )
 
         assert len(verdicts) == 2
-        assert verdicts[0]["passed"] is True
-        assert verdicts[1]["passed"] is False
+        assert verdicts[0]["met"] is True
+        assert verdicts[1]["met"] is False
         assert usage["cost_usd"] == 0.1
 
     @patch("gandalf_grader.__main__._clone_workspace")
@@ -201,8 +201,8 @@ class TestEvaluateAllCriteria:
         mock_clone.return_value = str(tmp_path)
 
         legacy_verdicts = [
-            {"index": 0, "passed": True, "reasoning": "ok", "evidence": []},
-            {"index": 1, "passed": False, "reasoning": "no", "evidence": []},
+            {"index": 0, "met": True, "reasoning": "ok", "evidence": []},
+            {"index": 1, "met": False, "reasoning": "no", "evidence": []},
         ]
         mock_run.side_effect = _make_run_writing(legacy_verdicts)
 
@@ -214,7 +214,7 @@ class TestEvaluateAllCriteria:
         )
 
         assert len(verdicts) == 2
-        assert verdicts[0]["passed"] is True
+        assert verdicts[0]["met"] is True
         assert usage == {}
 
     @patch("gandalf_grader.__main__._clone_workspace")
@@ -232,7 +232,7 @@ class TestEvaluateAllCriteria:
         )
 
         assert len(verdicts) == 2
-        assert all(v["passed"] is None for v in verdicts)
+        assert all(v["met"] is None for v in verdicts)
         assert "Unexpected JSON type" in verdicts[0]["reasoning"]
         assert usage == {}
 
@@ -251,7 +251,7 @@ class TestEvaluateAllCriteria:
         )
 
         assert len(verdicts) == 1
-        assert verdicts[0]["passed"] is None
+        assert verdicts[0]["met"] is None
         assert usage == {}
 
     @patch("gandalf_grader.__main__._clone_workspace")
@@ -288,7 +288,7 @@ class TestEvaluateAllCriteria:
         )
 
         assert len(verdicts) == 2
-        assert all(v["passed"] is None for v in verdicts)
+        assert all(v["met"] is None for v in verdicts)
         assert "exit 1" in verdicts[0]["reasoning"]
         assert usage == {}
 
@@ -307,7 +307,7 @@ class TestEvaluateAllCriteria:
         )
 
         assert len(verdicts) == 2
-        assert all(v["passed"] is None for v in verdicts)
+        assert all(v["met"] is None for v in verdicts)
         assert "timed out" in verdicts[0]["reasoning"].lower()
         assert usage == {}
 
@@ -334,7 +334,7 @@ class TestEvaluateAllCriteria:
         )
 
         assert len(verdicts) == 1
-        assert verdicts[0]["passed"] is None
+        assert verdicts[0]["met"] is None
         assert usage == {}
 
     @patch("gandalf_grader.__main__._clone_workspace")
@@ -355,16 +355,16 @@ class TestEvaluateAllCriteria:
         )
 
         assert len(verdicts) == 2
-        assert all(v["passed"] is None for v in verdicts)
+        assert all(v["met"] is None for v in verdicts)
         assert usage == {}
 
 
-def _cr(weight: float, passed: bool | None) -> CriteriaResult:
+def _cr(weight: float, met: bool | None) -> CriteriaResult:
     """Helper to build a CriteriaResult for scoring tests."""
     return CriteriaResult(
         criteria="test",
         weight=weight,
-        passed=passed,
+        met=met,
         reasoning="test",
     )
 
@@ -375,7 +375,7 @@ class TestScoring:
     def _score_and_info(self, results: list[CriteriaResult], tmp_path) -> dict:
         """Run _write_info and return parsed info.json."""
         config = _make_config(output_dir=str(tmp_path))
-        errored = sum(1 for r in results if r.passed is None)
+        errored = sum(1 for r in results if r.met is None)
         _write_info(config, results, {}, errored)
         with open(tmp_path / "info.json") as f:
             return json.load(f)
@@ -439,12 +439,12 @@ class TestScoring:
         assert info["maximum_score"] == 5.0
 
     def test_errored_criteria_contribute_zero(self, tmp_path):
-        """Errored criteria (passed=None) contribute 0 to score."""
+        """Errored criteria (met=None) contribute 0 to score."""
         results = [_cr(3.0, True), _cr(2.0, None)]
         assert self._score(results, tmp_path) == 3.0
 
     def test_errored_negative_criteria_contribute_zero(self, tmp_path):
-        """Errored negative-weight criteria (passed=None) contribute 0, not the penalty."""
+        """Errored negative-weight criteria (met=None) contribute 0, not the penalty."""
         results = [_cr(3.0, True), _cr(-2.0, None)]
         assert self._score(results, tmp_path) == 3.0
 
@@ -556,10 +556,10 @@ class TestRetryLogic:
 
         # First call: c1 passes, c2 errors. Retry: c2 passes.
         mock_eval.side_effect = [
-            {"passed": True, "reasoning": "ok", "evidence": ["e1"]},
-            {"passed": None, "reasoning": "timeout"},
+            {"met": True, "reasoning": "ok", "evidence": ["e1"]},
+            {"met": None, "reasoning": "timeout"},
             # retry for c2
-            {"passed": True, "reasoning": "ok on retry", "evidence": ["e2"]},
+            {"met": True, "reasoning": "ok on retry", "evidence": ["e2"]},
         ]
 
         from gandalf_grader.__main__ import main
@@ -568,8 +568,8 @@ class TestRetryLogic:
             main()
 
         info = json.loads((tmp_path / "output" / "info.json").read_text())
-        assert info["criteria_results"][0]["passed"] is True
-        assert info["criteria_results"][1]["passed"] is True
+        assert info["criteria_results"][0]["met"] is True
+        assert info["criteria_results"][1]["met"] is True
         assert info["errored_criteria_count"] == 0
 
         reward = json.loads((tmp_path / "output" / "reward.json").read_text())
@@ -606,13 +606,13 @@ class TestRetryLogic:
         ]
 
         initial_verdicts = [
-            {"index": 0, "passed": True, "reasoning": "ok", "evidence": []},
-            {"index": 1, "passed": None, "reasoning": "timeout", "evidence": []},
-            {"index": 2, "passed": None, "reasoning": "crash", "evidence": []},
+            {"index": 0, "met": True, "reasoning": "ok", "evidence": []},
+            {"index": 1, "met": None, "reasoning": "timeout", "evidence": []},
+            {"index": 2, "met": None, "reasoning": "crash", "evidence": []},
         ]
         retry_verdicts = [
-            {"index": 0, "passed": True, "reasoning": "ok retry", "evidence": []},
-            {"index": 1, "passed": True, "reasoning": "ok retry 2", "evidence": []},
+            {"index": 0, "met": True, "reasoning": "ok retry", "evidence": []},
+            {"index": 1, "met": True, "reasoning": "ok retry 2", "evidence": []},
         ]
         mock_eval_all.side_effect = [
             (initial_verdicts, {"cost_usd": 0.1}),
@@ -625,7 +625,7 @@ class TestRetryLogic:
             main()
 
         info = json.loads((tmp_path / "output" / "info.json").read_text())
-        assert all(r["passed"] is True for r in info["criteria_results"])
+        assert all(r["met"] is True for r in info["criteria_results"])
         assert info["errored_criteria_count"] == 0
 
         reward = json.loads((tmp_path / "output" / "reward.json").read_text())
@@ -656,7 +656,7 @@ class TestRetryLogic:
             mode="sequential",
         )
         mock_rubric.return_value = [RubricItem(criteria="c1", weight=1.0)]
-        mock_eval.return_value = {"passed": None, "reasoning": "timeout"}
+        mock_eval.return_value = {"met": None, "reasoning": "timeout"}
 
         from gandalf_grader.__main__ import main
 
@@ -694,7 +694,7 @@ class TestRetryLogic:
             mode="sequential",
         )
         mock_rubric.return_value = [RubricItem(criteria="c1", weight=1.0)]
-        mock_eval.return_value = {"passed": None, "reasoning": "always fails"}
+        mock_eval.return_value = {"met": None, "reasoning": "always fails"}
 
         from gandalf_grader.__main__ import main
 
@@ -704,7 +704,7 @@ class TestRetryLogic:
             assert exc_info.value.code == 1
 
         info = json.loads((tmp_path / "output" / "info.json").read_text())
-        assert info["criteria_results"][0]["passed"] is None
+        assert info["criteria_results"][0]["met"] is None
         assert info["errored_criteria_count"] == 1
         assert not (tmp_path / "output" / "reward.json").exists()
 
@@ -738,9 +738,9 @@ class TestRetryLogic:
         ]
 
         mock_eval.side_effect = [
-            {"passed": True, "reasoning": "ok", "evidence": []},
-            {"passed": None, "reasoning": "timeout"},
-            {"passed": False, "reasoning": "genuinely failed", "evidence": []},
+            {"met": True, "reasoning": "ok", "evidence": []},
+            {"met": None, "reasoning": "timeout"},
+            {"met": False, "reasoning": "genuinely failed", "evidence": []},
         ]
 
         from gandalf_grader.__main__ import main

@@ -54,8 +54,8 @@ class RubricItem(BaseModel):
     """A single rubric item with evaluation criteria and weight.
 
     Weight can be negative to penalise undesired outcomes.  The sign of the
-    weight carries the semantics: positive means "reward when passed", negative
-    means "penalise when passed".
+    weight carries the semantics: positive means "reward when met", negative
+    means "penalise when met".
     """
 
     criteria: str
@@ -100,7 +100,7 @@ class BatchJudgeInput(BaseModel):
 class Verdict(BaseModel):
     """Verdict returned by the inner judge."""
 
-    passed: bool | None
+    met: bool | None
     reasoning: str
     evidence: list[str] = Field(default_factory=list)
 
@@ -110,7 +110,7 @@ class CriteriaResult(BaseModel):
 
     criteria: str
     weight: float
-    passed: bool | None
+    met: bool | None
     reasoning: str
     evidence: list[str] = Field(default_factory=list)
 

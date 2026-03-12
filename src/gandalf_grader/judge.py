@@ -60,7 +60,7 @@ Do NOT simply print or display the JSON in your response — the verdict will on
 read from the file on disk.
 
 The JSON object must have exactly these fields:
-- "passed": true if the criteria is satisfied, false otherwise
+- "met": true if the criteria is satisfied, false otherwise
 - "reasoning": a brief explanation of your judgment
 - "evidence": an array of strings, each describing a concrete check you performed \
 (e.g. file path and observed content, command output, or tool-returned value)
@@ -68,7 +68,7 @@ The JSON object must have exactly these fields:
 Example:
 ```json
 {{
-  "passed": true,
+  "met": true,
   "reasoning": "The file foo.txt exists and contains the expected content.",
   "evidence": [
     "Read /workspace/foo.txt: contains 'hello world'",
@@ -115,7 +115,7 @@ directory and can inspect files, run commands, and use tools to investigate.
 
 {criteria_block}
 
-Your verdict for each criterion is binary: passed or failed.
+Your verdict for each criterion is binary: met or not met.
 
 ## Your Task
 Investigate the current state of the environment to determine whether each of the above \
@@ -132,7 +132,7 @@ read from the file on disk.
 
 Each element in the array must have exactly these fields:
 - "index": the criterion index (integer, 0-based)
-- "passed": true if the criteria is satisfied, false otherwise
+- "met": true if the criteria is satisfied, false otherwise
 - "reasoning": a brief explanation of your judgment
 - "evidence": an array of strings, each describing a concrete check you performed \
 (e.g. file path and observed content, command output, or tool-returned value)
@@ -142,7 +142,7 @@ Example:
 [
   {{
     "index": 0,
-    "passed": true,
+    "met": true,
     "reasoning": "The file foo.txt exists and contains the expected content.",
     "evidence": [
       "Read /workspace/foo.txt: contains 'hello world'",
@@ -151,7 +151,7 @@ Example:
   }},
   {{
     "index": 1,
-    "passed": false,
+    "met": false,
     "reasoning": "The output is missing the required header.",
     "evidence": ["Read /workspace/output.txt: no header line found"]
   }}
@@ -173,25 +173,25 @@ def _read_verdict(verdict_path: str) -> Verdict:
         with open(verdict_path) as f:
             content = f.read().strip()
         if not content:
-            return Verdict(passed=None, reasoning="Judge agent wrote an empty verdict file.")
+            return Verdict(met=None, reasoning="Judge agent wrote an empty verdict file.")
         data = json.loads(content)
-        if "passed" not in data:
-            return Verdict(passed=None, reasoning=f"Verdict missing 'passed' field: {content[:200]}")
-        raw_passed = data["passed"]
+        if "met" not in data:
+            return Verdict(met=None, reasoning=f"Verdict missing 'met' field: {content[:200]}")
+        raw_met = data["met"]
         return Verdict(
-            passed=bool(raw_passed) if raw_passed is not None else None,
+            met=bool(raw_met) if raw_met is not None else None,
             reasoning=str(data.get("reasoning", "No reasoning provided.")),
             evidence=list(data.get("evidence", [])),
         )
     except FileNotFoundError:
-        return Verdict(passed=None, reasoning="Judge agent did not write a verdict file.")
+        return Verdict(met=None, reasoning="Judge agent did not write a verdict file.")
     except json.JSONDecodeError as e:
-        return Verdict(passed=None, reasoning=f"Judge agent wrote invalid JSON: {e}")
+        return Verdict(met=None, reasoning=f"Judge agent wrote invalid JSON: {e}")
 
 
 def _fail_all_verdicts(n: int, reason: str) -> list[dict[str, Any]]:
     """Return *n* fail verdict dicts sharing the same reason."""
-    return [{"index": i, "passed": None, "reasoning": reason, "evidence": []} for i in range(n)]
+    return [{"index": i, "met": None, "reasoning": reason, "evidence": []} for i in range(n)]
 
 
 def _read_batch_verdict(verdict_path: str, n_criteria: int) -> list[dict[str, Any]]:
@@ -226,9 +226,9 @@ def _read_batch_verdict(verdict_path: str, n_criteria: int) -> list[dict[str, An
             except (ValueError, TypeError):
                 continue
             if 0 <= idx < n_criteria:
-                raw_passed = v.get("passed")
+                raw_met = v.get("met")
                 by_index[idx] = {
-                    "passed": bool(raw_passed) if raw_passed is not None else None,
+                    "met": bool(raw_met) if raw_met is not None else None,
                     "reasoning": str(v.get("reasoning", "No reasoning provided.")),
                     "evidence": list(v.get("evidence", [])),
                 }
@@ -241,7 +241,7 @@ def _read_batch_verdict(verdict_path: str, n_criteria: int) -> list[dict[str, An
                 results.append(
                     {
                         "index": i,
-                        "passed": None,
+                        "met": None,
                         "reasoning": f"Judge did not return a verdict for criterion {i}.",
                         "evidence": [],
                     }
@@ -383,14 +383,14 @@ def run_judge(input_path: str, output_path: str) -> None:
         )
         verdict = _read_verdict(verdict_path)
         output = {
-            "passed": verdict.passed,
+            "met": verdict.met,
             "reasoning": verdict.reasoning,
             "evidence": verdict.evidence,
             "llm_usage": llm_usage,
         }
     except Exception as e:
         output = {
-            "passed": None,
+            "met": None,
             "reasoning": f"Judge execution error: {e}",
             "evidence": [],
             "llm_usage": llm_usage,
