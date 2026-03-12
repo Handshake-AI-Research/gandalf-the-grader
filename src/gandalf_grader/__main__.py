@@ -8,7 +8,7 @@ Supports two evaluation modes (configured via ``mode`` in the TOML config):
   - **batch**: all criteria evaluated in a single agent session.
 
 Produces:
-  /logs/verifier/reward.json  - Reward file (normalised [0,1] reward)
+  /logs/verifier/reward.json  - Reward file ([0,1] reward)
   /logs/verifier/info.json    - Detailed per-criteria results + LLM usage
 """
 
@@ -589,7 +589,7 @@ def _write_info(
     contribute when their criterion is met).  Errored criteria (met=None) contribute 0.
 
     reward: clip(0, 1, raw_score / sum_of_positive_weights).  This is the
-    normalised reward written to reward.json — always in [0, 1].
+    reward written to reward.json — always in [0, 1].
     """
     raw_score = round(
         sum(r.weight for r in results if r.met is True),

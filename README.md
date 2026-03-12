@@ -6,7 +6,7 @@ Agent-as-judge grading framework for evaluating AI agent outputs against rubric 
 
 `gandalf-grader` uses LLM-powered judge agents to evaluate whether an AI agent successfully completed a task. It is the production verifier component of the [rle-pkg](https://github.com/Handshake-AI-Research/rle-pkg) architecture.
 
-Given a task description, a rubric of evaluation criteria, and the agent's trajectory, the grader spawns judge agents that inspect the agent's workspace — reading files, running commands, and using tools — to determine whether each criterion's condition is met. The final reward is normalised to [0, 1], with raw scoring details included in `info.json`.
+Given a task description, a rubric of evaluation criteria, and the agent's trajectory, the grader spawns judge agents that inspect the agent's workspace — reading files, running commands, and using tools — to determine whether each criterion's condition is met. The final reward is always in [0, 1], with raw scoring details included in `info.json`.
 
 ## How It Works
 
@@ -163,11 +163,11 @@ export OTEL_EXPORTER_OTLP_TRACES_PROTOCOL=http/protobuf
 
 The grader writes to `output_dir` (default `/logs/verifier`):
 
-- `reward.json` — Reward file: `{"reward": 0.75}` (normalised to [0, 1])
+- `reward.json` — Reward file: `{"reward": 0.75}` (always in [0, 1])
 - `info.json` — Per-criteria results with `met`/not-met, reasoning, evidence, LLM usage, plus `reward`, `raw_score`, `minimum_score`, and `maximum_score`
 - `judge_trace_<i>.txt` — stdout/stderr capture for each judge invocation
 
-The `reward` in `reward.json` is `clip(0, 1, raw_score / sum_of_positive_weights)`, always in [0, 1]. `info.json` additionally includes `raw_score` (the unnormalised sum of weights for met criteria, which can be negative) and `minimum_score`/`maximum_score` bounds for reference.
+The `reward` in `reward.json` is `clip(0, 1, raw_score / sum_of_positive_weights)`, always in [0, 1]. `info.json` additionally includes `raw_score` (the raw sum of weights for met criteria, which can be negative) and `minimum_score`/`maximum_score` bounds for reference.
 
 ## Development
 

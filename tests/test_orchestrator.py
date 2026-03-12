@@ -779,10 +779,10 @@ class TestRetryLogic:
     @patch("gandalf_grader.__main__.load_rubric")
     @patch("gandalf_grader.__main__.load_config")
     @patch("gandalf_grader.__main__.evaluate_criteria")
-    def test_reward_json_normalised_with_negative_weights(
+    def test_reward_json_with_negative_weights(
         self, mock_eval, mock_config, mock_rubric, mock_trajectory, mock_guidance, tmp_path
     ):
-        """reward.json must contain the normalised reward, not the raw score,
+        """reward.json must contain the [0,1] reward, not the raw score,
         when negative-weight criteria are present."""
         from gandalf_grader.config import RubricItem
 
