@@ -1,9 +1,11 @@
 """Tests for gandalf_grader.judge."""
 
 import json
+import tempfile
 from unittest.mock import patch
 
 from gandalf_grader.judge import (
+    _make_verdict_path,
     _read_batch_verdict,
     _read_verdict,
     build_judge_prompt,
@@ -105,6 +107,72 @@ class TestBuildJudgePrompt:
         output_idx = prompt.index("OUTPUT")
         crit_idx = prompt.index("CRIT")
         assert preamble_idx < guidance_idx < instr_idx < output_idx < crit_idx
+
+
+class TestMakeVerdictPath:
+    """Ensure verdict files go to workdir, not /tmp.
+
+    Regression: the old code always used tempfile.gettempdir() (/tmp), requiring
+    sandbox_user to have write access to /tmp.  The fix accepts a *dir* parameter
+    and run_judge/run_judge_batch pass judge_input.workdir (which the verifier
+    has already made world-writable), so sandbox_user never needs /tmp write access.
+    """
+
+    def test_default_uses_system_tmpdir(self):
+        path = _make_verdict_path()
+        assert path.startswith(tempfile.gettempdir())
+        assert "verdict_" in path
+        assert path.endswith(".json")
+
+    def test_dir_overrides_tmpdir(self, tmp_path):
+        """When dir is provided the verdict path must be inside it, not in /tmp.
+
+        This test fails on the pre-fix code (_make_verdict_path had no dir param)
+        and passes with the fix.
+        """
+        path = _make_verdict_path(dir=str(tmp_path))
+        assert path.startswith(str(tmp_path)), (
+            f"Verdict path {path!r} should be inside workdir {tmp_path}, "
+            "not in /tmp — sandbox_user may lack /tmp write access"
+        )
+
+    def test_run_judge_verdict_goes_to_workdir(self, tmp_path):
+        """run_judge must pass workdir to _make_verdict_path, not rely on /tmp.
+
+        This test fails on the pre-fix code (verdict_path always used /tmp)
+        and passes with the fix (verdict_path uses judge_input.workdir).
+        """
+        input_data = {
+            "model": "test-model",
+            "instructions": "do a thing",
+            "final_output": "done",
+            "criteria": "check something",
+            "workdir": str(tmp_path),
+        }
+        input_path = str(tmp_path / "input.json")
+        (tmp_path / "input.json").write_text(json.dumps(input_data))
+        output_path = str(tmp_path / "output.json")
+
+        captured_verdict_dir = {}
+
+        def _fake_make_verdict_path(prefix="verdict_", dir=None):
+            captured_verdict_dir["dir"] = dir
+            # Return a path inside tmp_path so the test can write the verdict
+            p = str(tmp_path / f"{prefix}test.json")
+            (tmp_path / f"{prefix}test.json").write_text(
+                json.dumps({"passed": True, "reasoning": "ok", "evidence": []})
+            )
+            return p
+
+        with patch("gandalf_grader.judge._make_verdict_path", side_effect=_fake_make_verdict_path):
+            with patch("gandalf_grader.judge._run_agent_session", return_value={}):
+                run_judge(input_path, output_path)
+
+        assert captured_verdict_dir.get("dir") == str(tmp_path), (
+            f"run_judge passed dir={captured_verdict_dir.get('dir')!r} to _make_verdict_path "
+            f"but expected workdir={str(tmp_path)!r} — "
+            "sandbox_user would need to create the verdict file in /tmp instead"
+        )
 
 
 class TestReadVerdict:

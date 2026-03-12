@@ -2,6 +2,8 @@
 
 import json
 import os
+import pathlib
+import shutil
 import subprocess
 from unittest.mock import patch
 
@@ -9,12 +11,14 @@ import pytest
 
 from gandalf_grader.__main__ import (
     _JUDGE_ENV_ALLOWLIST,
+    _clone_workspace,
     _judge_env_vars,
     _write_info,
     evaluate_all_criteria,
+    evaluate_criteria,
     resolve_judge_guidance,
 )
-from gandalf_grader.config import BatchJudgeInput, CriteriaResult, RubricItem, VerifierConfig
+from gandalf_grader.config import BatchJudgeInput, CriteriaResult, JudgeInput, RubricItem, VerifierConfig
 
 
 def _make_config(**overrides) -> VerifierConfig:
@@ -148,6 +152,19 @@ def _run_ok(output_path, content):
     return subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
 
 
+def _make_run_writing(content):
+    """Return a mock_run side_effect that writes *content* to the --output path in the cmd."""
+
+    def _side_effect(cmd, **kwargs):
+        for i, arg in enumerate(cmd):
+            if arg == "--output" and i + 1 < len(cmd):
+                pathlib.Path(cmd[i + 1]).write_text(json.dumps(content))
+                break
+        return subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
+
+    return _side_effect
+
+
 class TestEvaluateAllCriteria:
     """Tests for evaluate_all_criteria IPC contract: dict, list, invalid shapes, failures."""
 
@@ -164,20 +181,13 @@ class TestEvaluateAllCriteria:
             "llm_usage": {"cost_usd": 0.1, "prompt_tokens": 500},
         }
 
-        mock_run.return_value = subprocess.CompletedProcess(
-            args=[], returncode=0, stdout="", stderr=""
-        )
+        mock_run.side_effect = _make_run_writing(output_content)
         judge_input = _make_batch_input(tmp_path, n=2)
         trace_path = str(tmp_path / "trace.txt")
 
-        # We need to intercept the output file write. Patch tempfile.mktemp to return a known path.
-        output_file = tmp_path / "batch_output.json"
-        output_file.write_text(json.dumps(output_content))
-
-        with patch("gandalf_grader.__main__.tempfile.mktemp", return_value=str(output_file)):
-            verdicts, usage = evaluate_all_criteria(
-                judge_input, sandbox_user="sandbox", trace_path=trace_path
-            )
+        verdicts, usage = evaluate_all_criteria(
+            judge_input, sandbox_user="sandbox", trace_path=trace_path
+        )
 
         assert len(verdicts) == 2
         assert verdicts[0]["passed"] is True
@@ -189,24 +199,19 @@ class TestEvaluateAllCriteria:
     def test_legacy_array_shape(self, mock_run, mock_clone, tmp_path):
         """Legacy format: bare JSON array of verdicts, no usage info."""
         mock_clone.return_value = str(tmp_path)
-        mock_run.return_value = subprocess.CompletedProcess(
-            args=[], returncode=0, stdout="", stderr=""
-        )
 
         legacy_verdicts = [
             {"index": 0, "passed": True, "reasoning": "ok", "evidence": []},
             {"index": 1, "passed": False, "reasoning": "no", "evidence": []},
         ]
-        output_file = tmp_path / "batch_output.json"
-        output_file.write_text(json.dumps(legacy_verdicts))
+        mock_run.side_effect = _make_run_writing(legacy_verdicts)
 
         judge_input = _make_batch_input(tmp_path, n=2)
         trace_path = str(tmp_path / "trace.txt")
 
-        with patch("gandalf_grader.__main__.tempfile.mktemp", return_value=str(output_file)):
-            verdicts, usage = evaluate_all_criteria(
-                judge_input, sandbox_user="sandbox", trace_path=trace_path
-            )
+        verdicts, usage = evaluate_all_criteria(
+            judge_input, sandbox_user="sandbox", trace_path=trace_path
+        )
 
         assert len(verdicts) == 2
         assert verdicts[0]["passed"] is True
@@ -217,20 +222,14 @@ class TestEvaluateAllCriteria:
     def test_unexpected_json_type_string(self, mock_run, mock_clone, tmp_path):
         """If the output file contains a JSON string, return fail-all."""
         mock_clone.return_value = str(tmp_path)
-        mock_run.return_value = subprocess.CompletedProcess(
-            args=[], returncode=0, stdout="", stderr=""
-        )
-
-        output_file = tmp_path / "batch_output.json"
-        output_file.write_text(json.dumps("just a string"))
+        mock_run.side_effect = _make_run_writing("just a string")
 
         judge_input = _make_batch_input(tmp_path, n=2)
         trace_path = str(tmp_path / "trace.txt")
 
-        with patch("gandalf_grader.__main__.tempfile.mktemp", return_value=str(output_file)):
-            verdicts, usage = evaluate_all_criteria(
-                judge_input, sandbox_user="sandbox", trace_path=trace_path
-            )
+        verdicts, usage = evaluate_all_criteria(
+            judge_input, sandbox_user="sandbox", trace_path=trace_path
+        )
 
         assert len(verdicts) == 2
         assert all(v["passed"] is None for v in verdicts)
@@ -242,20 +241,14 @@ class TestEvaluateAllCriteria:
     def test_unexpected_json_type_number(self, mock_run, mock_clone, tmp_path):
         """If the output file contains a JSON number, return fail-all."""
         mock_clone.return_value = str(tmp_path)
-        mock_run.return_value = subprocess.CompletedProcess(
-            args=[], returncode=0, stdout="", stderr=""
-        )
-
-        output_file = tmp_path / "batch_output.json"
-        output_file.write_text(json.dumps(42))
+        mock_run.side_effect = _make_run_writing(42)
 
         judge_input = _make_batch_input(tmp_path, n=1)
         trace_path = str(tmp_path / "trace.txt")
 
-        with patch("gandalf_grader.__main__.tempfile.mktemp", return_value=str(output_file)):
-            verdicts, usage = evaluate_all_criteria(
-                judge_input, sandbox_user="sandbox", trace_path=trace_path
-            )
+        verdicts, usage = evaluate_all_criteria(
+            judge_input, sandbox_user="sandbox", trace_path=trace_path
+        )
 
         assert len(verdicts) == 1
         assert verdicts[0]["passed"] is None
@@ -266,20 +259,14 @@ class TestEvaluateAllCriteria:
     def test_dict_without_expected_keys(self, mock_run, mock_clone, tmp_path):
         """Dict output missing 'verdicts' key: defaults to empty verdicts list."""
         mock_clone.return_value = str(tmp_path)
-        mock_run.return_value = subprocess.CompletedProcess(
-            args=[], returncode=0, stdout="", stderr=""
-        )
-
-        output_file = tmp_path / "batch_output.json"
-        output_file.write_text(json.dumps({"unexpected": "shape"}))
+        mock_run.side_effect = _make_run_writing({"unexpected": "shape"})
 
         judge_input = _make_batch_input(tmp_path, n=2)
         trace_path = str(tmp_path / "trace.txt")
 
-        with patch("gandalf_grader.__main__.tempfile.mktemp", return_value=str(output_file)):
-            verdicts, usage = evaluate_all_criteria(
-                judge_input, sandbox_user="sandbox", trace_path=trace_path
-            )
+        verdicts, usage = evaluate_all_criteria(
+            judge_input, sandbox_user="sandbox", trace_path=trace_path
+        )
 
         assert verdicts == []
         assert usage == {}
@@ -296,11 +283,9 @@ class TestEvaluateAllCriteria:
         judge_input = _make_batch_input(tmp_path, n=2)
         trace_path = str(tmp_path / "trace.txt")
 
-        output_file = tmp_path / "batch_output.json"
-        with patch("gandalf_grader.__main__.tempfile.mktemp", return_value=str(output_file)):
-            verdicts, usage = evaluate_all_criteria(
-                judge_input, sandbox_user="sandbox", trace_path=trace_path
-            )
+        verdicts, usage = evaluate_all_criteria(
+            judge_input, sandbox_user="sandbox", trace_path=trace_path
+        )
 
         assert len(verdicts) == 2
         assert all(v["passed"] is None for v in verdicts)
@@ -317,11 +302,9 @@ class TestEvaluateAllCriteria:
         judge_input = _make_batch_input(tmp_path, n=2)
         trace_path = str(tmp_path / "trace.txt")
 
-        output_file = tmp_path / "batch_output.json"
-        with patch("gandalf_grader.__main__.tempfile.mktemp", return_value=str(output_file)):
-            verdicts, usage = evaluate_all_criteria(
-                judge_input, sandbox_user="sandbox", trace_path=trace_path
-            )
+        verdicts, usage = evaluate_all_criteria(
+            judge_input, sandbox_user="sandbox", trace_path=trace_path
+        )
 
         assert len(verdicts) == 2
         assert all(v["passed"] is None for v in verdicts)
@@ -333,20 +316,22 @@ class TestEvaluateAllCriteria:
     def test_invalid_json_in_output_file(self, mock_run, mock_clone, tmp_path):
         """Non-JSON content in output file returns fail-all."""
         mock_clone.return_value = str(tmp_path)
-        mock_run.return_value = subprocess.CompletedProcess(
-            args=[], returncode=0, stdout="", stderr=""
-        )
 
-        output_file = tmp_path / "batch_output.json"
-        output_file.write_text("not valid json {{{")
+        def _write_invalid(cmd, **kwargs):
+            for i, arg in enumerate(cmd):
+                if arg == "--output" and i + 1 < len(cmd):
+                    pathlib.Path(cmd[i + 1]).write_text("not valid json {{{")
+                    break
+            return subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
+
+        mock_run.side_effect = _write_invalid
 
         judge_input = _make_batch_input(tmp_path, n=1)
         trace_path = str(tmp_path / "trace.txt")
 
-        with patch("gandalf_grader.__main__.tempfile.mktemp", return_value=str(output_file)):
-            verdicts, usage = evaluate_all_criteria(
-                judge_input, sandbox_user="sandbox", trace_path=trace_path
-            )
+        verdicts, usage = evaluate_all_criteria(
+            judge_input, sandbox_user="sandbox", trace_path=trace_path
+        )
 
         assert len(verdicts) == 1
         assert verdicts[0]["passed"] is None
@@ -354,9 +339,10 @@ class TestEvaluateAllCriteria:
 
     @patch("gandalf_grader.__main__._clone_workspace")
     @patch("gandalf_grader.__main__.subprocess.run")
-    def test_missing_output_file(self, mock_run, mock_clone, tmp_path):
-        """If the judge never wrote the output file, return fail-all."""
+    def test_empty_output_file(self, mock_run, mock_clone, tmp_path):
+        """If the judge wrote nothing to the output file, return fail-all."""
         mock_clone.return_value = str(tmp_path)
+        # mock_run does not write to the output file — it stays empty (pre-created by verifier)
         mock_run.return_value = subprocess.CompletedProcess(
             args=[], returncode=0, stdout="", stderr=""
         )
@@ -364,14 +350,9 @@ class TestEvaluateAllCriteria:
         judge_input = _make_batch_input(tmp_path, n=2)
         trace_path = str(tmp_path / "trace.txt")
 
-        # Point to a path that does not exist
-        with patch(
-            "gandalf_grader.__main__.tempfile.mktemp",
-            return_value=str(tmp_path / "nonexistent.json"),
-        ):
-            verdicts, usage = evaluate_all_criteria(
-                judge_input, sandbox_user="sandbox", trace_path=trace_path
-            )
+        verdicts, usage = evaluate_all_criteria(
+            judge_input, sandbox_user="sandbox", trace_path=trace_path
+        )
 
         assert len(verdicts) == 2
         assert all(v["passed"] is None for v in verdicts)
@@ -466,6 +447,79 @@ class TestScoring:
         """Errored negative-weight criteria (passed=None) contribute 0, not the penalty."""
         results = [_cr(3.0, True), _cr(-2.0, None)]
         assert self._score(results, tmp_path) == 3.0
+
+
+class TestOutputFilePermissions:
+    """Ensure the judge output file is pre-created with world-writable permissions.
+
+    Regression: the old code used tempfile.mktemp() which does NOT create the
+    file, requiring sandbox_user to create it in /tmp.  On systems where /tmp
+    is not world-writable, this caused a PermissionError.  The fix pre-creates
+    the file and chmods it 0o666 so sandbox_user only needs to *write* to an
+    existing file, not *create* one in a restricted directory.
+    """
+
+    @patch("gandalf_grader.__main__._clone_workspace")
+    @patch("gandalf_grader.__main__.subprocess.run")
+    def test_output_file_exists_before_subprocess(self, mock_run, mock_clone, tmp_path):
+        """Output file must be pre-created so sandbox_user can write it without /tmp access."""
+        mock_clone.return_value = str(tmp_path)
+        captured_cmd = {}
+
+        def _capture(cmd, **kwargs):
+            output_path = cmd[cmd.index("--output") + 1]
+            captured_cmd["output_path"] = output_path
+            captured_cmd["existed_before_run"] = pathlib.Path(output_path).exists()
+            # Simulate sandbox_user writing to the pre-created file
+            pathlib.Path(output_path).write_text(
+                json.dumps({"verdicts": [], "llm_usage": {}})
+            )
+            return subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
+
+        mock_run.side_effect = _capture
+        judge_input = _make_batch_input(tmp_path, n=1)
+
+        evaluate_all_criteria(judge_input, sandbox_user="sandbox", trace_path=str(tmp_path / "trace.txt"))
+
+        assert "output_path" in captured_cmd, "subprocess was not called"
+        assert captured_cmd.get("existed_before_run"), (
+            "Output file was NOT pre-created before subprocess.run — "
+            "sandbox_user would need to create it in /tmp (may not be world-writable)"
+        )
+
+    @patch("gandalf_grader.__main__._clone_workspace")
+    @patch("gandalf_grader.__main__.subprocess.run")
+    def test_output_file_is_world_writable(self, mock_run, mock_clone, tmp_path):
+        """Pre-created output file must have world-write so sandbox_user can overwrite it.
+
+        This test fails on the pre-fix code (tempfile.mktemp → file never created)
+        and passes with the fix (NamedTemporaryFile + chmod 0o666).
+        """
+        mock_clone.return_value = str(tmp_path)
+        captured: dict = {}
+
+        def _capture_and_check_permissions(cmd, **kwargs):
+            output_path = cmd[cmd.index("--output") + 1]
+            captured["path"] = output_path
+            captured["exists"] = pathlib.Path(output_path).exists()
+            if captured["exists"]:
+                captured["mode"] = os.stat(output_path).st_mode
+            pathlib.Path(output_path).write_text(json.dumps({"verdicts": [], "llm_usage": {}}))
+            return subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
+
+        mock_run.side_effect = _capture_and_check_permissions
+        judge_input = _make_batch_input(tmp_path, n=1)
+        evaluate_all_criteria(judge_input, sandbox_user="sandbox", trace_path=str(tmp_path / "trace.txt"))
+
+        assert captured.get("exists"), (
+            "Output file was NOT pre-created before subprocess.run — "
+            "sandbox_user would need to create it in /tmp (may not be world-writable)"
+        )
+        mode = captured.get("mode", 0)
+        assert mode & 0o002, (
+            f"Output file missing world-write bit (mode={oct(mode)}) — "
+            "sandbox_user cannot write to it without /tmp create access"
+        )
 
 
 class TestRetryLogic:
@@ -699,3 +753,219 @@ class TestRetryLogic:
 
         info = json.loads((tmp_path / "output" / "info.json").read_text())
         assert info["errored_criteria_count"] == 0
+
+
+class TestCloneWorkspace:
+    """Tests for _clone_workspace resilience to unreadable files."""
+
+    def test_readable_files_are_cloned(self, tmp_path):
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        (workspace / "file.txt").write_text("hello")
+        (workspace / "subdir").mkdir()
+        (workspace / "subdir" / "nested.txt").write_text("world")
+
+        clone_dir = _clone_workspace(str(workspace))
+        try:
+            assert (pathlib.Path(clone_dir) / "file.txt").read_text() == "hello"
+            assert (pathlib.Path(clone_dir) / "subdir" / "nested.txt").read_text() == "world"
+        finally:
+            shutil.rmtree(clone_dir, ignore_errors=True)
+
+    def test_unreadable_files_are_skipped_not_fatal(self, tmp_path):
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        (workspace / "readable.txt").write_text("ok")
+
+        restricted = workspace / "restricted.txt"
+        restricted.write_text("secret")
+        restricted.chmod(0o000)
+
+        try:
+            clone_dir = _clone_workspace(str(workspace))
+            cloned = pathlib.Path(clone_dir)
+            assert (cloned / "readable.txt").read_text() == "ok"
+            assert not (cloned / "restricted.txt").exists()
+        finally:
+            restricted.chmod(0o644)
+            shutil.rmtree(clone_dir, ignore_errors=True)
+
+    def test_skipped_files_are_logged(self, tmp_path, capsys):
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        restricted = workspace / "noperm.txt"
+        restricted.write_text("x")
+        restricted.chmod(0o000)
+
+        try:
+            clone_dir = _clone_workspace(str(workspace))
+            stderr = capsys.readouterr().err
+            assert "skipped 1 unreadable path(s)" in stderr
+            assert "noperm.txt" in stderr
+        finally:
+            restricted.chmod(0o644)
+            shutil.rmtree(clone_dir, ignore_errors=True)
+
+    def test_unreadable_directory_is_skipped_not_fatal(self, tmp_path):
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        (workspace / "readable.txt").write_text("ok")
+
+        # Create a directory tree and make the parent unreadable
+        restricted_dir = workspace / ".tool_cache"
+        restricted_dir.mkdir()
+        (restricted_dir / "data.bin").write_text("cached")
+        restricted_dir.chmod(0o000)
+
+        try:
+            clone_dir = _clone_workspace(str(workspace))
+            cloned = pathlib.Path(clone_dir)
+            assert (cloned / "readable.txt").read_text() == "ok"
+            # The restricted directory's contents should not appear
+            assert not (cloned / ".tool_cache" / "data.bin").exists()
+        finally:
+            restricted_dir.chmod(0o755)
+            shutil.rmtree(clone_dir, ignore_errors=True)
+
+    def test_unreadable_directory_is_logged(self, tmp_path, capsys):
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        restricted_dir = workspace / ".cache"
+        restricted_dir.mkdir()
+        restricted_dir.chmod(0o000)
+
+        try:
+            clone_dir = _clone_workspace(str(workspace))
+            stderr = capsys.readouterr().err
+            assert "skipped 1 unreadable path(s)" in stderr
+            assert ".cache" in stderr
+        finally:
+            restricted_dir.chmod(0o755)
+            shutil.rmtree(clone_dir, ignore_errors=True)
+
+    def test_clone_is_group_writable(self, tmp_path):
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        (workspace / "file.txt").write_text("data")
+
+        clone_dir = _clone_workspace(str(workspace))
+        try:
+            cloned = pathlib.Path(clone_dir)
+            assert os.stat(clone_dir).st_mode & 0o070 == 0o070
+            fstat = os.stat(cloned / "file.txt")
+            assert fstat.st_mode & 0o060 == 0o060
+        finally:
+            shutil.rmtree(clone_dir, ignore_errors=True)
+
+    def test_clone_is_world_accessible(self, tmp_path):
+        """Clone dir must have world execute+write so sandbox_user can use it.
+
+        Regression: shutil.copytree preserved the source workspace permissions
+        (typically world-executable) on the root clone dir.  The new os.walk
+        implementation creates clone_dir via mkdtemp (mode 0o700) and must
+        explicitly grant world bits — otherwise sandbox_user (not in the
+        verifier's group) cannot traverse or write to the workspace.
+
+        This test fails on the pre-fix code (|0o070 → 0o770, no world bits)
+        and passes with the fix (|0o077 → 0o777).
+        """
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        (workspace / "file.txt").write_text("hello")
+        (workspace / "subdir").mkdir()
+        (workspace / "subdir" / "nested.txt").write_text("world")
+
+        clone_dir = _clone_workspace(str(workspace))
+        try:
+            clone = pathlib.Path(clone_dir)
+
+            # Root clone dir: world execute (traverse) + write (create files inside it)
+            root_mode = clone.stat().st_mode
+            assert root_mode & 0o001, (
+                "clone root missing world execute — sandbox_user cannot traverse it "
+                "(regression: os.walk+mkdtemp loses the world-execute bit that "
+                "shutil.copytree preserved from the source workspace)"
+            )
+            assert root_mode & 0o002, (
+                "clone root missing world write — sandbox_user cannot create files in it"
+            )
+
+            # Subdirectories must also have world execute+write
+            sub_mode = (clone / "subdir").stat().st_mode
+            assert sub_mode & 0o001, "subdir missing world execute"
+            assert sub_mode & 0o002, "subdir missing world write"
+
+            # Files must have world read so sandbox_user can inspect them
+            file_mode = (clone / "file.txt").stat().st_mode
+            assert file_mode & 0o004, "file missing world read"
+        finally:
+            shutil.rmtree(clone_dir, ignore_errors=True)
+
+    def test_executable_bits_are_preserved(self, tmp_path):
+        """Cloned files must retain execute bits so scripts/binaries remain runnable."""
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        script = workspace / "run.sh"
+        script.write_text("#!/bin/sh\necho hi")
+        script.chmod(0o755)
+        data = workspace / "data.txt"
+        data.write_text("plain")
+
+        clone_dir = _clone_workspace(str(workspace))
+        try:
+            cloned = pathlib.Path(clone_dir)
+            cloned_script_mode = (cloned / "run.sh").stat().st_mode
+            assert cloned_script_mode & 0o111, (
+                f"Executable bits lost on cloned script (mode={oct(cloned_script_mode)}) — "
+                "judge runs that execute workspace scripts will break"
+            )
+            # Non-executable file should NOT gain execute bits
+            cloned_data_mode = (cloned / "data.txt").stat().st_mode
+            assert not (cloned_data_mode & 0o111), (
+                f"Non-executable file gained execute bits (mode={oct(cloned_data_mode)})"
+            )
+        finally:
+            shutil.rmtree(clone_dir, ignore_errors=True)
+
+    def test_broken_symlink_is_skipped_not_fatal(self, tmp_path):
+        """A broken symlink in the workspace must be skipped, not crash the clone.
+
+        The old code caught only PermissionError; shutil.copy2 on a broken
+        symlink raises FileNotFoundError (an OSError subclass), which would
+        have propagated and aborted the entire clone.
+        """
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        (workspace / "good.txt").write_text("ok")
+        (workspace / "broken_link").symlink_to("/nonexistent/target")
+
+        clone_dir = _clone_workspace(str(workspace))
+        try:
+            cloned = pathlib.Path(clone_dir)
+            assert (cloned / "good.txt").read_text() == "ok"
+            assert not (cloned / "broken_link").exists()
+        finally:
+            shutil.rmtree(clone_dir, ignore_errors=True)
+
+    def test_symlink_to_directory_is_skipped_not_fatal(self, tmp_path):
+        """A symlink-to-directory in filenames must be skipped, not crash the clone.
+
+        os.walk (followlinks=False) places dir-symlinks in filenames.
+        shutil.copy2 on them raises IsADirectoryError (OSError subclass).
+        """
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        real_dir = tmp_path / "real_dir"
+        real_dir.mkdir()
+        (real_dir / "data.txt").write_text("data")
+        (workspace / "good.txt").write_text("ok")
+        (workspace / "dir_link").symlink_to(real_dir)
+
+        clone_dir = _clone_workspace(str(workspace))
+        try:
+            cloned = pathlib.Path(clone_dir)
+            assert (cloned / "good.txt").read_text() == "ok"
+            # The symlink itself should not have been copied as a file
+            assert not (cloned / "dir_link").is_file()
+        finally:
+            shutil.rmtree(clone_dir, ignore_errors=True)
