@@ -398,7 +398,7 @@ def _run_sequential(
         )
         results.append(result)
 
-        status = "PASS" if result.met is True else ("ERROR" if result.met is None else "FAIL")
+        status = "MET" if result.met is True else ("ERROR" if result.met is None else "UNMET")
         print(f"  -> {status}: {result.reasoning[:120]}")
 
     return results, total_usage
@@ -460,7 +460,7 @@ def _run_batch(
         )
         results.append(result)
 
-        status = "PASS" if result.met is True else ("ERROR" if result.met is None else "FAIL")
+        status = "MET" if result.met is True else ("ERROR" if result.met is None else "UNMET")
         print(f"  [{i + 1}/{len(rubric)}] {status}: {result.reasoning[:120]}")
 
     return results, llm_usage
@@ -515,7 +515,7 @@ def _retry_sequential(
             evidence=verdict.get("evidence", []),
         )
 
-        status = "PASS" if results[idx].met is True else ("ERROR" if results[idx].met is None else "FAIL")
+        status = "MET" if results[idx].met is True else ("ERROR" if results[idx].met is None else "UNMET")
         print(f"    -> {status}: {results[idx].reasoning[:120]}")
 
 
@@ -573,7 +573,7 @@ def _retry_batch(
         )
 
         met = results[orig_idx].met
-        status = "PASS" if met is True else ("ERROR" if met is None else "FAIL")
+        status = "MET" if met is True else ("ERROR" if met is None else "UNMET")
         print(f"    [{orig_idx}] {status}: {results[orig_idx].reasoning[:120]}")
 
 
@@ -582,13 +582,16 @@ def _write_info(
     results: list[CriteriaResult],
     llm_usage: dict[str, Any],
     errored_criteria_count: int,
-) -> float:
-    """Compute raw score and ALWAYS write info.json. Returns the score.
+) -> tuple[float, float]:
+    """Compute reward and raw score, ALWAYS write info.json. Returns (reward, raw_score).
 
-    Raw score: sum of weights for criteria whose condition was met (negative weights
+    raw_score: sum of weights for criteria whose condition was met (negative weights
     contribute when their criterion is met).  Errored criteria (met=None) contribute 0.
+
+    reward: clip(0, 1, raw_score / sum_of_positive_weights).  This is the
+    normalised reward written to reward.json — always in [0, 1].
     """
-    score = round(
+    raw_score = round(
         sum(r.weight for r in results if r.met is True),
         4,
     )
@@ -596,12 +599,18 @@ def _write_info(
     minimum_score = round(sum(r.weight for r in results if r.weight < 0), 4)
     maximum_score = round(sum(r.weight for r in results if r.weight > 0), 4)
 
+    reward = round(
+        max(0.0, min(1.0, raw_score / maximum_score)) if maximum_score > 0 else 0.0,
+        4,
+    )
+
     n_total = len(results)
     n_evaluated = n_total - errored_criteria_count
     evaluated_pct = round((n_evaluated / n_total * 100.0) if n_total > 0 else 100.0, 2)
 
     info = EvaluationInfo(
-        score=score,
+        reward=reward,
+        raw_score=raw_score,
         minimum_score=minimum_score,
         maximum_score=maximum_score,
         criteria_results=results,
@@ -618,7 +627,7 @@ def _write_info(
     with open(os.path.join(config.output_dir, "info.json"), "w") as f:
         f.write(info.model_dump_json(indent=2))
 
-    return score
+    return reward, raw_score
 
 
 def main() -> None:
@@ -674,7 +683,7 @@ def main() -> None:
     # 4. ALWAYS write info.json (even on hard fail)
     final_errored = _get_errored_indices(results)
     errored_count = len(final_errored)
-    score = _write_info(config, results, llm_usage, errored_count)
+    reward, raw_score = _write_info(config, results, llm_usage, errored_count)
 
     total_cost = llm_usage.get("cost_usd", 0)
     total_prompt = llm_usage.get("prompt_tokens", 0)
@@ -690,14 +699,11 @@ def main() -> None:
         print(f"info.json written to {config.output_dir}/ (reward.json NOT written)", file=sys.stderr)
         sys.exit(1)
 
-    # 6. All resolved — write reward.json (Harbor expects exactly {"score": <float>})
-    reward = {
-        "score": score,
-    }
+    # 6. All resolved — write reward.json
     with open(os.path.join(config.output_dir, "reward.json"), "w") as f:
-        json.dump(reward, f, indent=2)
+        json.dump({"score": reward}, f, indent=2)
 
-    print(f"\nScore: {score}")
+    print(f"\nReward: {reward} (raw: {raw_score})")
     if total_cost > 0:
         print(
             f"Verifier LLM cost: ${total_cost:.4f} "

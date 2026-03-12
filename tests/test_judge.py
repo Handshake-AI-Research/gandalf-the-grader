@@ -199,8 +199,8 @@ class TestReadVerdict:
         assert result.met is True
         assert result.evidence == []
 
-    def test_judge_writes_null_passed_preserved(self, tmp_path):
-        """If the judge writes {"passed": null}, it must stay None, not become False."""
+    def test_judge_writes_null_met_preserved(self, tmp_path):
+        """If the judge writes {"met": null}, it must stay None, not become False."""
         p = tmp_path / "verdict.json"
         p.write_text(json.dumps({"met": None, "reasoning": "judge errored internally"}))
         result = _read_verdict(str(p))
@@ -225,9 +225,9 @@ class TestReadVerdict:
         assert result.met is None
         assert "invalid JSON" in result.reasoning
 
-    def test_missing_passed_field(self, tmp_path):
+    def test_missing_met_field(self, tmp_path):
         p = tmp_path / "verdict.json"
-        p.write_text(json.dumps({"reasoning": "no passed field"}))
+        p.write_text(json.dumps({"reasoning": "no met field"}))
         result = _read_verdict(str(p))
         assert result.met is None
         assert "missing" in result.reasoning.lower()

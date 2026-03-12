@@ -188,7 +188,7 @@ class TestPydanticModels:
         v = Verdict(met=False, reasoning="fail", evidence=["check1", "check2"])
         assert len(v.evidence) == 2
 
-    def test_verdict_passed_none(self):
+    def test_verdict_met_none(self):
         v = Verdict(met=None, reasoning="error")
         assert v.met is None
         data = v.model_dump()
@@ -218,7 +218,7 @@ class TestPydanticModels:
         )
         assert r.weight == -1.0
 
-    def test_criteria_result_passed_none(self):
+    def test_criteria_result_met_none(self):
         r = CriteriaResult(criteria="test", weight=1.0, met=None, reasoning="error")
         assert r.met is None
         data = r.model_dump()
@@ -226,7 +226,8 @@ class TestPydanticModels:
 
     def test_evaluation_info(self):
         info = EvaluationInfo(
-            score=5.0,
+            reward=0.5,
+            raw_score=3.0,
             minimum_score=-1.0,
             maximum_score=6.0,
             criteria_results=[
@@ -235,7 +236,8 @@ class TestPydanticModels:
                 CriteriaResult(criteria="c3", weight=-1.0, met=False, reasoning="avoided"),
             ],
         )
-        assert info.score == 5.0
+        assert info.reward == 0.5
+        assert info.raw_score == 3.0
         assert info.minimum_score == -1.0
         assert info.maximum_score == 6.0
         assert len(info.criteria_results) == 3
@@ -263,7 +265,8 @@ class TestPydanticModels:
 
     def test_evaluation_info_errored_fields(self):
         info = EvaluationInfo(
-            score=0.5,
+            reward=0.5,
+            raw_score=1.0,
             criteria_results=[
                 CriteriaResult(criteria="c1", weight=1.0, met=True, reasoning="ok"),
                 CriteriaResult(criteria="c2", weight=1.0, met=None, reasoning="error"),
@@ -276,7 +279,8 @@ class TestPydanticModels:
 
     def test_evaluation_info_errored_fields_default(self):
         info = EvaluationInfo(
-            score=1.0,
+            reward=1.0,
+            raw_score=1.0,
             criteria_results=[
                 CriteriaResult(criteria="c1", weight=1.0, met=True, reasoning="ok"),
             ],

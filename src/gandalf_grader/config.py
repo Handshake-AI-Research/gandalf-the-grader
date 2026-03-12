@@ -118,7 +118,8 @@ class CriteriaResult(BaseModel):
 class EvaluationInfo(BaseModel):
     """Full evaluation output with score, per-criteria results, and LLM usage."""
 
-    score: float
+    reward: float
+    raw_score: float
     minimum_score: float = 0.0
     maximum_score: float = 0.0
     criteria_results: list[CriteriaResult]

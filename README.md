@@ -163,11 +163,11 @@ export OTEL_EXPORTER_OTLP_TRACES_PROTOCOL=http/protobuf
 
 The grader writes to `output_dir` (default `/logs/verifier`):
 
-- `reward.json` — Reward file: `{"score": 2.5}` (raw sum of weights for met criteria; can be negative)
-- `info.json` — Per-criteria results with `met`/not-met, reasoning, evidence, LLM usage, and `minimum_score`/`maximum_score` bounds
+- `reward.json` — Reward file: `{"score": 0.75}` (normalised to [0, 1])
+- `info.json` — Per-criteria results with `met`/not-met, reasoning, evidence, LLM usage, plus `reward`, `raw_score`, `minimum_score`, and `maximum_score`
 - `judge_trace_<i>.txt` — stdout/stderr capture for each judge invocation
 
-Score is the raw sum of weights for all criteria whose condition was met, rounded to 4 decimal places. The calling framework is responsible for any normalization. `info.json` includes `minimum_score` (sum of negative weights) and `maximum_score` (sum of positive weights) for reference.
+The `score` in `reward.json` is `clip(0, 1, raw_score / sum_of_positive_weights)`, always in [0, 1]. `info.json` additionally includes `raw_score` (the unnormalised sum of weights for met criteria, which can be negative) and `minimum_score`/`maximum_score` bounds for reference.
 
 ## Development
 

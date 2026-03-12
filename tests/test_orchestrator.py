@@ -370,9 +370,9 @@ def _cr(weight: float, met: bool | None) -> CriteriaResult:
 
 
 class TestScoring:
-    """Tests for _write_info raw scoring formula."""
+    """Tests for _write_info scoring: raw_score, reward, and bounds."""
 
-    def _score_and_info(self, results: list[CriteriaResult], tmp_path) -> dict:
+    def _info(self, results: list[CriteriaResult], tmp_path) -> dict:
         """Run _write_info and return parsed info.json."""
         config = _make_config(output_dir=str(tmp_path))
         errored = sum(1 for r in results if r.met is None)
@@ -380,73 +380,126 @@ class TestScoring:
         with open(tmp_path / "info.json") as f:
             return json.load(f)
 
-    def _score(self, results: list[CriteriaResult], tmp_path) -> float:
-        return self._score_and_info(results, tmp_path)["score"]
+    def _raw(self, results: list[CriteriaResult], tmp_path) -> float:
+        return self._info(results, tmp_path)["raw_score"]
 
-    def test_all_positive_all_pass(self, tmp_path):
+    def _reward(self, results: list[CriteriaResult], tmp_path) -> float:
+        return self._info(results, tmp_path)["reward"]
+
+    # -- raw_score tests --
+
+    def test_all_positive_all_met(self, tmp_path):
         results = [_cr(2.0, True), _cr(3.0, True)]
-        assert self._score(results, tmp_path) == 5.0
+        assert self._raw(results, tmp_path) == 5.0
 
-    def test_all_positive_none_pass(self, tmp_path):
+    def test_all_positive_none_met(self, tmp_path):
         results = [_cr(2.0, False), _cr(3.0, False)]
-        assert self._score(results, tmp_path) == 0.0
+        assert self._raw(results, tmp_path) == 0.0
 
     def test_all_positive_partial(self, tmp_path):
         results = [_cr(2.0, True), _cr(3.0, False)]
-        assert self._score(results, tmp_path) == 2.0
+        assert self._raw(results, tmp_path) == 2.0
 
-    def test_negative_weight_passed_is_penalty(self, tmp_path):
-        """Negative weight criterion passed → weight added (negative contribution)."""
+    def test_negative_weight_met_is_penalty(self, tmp_path):
+        """Negative weight criterion met → weight added (negative contribution)."""
         results = [_cr(3.0, True), _cr(-1.0, True)]
-        assert self._score(results, tmp_path) == 2.0  # 3 + (-1)
+        assert self._raw(results, tmp_path) == 2.0  # 3 + (-1)
 
-    def test_negative_weight_failed_no_penalty(self, tmp_path):
-        """Negative weight criterion failed → no contribution."""
+    def test_negative_weight_not_met_no_penalty(self, tmp_path):
+        """Negative weight criterion not met → no contribution."""
         results = [_cr(3.0, True), _cr(-1.0, False)]
-        assert self._score(results, tmp_path) == 3.0
+        assert self._raw(results, tmp_path) == 3.0
 
-    def test_all_negative_all_passed(self, tmp_path):
+    def test_all_negative_all_met(self, tmp_path):
         results = [_cr(-2.0, True), _cr(-3.0, True)]
-        assert self._score(results, tmp_path) == -5.0
+        assert self._raw(results, tmp_path) == -5.0
 
-    def test_all_negative_none_passed(self, tmp_path):
+    def test_all_negative_none_met(self, tmp_path):
         results = [_cr(-2.0, False), _cr(-3.0, False)]
-        assert self._score(results, tmp_path) == 0.0
+        assert self._raw(results, tmp_path) == 0.0
 
     def test_mixed_scenario(self, tmp_path):
-        """Positive pass + positive fail + negative pass + negative fail."""
+        """Positive met + positive not-met + negative met + negative not-met."""
         results = [
             _cr(10.0, True),   # +10
             _cr(5.0, False),   # +0
             _cr(-3.0, True),   # -3
             _cr(-2.0, False),  # +0
         ]
-        assert self._score(results, tmp_path) == 7.0
+        assert self._raw(results, tmp_path) == 7.0
 
     def test_empty_results(self, tmp_path):
-        assert self._score([], tmp_path) == 0.0
+        assert self._raw([], tmp_path) == 0.0
+
+    def test_errored_criteria_contribute_zero(self, tmp_path):
+        """Errored criteria (met=None) contribute 0 to raw_score."""
+        results = [_cr(3.0, True), _cr(2.0, None)]
+        assert self._raw(results, tmp_path) == 3.0
+
+    def test_errored_negative_criteria_contribute_zero(self, tmp_path):
+        """Errored negative-weight criteria (met=None) contribute 0, not the penalty."""
+        results = [_cr(3.0, True), _cr(-2.0, None)]
+        assert self._raw(results, tmp_path) == 3.0
+
+    # -- reward tests (clipped normalised) --
+
+    def test_reward_all_positive_all_met(self, tmp_path):
+        """All positive met → reward = 1.0."""
+        results = [_cr(2.0, True), _cr(3.0, True)]
+        assert self._reward(results, tmp_path) == 1.0
+
+    def test_reward_all_positive_none_met(self, tmp_path):
+        """None met → reward = 0.0."""
+        results = [_cr(2.0, False), _cr(3.0, False)]
+        assert self._reward(results, tmp_path) == 0.0
+
+    def test_reward_partial(self, tmp_path):
+        """2.0 met out of 5.0 positive → reward = 0.4."""
+        results = [_cr(2.0, True), _cr(3.0, False)]
+        assert self._reward(results, tmp_path) == 0.4
+
+    def test_reward_penalty_reduces(self, tmp_path):
+        """Positive 3.0 met, negative -1.0 met → raw 2.0 / max 3.0 ≈ 0.6667."""
+        results = [_cr(3.0, True), _cr(-1.0, True)]
+        assert self._reward(results, tmp_path) == 0.6667
+
+    def test_reward_clipped_at_zero(self, tmp_path):
+        """All negative met, no positive met → raw < 0, reward clipped to 0."""
+        results = [_cr(-2.0, True), _cr(-3.0, True)]
+        assert self._reward(results, tmp_path) == 0.0
+
+    def test_reward_no_positive_weights(self, tmp_path):
+        """Only negative weights → max_score = 0 → reward = 0."""
+        results = [_cr(-1.0, False)]
+        assert self._reward(results, tmp_path) == 0.0
+
+    def test_reward_empty(self, tmp_path):
+        """Empty results → reward = 0."""
+        assert self._reward([], tmp_path) == 0.0
+
+    def test_reward_mixed_scenario(self, tmp_path):
+        """10 met + 5 not-met + -3 met → raw 7.0 / max 15.0 ≈ 0.4667."""
+        results = [
+            _cr(10.0, True),
+            _cr(5.0, False),
+            _cr(-3.0, True),
+            _cr(-2.0, False),
+        ]
+        assert self._reward(results, tmp_path) == 0.4667
+
+    # -- bounds --
 
     def test_minimum_and_maximum_score(self, tmp_path):
         results = [_cr(10.0, True), _cr(5.0, False), _cr(-3.0, True)]
-        info = self._score_and_info(results, tmp_path)
+        info = self._info(results, tmp_path)
         assert info["minimum_score"] == -3.0
         assert info["maximum_score"] == 15.0
 
     def test_minimum_maximum_all_positive(self, tmp_path):
         results = [_cr(2.0, True), _cr(3.0, True)]
-        info = self._score_and_info(results, tmp_path)
+        info = self._info(results, tmp_path)
         assert info["minimum_score"] == 0.0
         assert info["maximum_score"] == 5.0
-
-    def test_errored_criteria_contribute_zero(self, tmp_path):
-        """Errored criteria (met=None) contribute 0 to score."""
-        results = [_cr(3.0, True), _cr(2.0, None)]
-        assert self._score(results, tmp_path) == 3.0
-
-    def test_errored_negative_criteria_contribute_zero(self, tmp_path):
-        """Errored negative-weight criteria (met=None) contribute 0, not the penalty."""
-        results = [_cr(3.0, True), _cr(-2.0, None)]
-        assert self._score(results, tmp_path) == 3.0
 
 
 class TestOutputFilePermissions:
@@ -573,7 +626,7 @@ class TestRetryLogic:
         assert info["errored_criteria_count"] == 0
 
         reward = json.loads((tmp_path / "output" / "reward.json").read_text())
-        assert reward["score"] == 2.0  # raw: 1.0 + 1.0
+        assert reward["score"] == 1.0  # all met: 2.0 / 2.0 = 1.0
 
     @patch("gandalf_grader.__main__.resolve_judge_guidance", return_value="")
     @patch("gandalf_grader.__main__.load_trajectory_final_output", return_value="done")
@@ -629,7 +682,7 @@ class TestRetryLogic:
         assert info["errored_criteria_count"] == 0
 
         reward = json.loads((tmp_path / "output" / "reward.json").read_text())
-        assert reward["score"] == 3.0
+        assert reward["score"] == 1.0  # all met: 3.0 / 3.0 = 1.0
 
     @patch("gandalf_grader.__main__.resolve_judge_guidance", return_value="")
     @patch("gandalf_grader.__main__.load_trajectory_final_output", return_value="done")
@@ -749,7 +802,7 @@ class TestRetryLogic:
             main()
 
         reward = json.loads((tmp_path / "output" / "reward.json").read_text())
-        assert reward["score"] == 1.0
+        assert reward["score"] == 0.5  # c1 met, c2 not: 1.0 / 2.0 = 0.5
 
         info = json.loads((tmp_path / "output" / "info.json").read_text())
         assert info["errored_criteria_count"] == 0
