@@ -8,7 +8,7 @@ Supports two evaluation modes (configured via ``mode`` in the TOML config):
   - **batch**: all criteria evaluated in a single agent session.
 
 Produces:
-  /logs/verifier/reward.json  - Reward file (weighted score)
+  /logs/verifier/reward.json  - Reward file ([0,1] reward)
   /logs/verifier/info.json    - Detailed per-criteria results + LLM usage
 """
 
@@ -155,7 +155,7 @@ def evaluate_criteria(
     try:
         clone_dir = _clone_workspace(judge_input.workdir)
     except Exception as e:
-        return {"passed": None, "reasoning": f"Failed to clone workspace: {e}"}
+        return {"met": None, "reasoning": f"Failed to clone workspace: {e}"}
 
     cloned_input = judge_input.model_copy(update={"workdir": clone_dir})
 
@@ -208,7 +208,7 @@ def evaluate_criteria(
 
         if result.returncode != 0:
             return {
-                "passed": None,
+                "met": None,
                 "reasoning": f"Judge process failed (exit {result.returncode}): {result.stderr[:500]}",
             }
 
@@ -218,9 +218,9 @@ def evaluate_criteria(
 
     except subprocess.TimeoutExpired:
         _save_trace(trace_path, "", "Judge execution timed out.", -1)
-        return {"passed": None, "reasoning": "Judge execution timed out."}
+        return {"met": None, "reasoning": "Judge execution timed out."}
     except (json.JSONDecodeError, FileNotFoundError) as e:
-        return {"passed": None, "reasoning": f"Failed to read judge output: {e}"}
+        return {"met": None, "reasoning": f"Failed to read judge output: {e}"}
     finally:
         shutil.rmtree(clone_dir, ignore_errors=True)
         for path in (input_path, output_path):
@@ -230,7 +230,7 @@ def evaluate_criteria(
 
 def _fail_all(n: int, reason: str) -> list[dict[str, Any]]:
     """Return *n* fail verdicts that all share the same reason."""
-    return [{"index": i, "passed": None, "reasoning": reason, "evidence": []} for i in range(n)]
+    return [{"index": i, "met": None, "reasoning": reason, "evidence": []} for i in range(n)]
 
 
 def evaluate_all_criteria(
@@ -249,7 +249,7 @@ def evaluate_all_criteria(
 
     Returns:
         (verdicts, llm_usage) where verdicts is a list of dicts each with
-        ``index``, ``passed``, ``reasoning``, ``evidence``, and llm_usage
+        ``index``, ``met``, ``reasoning``, ``evidence``, and llm_usage
         is the aggregate token/cost dict for the single batch session.
     """
     n_criteria = len(judge_input.criteria)
@@ -392,13 +392,13 @@ def _run_sequential(
         result = CriteriaResult(
             criteria=item.criteria,
             weight=item.weight,
-            passed=verdict.get("passed"),
+            met=verdict.get("met"),
             reasoning=verdict.get("reasoning", "No reasoning provided."),
             evidence=verdict.get("evidence", []),
         )
         results.append(result)
 
-        status = "PASS" if result.passed is True else ("ERROR" if result.passed is None else "FAIL")
+        status = "MET" if result.met is True else ("ERROR" if result.met is None else "UNMET")
         print(f"  -> {status}: {result.reasoning[:120]}")
 
     return results, total_usage
@@ -416,7 +416,7 @@ def _run_batch(
     totals from the single batch agent session.
     """
     criteria_list = [
-        BatchCriterion(index=i, criteria=item.criteria, weight=item.weight)
+        BatchCriterion(index=i, criteria=item.criteria)
         for i, item in enumerate(rubric)
     ]
 
@@ -454,21 +454,21 @@ def _run_batch(
         result = CriteriaResult(
             criteria=item.criteria,
             weight=item.weight,
-            passed=v.get("passed"),
+            met=v.get("met"),
             reasoning=v.get("reasoning", "No reasoning provided."),
             evidence=v.get("evidence", []),
         )
         results.append(result)
 
-        status = "PASS" if result.passed is True else ("ERROR" if result.passed is None else "FAIL")
+        status = "MET" if result.met is True else ("ERROR" if result.met is None else "UNMET")
         print(f"  [{i + 1}/{len(rubric)}] {status}: {result.reasoning[:120]}")
 
     return results, llm_usage
 
 
 def _get_errored_indices(results: list[CriteriaResult]) -> list[int]:
-    """Return indices of criteria where passed is None (infrastructure error)."""
-    return [i for i, r in enumerate(results) if r.passed is None]
+    """Return indices of criteria where met is None (infrastructure error)."""
+    return [i for i, r in enumerate(results) if r.met is None]
 
 
 def _retry_sequential(
@@ -510,12 +510,12 @@ def _retry_sequential(
         results[idx] = CriteriaResult(
             criteria=item.criteria,
             weight=item.weight,
-            passed=verdict.get("passed"),
+            met=verdict.get("met"),
             reasoning=verdict.get("reasoning", "No reasoning provided."),
             evidence=verdict.get("evidence", []),
         )
 
-        status = "PASS" if results[idx].passed is True else ("ERROR" if results[idx].passed is None else "FAIL")
+        status = "MET" if results[idx].met is True else ("ERROR" if results[idx].met is None else "UNMET")
         print(f"    -> {status}: {results[idx].reasoning[:120]}")
 
 
@@ -529,9 +529,8 @@ def _retry_batch(
     errored_indices: list[int],
 ) -> None:
     """Re-run errored criteria as a batch and merge results in-place."""
-    # Build 0-based re-indexed criteria for the retry batch
     retry_criteria = [
-        BatchCriterion(index=new_idx, criteria=rubric[orig_idx].criteria, weight=rubric[orig_idx].weight)
+        BatchCriterion(index=new_idx, criteria=rubric[orig_idx].criteria)
         for new_idx, orig_idx in enumerate(errored_indices)
     ]
 
@@ -563,19 +562,18 @@ def _retry_batch(
     for key in ("cost_usd", "prompt_tokens", "completion_tokens", "cache_read_tokens"):
         llm_usage[key] = llm_usage.get(key, 0) + retry_usage.get(key, 0)
 
-    # Map retry results (0-based) back to original indices
     for new_idx, orig_idx in enumerate(errored_indices):
         v = verdicts[new_idx] if new_idx < len(verdicts) else {}
         results[orig_idx] = CriteriaResult(
             criteria=rubric[orig_idx].criteria,
             weight=rubric[orig_idx].weight,
-            passed=v.get("passed"),
+            met=v.get("met"),
             reasoning=v.get("reasoning", "No reasoning provided."),
             evidence=v.get("evidence", []),
         )
 
-        passed = results[orig_idx].passed
-        status = "PASS" if passed is True else ("ERROR" if passed is None else "FAIL")
+        met = results[orig_idx].met
+        status = "MET" if met is True else ("ERROR" if met is None else "UNMET")
         print(f"    [{orig_idx}] {status}: {results[orig_idx].reasoning[:120]}")
 
 
@@ -584,16 +582,25 @@ def _write_info(
     results: list[CriteriaResult],
     llm_usage: dict[str, Any],
     errored_criteria_count: int,
-) -> float:
-    """Compute score and ALWAYS write info.json. Returns the score."""
-    total_weight = sum(r.weight for r in results)
-    # Errored criteria (passed=None) contribute 0 and stay in the denominator,
-    # so the score is pessimistic.  This is fine because hard-fail paths skip
-    # reward.json — info.json is diagnostic only.
-    score = round(
-        sum(r.weight * (1.0 if r.passed is True else 0.0) for r in results) / total_weight
-        if total_weight > 0
-        else 0.0,
+) -> tuple[float, float]:
+    """Compute reward and raw score, ALWAYS write info.json. Returns (reward, raw_score).
+
+    raw_score: sum of weights for criteria whose condition was met (negative weights
+    contribute when their criterion is met).  Errored criteria (met=None) contribute 0.
+
+    reward: clip(0, 1, raw_score / sum_of_positive_weights).  This is the
+    reward written to reward.json — always in [0, 1].
+    """
+    raw_score = round(
+        sum(r.weight for r in results if r.met is True),
+        4,
+    )
+
+    minimum_score = round(sum(r.weight for r in results if r.weight < 0), 4)
+    maximum_score = round(sum(r.weight for r in results if r.weight > 0), 4)
+
+    reward = round(
+        max(0.0, min(1.0, raw_score / maximum_score)) if maximum_score > 0 else 0.0,
         4,
     )
 
@@ -602,7 +609,10 @@ def _write_info(
     evaluated_pct = round((n_evaluated / n_total * 100.0) if n_total > 0 else 100.0, 2)
 
     info = EvaluationInfo(
-        score=score,
+        reward=reward,
+        raw_score=raw_score,
+        minimum_score=minimum_score,
+        maximum_score=maximum_score,
         criteria_results=results,
         llm_usage={
             "model": config.model,
@@ -617,7 +627,7 @@ def _write_info(
     with open(os.path.join(config.output_dir, "info.json"), "w") as f:
         f.write(info.model_dump_json(indent=2))
 
-    return score
+    return reward, raw_score
 
 
 def main() -> None:
@@ -673,7 +683,7 @@ def main() -> None:
     # 4. ALWAYS write info.json (even on hard fail)
     final_errored = _get_errored_indices(results)
     errored_count = len(final_errored)
-    score = _write_info(config, results, llm_usage, errored_count)
+    reward, raw_score = _write_info(config, results, llm_usage, errored_count)
 
     total_cost = llm_usage.get("cost_usd", 0)
     total_prompt = llm_usage.get("prompt_tokens", 0)
@@ -689,14 +699,11 @@ def main() -> None:
         print(f"info.json written to {config.output_dir}/ (reward.json NOT written)", file=sys.stderr)
         sys.exit(1)
 
-    # 6. All resolved — write reward.json (Harbor expects exactly {"score": <float>})
-    reward = {
-        "score": score,
-    }
+    # 6. All resolved — write reward.json
     with open(os.path.join(config.output_dir, "reward.json"), "w") as f:
-        json.dump(reward, f, indent=2)
+        json.dump({"reward": reward}, f, indent=2)
 
-    print(f"\nScore: {score}")
+    print(f"\nReward: {reward} (raw: {raw_score})")
     if total_cost > 0:
         print(
             f"Verifier LLM cost: ${total_cost:.4f} "

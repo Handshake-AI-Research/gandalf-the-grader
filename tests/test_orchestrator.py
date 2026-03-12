@@ -13,11 +13,12 @@ from gandalf_grader.__main__ import (
     _JUDGE_ENV_ALLOWLIST,
     _clone_workspace,
     _judge_env_vars,
+    _write_info,
     evaluate_all_criteria,
     evaluate_criteria,
     resolve_judge_guidance,
 )
-from gandalf_grader.config import BatchJudgeInput, JudgeInput, VerifierConfig
+from gandalf_grader.config import BatchJudgeInput, CriteriaResult, JudgeInput, RubricItem, VerifierConfig
 
 
 def _make_config(**overrides) -> VerifierConfig:
@@ -136,7 +137,7 @@ def _make_batch_input(tmp_path, n=2) -> BatchJudgeInput:
         instructions="do a thing",
         final_output="done",
         criteria=[
-            {"index": i, "criteria": f"criterion {i}", "weight": 1.0}
+            {"index": i, "criteria": f"criterion {i}"}
             for i in range(n)
         ],
         workdir=str(tmp_path),
@@ -174,8 +175,8 @@ class TestEvaluateAllCriteria:
         mock_clone.return_value = str(tmp_path)
         output_content = {
             "verdicts": [
-                {"index": 0, "passed": True, "reasoning": "ok", "evidence": []},
-                {"index": 1, "passed": False, "reasoning": "no", "evidence": []},
+                {"index": 0, "met": True, "reasoning": "ok", "evidence": []},
+                {"index": 1, "met": False, "reasoning": "no", "evidence": []},
             ],
             "llm_usage": {"cost_usd": 0.1, "prompt_tokens": 500},
         }
@@ -189,8 +190,8 @@ class TestEvaluateAllCriteria:
         )
 
         assert len(verdicts) == 2
-        assert verdicts[0]["passed"] is True
-        assert verdicts[1]["passed"] is False
+        assert verdicts[0]["met"] is True
+        assert verdicts[1]["met"] is False
         assert usage["cost_usd"] == 0.1
 
     @patch("gandalf_grader.__main__._clone_workspace")
@@ -200,8 +201,8 @@ class TestEvaluateAllCriteria:
         mock_clone.return_value = str(tmp_path)
 
         legacy_verdicts = [
-            {"index": 0, "passed": True, "reasoning": "ok", "evidence": []},
-            {"index": 1, "passed": False, "reasoning": "no", "evidence": []},
+            {"index": 0, "met": True, "reasoning": "ok", "evidence": []},
+            {"index": 1, "met": False, "reasoning": "no", "evidence": []},
         ]
         mock_run.side_effect = _make_run_writing(legacy_verdicts)
 
@@ -213,7 +214,7 @@ class TestEvaluateAllCriteria:
         )
 
         assert len(verdicts) == 2
-        assert verdicts[0]["passed"] is True
+        assert verdicts[0]["met"] is True
         assert usage == {}
 
     @patch("gandalf_grader.__main__._clone_workspace")
@@ -231,7 +232,7 @@ class TestEvaluateAllCriteria:
         )
 
         assert len(verdicts) == 2
-        assert all(v["passed"] is None for v in verdicts)
+        assert all(v["met"] is None for v in verdicts)
         assert "Unexpected JSON type" in verdicts[0]["reasoning"]
         assert usage == {}
 
@@ -250,7 +251,7 @@ class TestEvaluateAllCriteria:
         )
 
         assert len(verdicts) == 1
-        assert verdicts[0]["passed"] is None
+        assert verdicts[0]["met"] is None
         assert usage == {}
 
     @patch("gandalf_grader.__main__._clone_workspace")
@@ -287,7 +288,7 @@ class TestEvaluateAllCriteria:
         )
 
         assert len(verdicts) == 2
-        assert all(v["passed"] is None for v in verdicts)
+        assert all(v["met"] is None for v in verdicts)
         assert "exit 1" in verdicts[0]["reasoning"]
         assert usage == {}
 
@@ -306,7 +307,7 @@ class TestEvaluateAllCriteria:
         )
 
         assert len(verdicts) == 2
-        assert all(v["passed"] is None for v in verdicts)
+        assert all(v["met"] is None for v in verdicts)
         assert "timed out" in verdicts[0]["reasoning"].lower()
         assert usage == {}
 
@@ -333,7 +334,7 @@ class TestEvaluateAllCriteria:
         )
 
         assert len(verdicts) == 1
-        assert verdicts[0]["passed"] is None
+        assert verdicts[0]["met"] is None
         assert usage == {}
 
     @patch("gandalf_grader.__main__._clone_workspace")
@@ -354,8 +355,118 @@ class TestEvaluateAllCriteria:
         )
 
         assert len(verdicts) == 2
-        assert all(v["passed"] is None for v in verdicts)
+        assert all(v["met"] is None for v in verdicts)
         assert usage == {}
+
+
+def _cr(weight: float, met: bool | None) -> CriteriaResult:
+    """Helper to build a CriteriaResult for scoring tests."""
+    return CriteriaResult(
+        criteria="test",
+        weight=weight,
+        met=met,
+        reasoning="test",
+    )
+
+
+class TestScoring:
+    """Tests for _write_info scoring: raw_score, reward, and bounds.
+
+    Each test asserts both raw_score and reward together so the full
+    scoring pipeline is verified in one place per scenario.
+    """
+
+    def _info(self, results: list[CriteriaResult], tmp_path) -> dict:
+        """Run _write_info and return parsed info.json."""
+        config = _make_config(output_dir=str(tmp_path))
+        errored = sum(1 for r in results if r.met is None)
+        _write_info(config, results, {}, errored)
+        with open(tmp_path / "info.json") as f:
+            return json.load(f)
+
+    # -- core scenarios (raw_score + reward together) --
+
+    def test_all_positive_all_met(self, tmp_path):
+        """weights=[2,3], met=[T,T] → raw=5, reward=1.0, min=0, max=5."""
+        info = self._info([_cr(2.0, True), _cr(3.0, True)], tmp_path)
+        assert info["raw_score"] == 5.0
+        assert info["reward"] == 1.0
+        assert info["minimum_score"] == 0.0
+        assert info["maximum_score"] == 5.0
+
+    def test_all_positive_partial_met(self, tmp_path):
+        """weights=[2,3], met=[T,F] → raw=2, reward=0.4."""
+        info = self._info([_cr(2.0, True), _cr(3.0, False)], tmp_path)
+        assert info["raw_score"] == 2.0
+        assert info["reward"] == 0.4
+
+    def test_all_positive_none_met(self, tmp_path):
+        """weights=[2,3], met=[F,F] → raw=0, reward=0.0."""
+        info = self._info([_cr(2.0, False), _cr(3.0, False)], tmp_path)
+        assert info["raw_score"] == 0.0
+        assert info["reward"] == 0.0
+
+    def test_mixed_negative_penalty_applied(self, tmp_path):
+        """weights=[3,-1], met=[T,T] → raw=2, reward=2/3."""
+        info = self._info([_cr(3.0, True), _cr(-1.0, True)], tmp_path)
+        assert info["raw_score"] == 2.0
+        assert info["reward"] == 0.6667
+
+    def test_mixed_negative_drives_below_zero_clipped(self, tmp_path):
+        """weights=[1,-3], met=[F,T] → raw=-3, reward=0.0 (clip lower bound)."""
+        info = self._info([_cr(1.0, False), _cr(-3.0, True)], tmp_path)
+        assert info["raw_score"] == -3.0
+        assert info["reward"] == 0.0
+
+    def test_negative_not_met_no_penalty(self, tmp_path):
+        """weights=[3,-1], met=[T,F] → raw=3, reward=1.0."""
+        info = self._info([_cr(3.0, True), _cr(-1.0, False)], tmp_path)
+        assert info["raw_score"] == 3.0
+        assert info["reward"] == 1.0
+
+    def test_all_negative_denominator_zero(self, tmp_path):
+        """weights=[-2,-3], met=[T,T] → raw=-5, reward=0.0 (no divide-by-zero)."""
+        info = self._info([_cr(-2.0, True), _cr(-3.0, True)], tmp_path)
+        assert info["raw_score"] == -5.0
+        assert info["reward"] == 0.0
+
+    def test_empty_rubric(self, tmp_path):
+        """No criteria → raw=0, reward=0."""
+        info = self._info([], tmp_path)
+        assert info["raw_score"] == 0.0
+        assert info["reward"] == 0.0
+
+    def test_errored_positive_criterion(self, tmp_path):
+        """weights=[3,2], met=[T,None] → raw=3, reward=3/5=0.6."""
+        info = self._info([_cr(3.0, True), _cr(2.0, None)], tmp_path)
+        assert info["raw_score"] == 3.0
+        assert info["reward"] == 0.6
+
+    def test_errored_negative_criterion(self, tmp_path):
+        """weights=[3,-2], met=[T,None] → raw=3, reward=3/3=1.0."""
+        info = self._info([_cr(3.0, True), _cr(-2.0, None)], tmp_path)
+        assert info["raw_score"] == 3.0
+        assert info["reward"] == 1.0
+
+    # -- info.json shape --
+
+    def test_info_json_contains_reward_and_raw_score(self, tmp_path):
+        """info.json must contain both reward and raw_score fields."""
+        info = self._info([_cr(2.0, True), _cr(3.0, False)], tmp_path)
+        assert "reward" in info
+        assert "raw_score" in info
+        assert isinstance(info["reward"], float)
+        assert isinstance(info["raw_score"], (int, float))
+
+    def test_info_json_no_legacy_score_field(self, tmp_path):
+        """The old 'score' key must not appear in info.json."""
+        info = self._info([_cr(1.0, True)], tmp_path)
+        assert "score" not in info
+
+    def test_info_json_contains_minimum_and_maximum_score(self, tmp_path):
+        info = self._info([_cr(10.0, True), _cr(5.0, False), _cr(-3.0, True)], tmp_path)
+        assert info["minimum_score"] == -3.0
+        assert info["maximum_score"] == 15.0
 
 
 class TestOutputFilePermissions:
@@ -465,10 +576,10 @@ class TestRetryLogic:
 
         # First call: c1 passes, c2 errors. Retry: c2 passes.
         mock_eval.side_effect = [
-            {"passed": True, "reasoning": "ok", "evidence": ["e1"]},
-            {"passed": None, "reasoning": "timeout"},
+            {"met": True, "reasoning": "ok", "evidence": ["e1"]},
+            {"met": None, "reasoning": "timeout"},
             # retry for c2
-            {"passed": True, "reasoning": "ok on retry", "evidence": ["e2"]},
+            {"met": True, "reasoning": "ok on retry", "evidence": ["e2"]},
         ]
 
         from gandalf_grader.__main__ import main
@@ -477,12 +588,12 @@ class TestRetryLogic:
             main()
 
         info = json.loads((tmp_path / "output" / "info.json").read_text())
-        assert info["criteria_results"][0]["passed"] is True
-        assert info["criteria_results"][1]["passed"] is True
+        assert info["criteria_results"][0]["met"] is True
+        assert info["criteria_results"][1]["met"] is True
         assert info["errored_criteria_count"] == 0
 
         reward = json.loads((tmp_path / "output" / "reward.json").read_text())
-        assert reward["score"] == 1.0
+        assert reward["reward"] == 1.0  # all met: 2.0 / 2.0 = 1.0
 
     @patch("gandalf_grader.__main__.resolve_judge_guidance", return_value="")
     @patch("gandalf_grader.__main__.load_trajectory_final_output", return_value="done")
@@ -514,16 +625,14 @@ class TestRetryLogic:
             RubricItem(criteria="c3", weight=1.0),
         ]
 
-        # Initial batch: c1 passes, c2 errors, c3 errors
         initial_verdicts = [
-            {"index": 0, "passed": True, "reasoning": "ok", "evidence": []},
-            {"index": 1, "passed": None, "reasoning": "timeout", "evidence": []},
-            {"index": 2, "passed": None, "reasoning": "crash", "evidence": []},
+            {"index": 0, "met": True, "reasoning": "ok", "evidence": []},
+            {"index": 1, "met": None, "reasoning": "timeout", "evidence": []},
+            {"index": 2, "met": None, "reasoning": "crash", "evidence": []},
         ]
-        # Retry batch (re-indexed 0,1 -> original 1,2): both pass
         retry_verdicts = [
-            {"index": 0, "passed": True, "reasoning": "ok retry", "evidence": []},
-            {"index": 1, "passed": True, "reasoning": "ok retry 2", "evidence": []},
+            {"index": 0, "met": True, "reasoning": "ok retry", "evidence": []},
+            {"index": 1, "met": True, "reasoning": "ok retry 2", "evidence": []},
         ]
         mock_eval_all.side_effect = [
             (initial_verdicts, {"cost_usd": 0.1}),
@@ -536,11 +645,11 @@ class TestRetryLogic:
             main()
 
         info = json.loads((tmp_path / "output" / "info.json").read_text())
-        assert all(r["passed"] is True for r in info["criteria_results"])
+        assert all(r["met"] is True for r in info["criteria_results"])
         assert info["errored_criteria_count"] == 0
 
         reward = json.loads((tmp_path / "output" / "reward.json").read_text())
-        assert reward["score"] == 1.0
+        assert reward["reward"] == 1.0  # all met: 3.0 / 3.0 = 1.0
 
     @patch("gandalf_grader.__main__.resolve_judge_guidance", return_value="")
     @patch("gandalf_grader.__main__.load_trajectory_final_output", return_value="done")
@@ -567,7 +676,7 @@ class TestRetryLogic:
             mode="sequential",
         )
         mock_rubric.return_value = [RubricItem(criteria="c1", weight=1.0)]
-        mock_eval.return_value = {"passed": None, "reasoning": "timeout"}
+        mock_eval.return_value = {"met": None, "reasoning": "timeout"}
 
         from gandalf_grader.__main__ import main
 
@@ -576,12 +685,8 @@ class TestRetryLogic:
                 main()
             assert exc_info.value.code == 1
 
-        # info.json MUST be written even on hard fail
         assert (tmp_path / "output" / "info.json").exists()
-        # reward.json must NOT be written
         assert not (tmp_path / "output" / "reward.json").exists()
-
-        # Only 1 call — no retry
         assert mock_eval.call_count == 1
 
     @patch("gandalf_grader.__main__.resolve_judge_guidance", return_value="")
@@ -609,8 +714,7 @@ class TestRetryLogic:
             mode="sequential",
         )
         mock_rubric.return_value = [RubricItem(criteria="c1", weight=1.0)]
-        # Both initial and retry fail
-        mock_eval.return_value = {"passed": None, "reasoning": "always fails"}
+        mock_eval.return_value = {"met": None, "reasoning": "always fails"}
 
         from gandalf_grader.__main__ import main
 
@@ -620,7 +724,7 @@ class TestRetryLogic:
             assert exc_info.value.code == 1
 
         info = json.loads((tmp_path / "output" / "info.json").read_text())
-        assert info["criteria_results"][0]["passed"] is None
+        assert info["criteria_results"][0]["met"] is None
         assert info["errored_criteria_count"] == 1
         assert not (tmp_path / "output" / "reward.json").exists()
 
@@ -629,10 +733,10 @@ class TestRetryLogic:
     @patch("gandalf_grader.__main__.load_rubric")
     @patch("gandalf_grader.__main__.load_config")
     @patch("gandalf_grader.__main__.evaluate_criteria")
-    def test_all_resolved_after_retry_includes_errored_count_in_reward(
+    def test_all_resolved_after_retry(
         self, mock_eval, mock_config, mock_rubric, mock_trajectory, mock_guidance, tmp_path
     ):
-        """After retry resolves all errors: reward.json includes errored_criteria_count."""
+        """After retry resolves all errors: reward.json written with correct reward."""
         from gandalf_grader.config import RubricItem
 
         output_dir = str(tmp_path / "output")
@@ -653,11 +757,10 @@ class TestRetryLogic:
             RubricItem(criteria="c2", weight=1.0),
         ]
 
-        # c1 passes, c2 errors initially, succeeds on retry (passes as False = legit fail)
         mock_eval.side_effect = [
-            {"passed": True, "reasoning": "ok", "evidence": []},
-            {"passed": None, "reasoning": "timeout"},
-            {"passed": False, "reasoning": "genuinely failed", "evidence": []},
+            {"met": True, "reasoning": "ok", "evidence": []},
+            {"met": None, "reasoning": "timeout"},
+            {"met": False, "reasoning": "genuinely failed", "evidence": []},
         ]
 
         from gandalf_grader.__main__ import main
@@ -666,10 +769,59 @@ class TestRetryLogic:
             main()
 
         reward = json.loads((tmp_path / "output" / "reward.json").read_text())
-        assert reward["score"] == 0.5
+        assert reward["reward"] == 0.5  # c1 met, c2 not: 1.0 / 2.0 = 0.5
 
         info = json.loads((tmp_path / "output" / "info.json").read_text())
         assert info["errored_criteria_count"] == 0
+
+    @patch("gandalf_grader.__main__.resolve_judge_guidance", return_value="")
+    @patch("gandalf_grader.__main__.load_trajectory_final_output", return_value="done")
+    @patch("gandalf_grader.__main__.load_rubric")
+    @patch("gandalf_grader.__main__.load_config")
+    @patch("gandalf_grader.__main__.evaluate_criteria")
+    def test_reward_json_with_negative_weights(
+        self, mock_eval, mock_config, mock_rubric, mock_trajectory, mock_guidance, tmp_path
+    ):
+        """reward.json must contain the [0,1] reward, not the raw score,
+        when negative-weight criteria are present."""
+        from gandalf_grader.config import RubricItem
+
+        output_dir = str(tmp_path / "output")
+        os.makedirs(output_dir, exist_ok=True)
+
+        mock_config.return_value = VerifierConfig(
+            instructions="test",
+            rubric_path="/rubric.json",
+            workdir=str(tmp_path),
+            trajectory_path="/logs/trajectory.json",
+            sandbox_user="sandbox",
+            output_dir=output_dir,
+            judge_retries=0,
+            mode="sequential",
+        )
+        mock_rubric.return_value = [
+            RubricItem(criteria="correct output", weight=3.0),
+            RubricItem(criteria="used hardcoded values", weight=-1.0),
+        ]
+
+        # Both criteria met: raw = 3 + (-1) = 2, reward = 2/3 ≈ 0.6667
+        mock_eval.side_effect = [
+            {"met": True, "reasoning": "ok", "evidence": []},
+            {"met": True, "reasoning": "hardcoded detected", "evidence": []},
+        ]
+
+        from gandalf_grader.__main__ import main
+
+        with patch("sys.argv", ["prog", "--config", "dummy.toml"]):
+            main()
+
+        reward = json.loads((tmp_path / "output" / "reward.json").read_text())
+        info = json.loads((tmp_path / "output" / "info.json").read_text())
+
+        assert reward["reward"] == 0.6667
+        assert info["raw_score"] == 2.0
+        assert info["reward"] == 0.6667
+        assert reward["reward"] == info["reward"]
 
 
 class TestCloneWorkspace:
