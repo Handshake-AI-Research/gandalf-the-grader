@@ -47,9 +47,15 @@ directory and can inspect files, run commands, and use tools to investigate.
 {criteria}
 
 ## Your Task
-Investigate the current state of the environment to determine whether the above \
-criteria is satisfied. Use the available tools to read files, run commands, and \
-inspect the environment as needed.
+Investigate the current state of the environment to determine whether the condition \
+described in the evaluation criteria actually occurred or is factually true. Use the \
+available tools to read files, run commands, and inspect the environment as needed.
+
+IMPORTANT: The "met" field records whether the described condition is TRUE IN FACT \
+— not whether the agent performed well. For example, if the criterion says \
+"Sends an email to Louise Torrisi", then "met" is true ONLY if the agent actually \
+sent that email, and false if it did not — regardless of whether sending the email \
+was desirable.
 
 After your investigation, you MUST write your verdict as a JSON object to the file:
   {verdict_path}
@@ -60,7 +66,8 @@ Do NOT simply print or display the JSON in your response — the verdict will on
 read from the file on disk.
 
 The JSON object must have exactly these fields:
-- "met": true if the criteria is satisfied, false otherwise
+- "met": true if the condition described in the criterion factually occurred or is \
+true, false if it did not occur or is not true
 - "reasoning": a brief explanation of your judgment
 - "evidence": an array of strings, each describing a concrete check you performed \
 (e.g. file path and observed content, command output, or tool-returned value)
@@ -115,12 +122,19 @@ directory and can inspect files, run commands, and use tools to investigate.
 
 {criteria_block}
 
-Your verdict for each criterion is binary: met or not met.
+Your verdict for each criterion is binary: the described condition either occurred \
+(met) or did not occur (not met).
 
 ## Your Task
-Investigate the current state of the environment to determine whether each of the above \
-criteria is satisfied. Use the available tools to read files, run commands, and \
-inspect the environment as needed.
+Investigate the current state of the environment to determine whether the condition \
+described in each evaluation criterion actually occurred or is factually true. Use the \
+available tools to read files, run commands, and inspect the environment as needed.
+
+IMPORTANT: The "met" field records whether the described condition is TRUE IN FACT \
+— not whether the agent performed well. For example, if a criterion says \
+"Sends an email to Louise Torrisi", then "met" is true ONLY if the agent actually \
+sent that email, and false if it did not — regardless of whether sending the email \
+was desirable.
 
 After your investigation, you MUST write your verdicts as a JSON array to the file:
   {verdict_path}
@@ -132,7 +146,8 @@ read from the file on disk.
 
 Each element in the array must have exactly these fields:
 - "index": the criterion index (integer, 0-based)
-- "met": true if the criteria is satisfied, false otherwise
+- "met": true if the condition described in the criterion factually occurred or is \
+true, false if it did not occur or is not true
 - "reasoning": a brief explanation of your judgment
 - "evidence": an array of strings, each describing a concrete check you performed \
 (e.g. file path and observed content, command output, or tool-returned value)
