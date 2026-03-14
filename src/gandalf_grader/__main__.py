@@ -188,6 +188,10 @@ def evaluate_criteria(
             "-u",
             sandbox_user,
             "env",
+            # Set HOME to the cloned workspace so the judge process (and any
+            # SDK it imports, e.g. OpenHands) writes ephemeral state to a
+            # writable, isolated directory instead of the original user's home.
+            f"HOME={clone_dir}",
             *_judge_env_vars(),
             "gandalf-grader-judge",
             "--input",
@@ -291,6 +295,10 @@ def evaluate_all_criteria(
             "-u",
             sandbox_user,
             "env",
+            # Set HOME to the cloned workspace so the judge process (and any
+            # SDK it imports, e.g. OpenHands) writes ephemeral state to a
+            # writable, isolated directory instead of the original user's home.
+            f"HOME={clone_dir}",
             *_judge_env_vars(),
             "gandalf-grader-judge",
             "--input",

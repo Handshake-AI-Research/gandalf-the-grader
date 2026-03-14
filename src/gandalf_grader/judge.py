@@ -306,6 +306,13 @@ def _run_agent_session(
     The agent writes its output to a file (path embedded in *prompt*).
     Returns a dict of LLM usage metrics (may be empty if extraction fails).
     """
+    # Pin HOME to the judge workspace before importing the OpenHands SDK.
+    # The SDK writes state to ~/.openhands/ (profiles, agents, etc.) on init.
+    # Without this, HOME may point to a directory owned by a different user
+    # (e.g. /home/agent when the judge runs as judge-sandbox via sudo),
+    # causing PermissionError on mkdir.
+    os.environ["HOME"] = workdir
+
     from openhands.sdk import LLM, Agent, Conversation, Tool
     from openhands.tools.file_editor import FileEditorTool
     from openhands.tools.terminal import TerminalTool
