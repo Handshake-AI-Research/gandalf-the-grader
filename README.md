@@ -177,11 +177,12 @@ The `reward` in `reward.json` is `clip(0, 1, raw_score / sum_of_positive_weights
 ```bash
 git clone https://github.com/Handshake-AI-Research/gandalf-the-grader.git
 cd gandalf-the-grader
-uv sync --dev
-uv run pytest
-uv run ruff check src/ tests/
-uv run mypy src/
+hatch test
+hatch fmt --check
+hatch run types:check
 ```
+
+See [DEVELOPMENT.md](DEVELOPMENT.md) for full setup details.
 
 ## License
 
