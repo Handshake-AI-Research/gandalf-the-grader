@@ -1,6 +1,7 @@
 """Tests for gandalf_grader.config."""
 
 import os
+import pathlib
 
 import pytest
 from pydantic import ValidationError
@@ -20,7 +21,7 @@ FIXTURES = os.path.join(os.path.dirname(__file__), "fixtures")
 
 
 class TestLoadConfig:
-    def test_parses_all_fields(self):
+    def test_parses_all_fields(self) -> None:
         cfg = load_config(os.path.join(FIXTURES, "sample_verifier.toml"))
         assert cfg.model == "google/gemini-2.5-flash"
         assert cfg.sandbox_user == "sandbox"
@@ -31,7 +32,7 @@ class TestLoadConfig:
         assert cfg.output_dir == "/logs/verifier"
         assert cfg.judge_timeout == 120
 
-    def test_parses_mcp_servers(self):
+    def test_parses_mcp_servers(self) -> None:
         cfg = load_config(os.path.join(FIXTURES, "sample_verifier.toml"))
         assert len(cfg.mcp_servers) == 1
         mcp = cfg.mcp_servers[0]
@@ -40,7 +41,7 @@ class TestLoadConfig:
         assert mcp.command == "/usr/bin/mcp-server"
         assert mcp.args == ["--verbose"]
 
-    def test_defaults_model(self, tmp_path):
+    def test_defaults_model(self, tmp_path: pathlib.Path) -> None:
         toml_content = """\
 sandbox_user = "sandbox"
 instructions = "Do something."
@@ -53,7 +54,7 @@ trajectory_path = "/logs/trajectory.json"
         cfg = load_config(str(p))
         assert cfg.model == "google/gemini-2.5-flash"
 
-    def test_defaults_output_dir_and_timeout(self, tmp_path):
+    def test_defaults_output_dir_and_timeout(self, tmp_path: pathlib.Path) -> None:
         toml_content = """\
 model = "openai/gpt-4o"
 sandbox_user = "sandbox"
@@ -68,11 +69,11 @@ trajectory_path = "/logs/trajectory.json"
         assert cfg.output_dir == "/logs/verifier"
         assert cfg.judge_timeout == 300
 
-    def test_missing_file_raises(self):
+    def test_missing_file_raises(self) -> None:
         with pytest.raises(FileNotFoundError):
             load_config("/nonexistent/verifier.toml")
 
-    def test_missing_required_field_raises(self, tmp_path):
+    def test_missing_required_field_raises(self, tmp_path: pathlib.Path) -> None:
         p = tmp_path / "bad.toml"
         p.write_text('model = "x"\n')
         with pytest.raises(ValidationError):
@@ -80,24 +81,24 @@ trajectory_path = "/logs/trajectory.json"
 
 
 class TestLoadRubric:
-    def test_parses_items(self):
+    def test_parses_items(self) -> None:
         rubric = load_rubric(os.path.join(FIXTURES, "sample_rubric.json"))
         assert len(rubric) == 3
         assert rubric[0].criteria == "The file index.html exists in the workspace"
         assert rubric[0].weight == 1.0
         assert rubric[1].weight == 2.0
 
-    def test_empty_rubric(self, tmp_path):
+    def test_empty_rubric(self, tmp_path: pathlib.Path) -> None:
         p = tmp_path / "empty.json"
         p.write_text("[]")
         rubric = load_rubric(str(p))
         assert rubric == []
 
-    def test_missing_file_raises(self):
+    def test_missing_file_raises(self) -> None:
         with pytest.raises(FileNotFoundError):
             load_rubric("/nonexistent/rubric.json")
 
-    def test_parses_negative_weight_items(self):
+    def test_parses_negative_weight_items(self) -> None:
         rubric = load_rubric(os.path.join(FIXTURES, "sample_rubric_with_negatives.json"))
         assert len(rubric) == 3
         assert rubric[0].weight == 2.0
@@ -106,16 +107,16 @@ class TestLoadRubric:
 
 
 class TestPydanticModels:
-    def test_mcp_server_defaults(self):
+    def test_mcp_server_defaults(self) -> None:
         srv = MCPServer(name="test", command="/bin/test")
         assert srv.transport == "stdio"
         assert srv.args == []
 
-    def test_mcp_server_rejects_non_stdio_transport(self):
+    def test_mcp_server_rejects_non_stdio_transport(self) -> None:
         with pytest.raises(ValidationError):
-            MCPServer(name="test", command="/bin/test", transport="sse")
+            MCPServer(name="test", command="/bin/test", transport="sse")  # type: ignore[arg-type]
 
-    def test_verifier_config_has_trajectory_path(self):
+    def test_verifier_config_has_trajectory_path(self) -> None:
         cfg = VerifierConfig(
             instructions="test",
             rubric_path="/rubric.json",
@@ -126,7 +127,7 @@ class TestPydanticModels:
         assert cfg.trajectory_path == "/logs/trajectory.json"
         assert cfg.model == "google/gemini-2.5-flash"
 
-    def test_verifier_config_judge_guidance_path_defaults_none(self):
+    def test_verifier_config_judge_guidance_path_defaults_none(self) -> None:
         cfg = VerifierConfig(
             instructions="test",
             rubric_path="/rubric.json",
@@ -136,7 +137,7 @@ class TestPydanticModels:
         )
         assert cfg.judge_guidance_path is None
 
-    def test_verifier_config_judge_guidance_path_set(self):
+    def test_verifier_config_judge_guidance_path_set(self) -> None:
         cfg = VerifierConfig(
             instructions="test",
             rubric_path="/rubric.json",
@@ -147,7 +148,7 @@ class TestPydanticModels:
         )
         assert cfg.judge_guidance_path == "/opt/verifier/judge-guidance.md"
 
-    def test_judge_input_includes_final_output(self):
+    def test_judge_input_includes_final_output(self) -> None:
         ji = JudgeInput(
             model="test-model",
             instructions="test",
@@ -157,7 +158,7 @@ class TestPydanticModels:
         )
         assert ji.final_output == "agent said done"
 
-    def test_judge_input_guidance_defaults_empty(self):
+    def test_judge_input_guidance_defaults_empty(self) -> None:
         ji = JudgeInput(
             model="test-model",
             instructions="test",
@@ -167,7 +168,7 @@ class TestPydanticModels:
         )
         assert ji.judge_guidance == ""
 
-    def test_judge_input_guidance_roundtrip(self):
+    def test_judge_input_guidance_roundtrip(self) -> None:
         ji = JudgeInput(
             model="test-model",
             instructions="test",
@@ -180,27 +181,27 @@ class TestPydanticModels:
         restored = JudgeInput.model_validate_json(raw)
         assert restored.judge_guidance == "Use openpyxl for .xlsx files."
 
-    def test_verdict_defaults(self):
+    def test_verdict_defaults(self) -> None:
         v = Verdict(met=True, reasoning="ok")
         assert v.evidence == []
 
-    def test_verdict_with_evidence(self):
+    def test_verdict_with_evidence(self) -> None:
         v = Verdict(met=False, reasoning="fail", evidence=["check1", "check2"])
         assert len(v.evidence) == 2
 
-    def test_verdict_met_none(self):
+    def test_verdict_met_none(self) -> None:
         v = Verdict(met=None, reasoning="error")
         assert v.met is None
         data = v.model_dump()
         assert data["met"] is None
 
-    def test_verdict_none_serialization_roundtrip(self):
+    def test_verdict_none_serialization_roundtrip(self) -> None:
         v = Verdict(met=None, reasoning="error")
         raw = v.model_dump_json()
         restored = Verdict.model_validate_json(raw)
         assert restored.met is None
 
-    def test_criteria_result(self):
+    def test_criteria_result(self) -> None:
         r = CriteriaResult(
             criteria="test",
             weight=1.0,
@@ -209,7 +210,7 @@ class TestPydanticModels:
         )
         assert r.evidence == []
 
-    def test_criteria_result_negative_weight(self):
+    def test_criteria_result_negative_weight(self) -> None:
         r = CriteriaResult(
             criteria="used hardcoded values",
             weight=-1.0,
@@ -218,13 +219,13 @@ class TestPydanticModels:
         )
         assert r.weight == -1.0
 
-    def test_criteria_result_met_none(self):
+    def test_criteria_result_met_none(self) -> None:
         r = CriteriaResult(criteria="test", weight=1.0, met=None, reasoning="error")
         assert r.met is None
         data = r.model_dump()
         assert data["met"] is None
 
-    def test_evaluation_info(self):
+    def test_evaluation_info(self) -> None:
         info = EvaluationInfo(
             reward=0.5,
             raw_score=3.0,
@@ -242,7 +243,7 @@ class TestPydanticModels:
         assert info.maximum_score == 6.0
         assert len(info.criteria_results) == 3
 
-    def test_verifier_config_judge_retries_default(self):
+    def test_verifier_config_judge_retries_default(self) -> None:
         cfg = VerifierConfig(
             instructions="test",
             rubric_path="/rubric.json",
@@ -252,7 +253,7 @@ class TestPydanticModels:
         )
         assert cfg.judge_retries == 1
 
-    def test_verifier_config_judge_retries_explicit(self):
+    def test_verifier_config_judge_retries_explicit(self) -> None:
         cfg = VerifierConfig(
             instructions="test",
             rubric_path="/rubric.json",
@@ -263,7 +264,7 @@ class TestPydanticModels:
         )
         assert cfg.judge_retries == 3
 
-    def test_evaluation_info_errored_fields(self):
+    def test_evaluation_info_errored_fields(self) -> None:
         info = EvaluationInfo(
             reward=0.5,
             raw_score=1.0,
@@ -277,7 +278,7 @@ class TestPydanticModels:
         assert info.errored_criteria_count == 1
         assert info.evaluated_criteria_pct == 50.0
 
-    def test_evaluation_info_errored_fields_default(self):
+    def test_evaluation_info_errored_fields_default(self) -> None:
         info = EvaluationInfo(
             reward=1.0,
             raw_score=1.0,
@@ -288,7 +289,7 @@ class TestPydanticModels:
         assert info.errored_criteria_count == 0
         assert info.evaluated_criteria_pct == 100.0
 
-    def test_judge_input_model_copy(self):
+    def test_judge_input_model_copy(self) -> None:
         ji = JudgeInput(
             model="test-model",
             instructions="test",
@@ -300,7 +301,7 @@ class TestPydanticModels:
         assert cloned.workdir == "/new-workspace"
         assert ji.workdir == "/workspace"
 
-    def test_judge_input_serialization(self):
+    def test_judge_input_serialization(self) -> None:
         ji = JudgeInput(
             model="test-model",
             instructions="test",

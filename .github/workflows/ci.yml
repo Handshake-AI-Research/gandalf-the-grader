@@ -25,9 +25,10 @@ jobs:
       - name: Generate coverage report
         run: hatch run coverage:xml
       - name: Upload coverage report
+        if: ${{ !cancelled() }}
         uses: codecov/codecov-action@v5
         with:
-          fail_ci_if_error: true
+          fail_ci_if_error: false
           token: ${{ secrets.CODECOV_TOKEN }}
 
   typecheck:
