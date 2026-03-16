@@ -1,0 +1,23 @@
+name: Publish to PyPI
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    environment: pypi
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - uses: pypa/hatch@install
+      - name: Build
+        run: hatch build
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
