@@ -400,9 +400,7 @@ def run_judge(input_path: str, output_path: str) -> None:
 
     llm_usage: dict[str, Any] = {}
     try:
-        llm_usage = _run_agent_session(
-            judge_input.model, mcp_servers, judge_input.workdir, prompt
-        )
+        llm_usage = _run_agent_session(judge_input.model, mcp_servers, judge_input.workdir, prompt)
         verdict = _read_verdict(verdict_path)
         output = {
             "met": verdict.met,
@@ -462,9 +460,7 @@ def run_judge_batch(input_path: str, output_path: str) -> None:
 
     llm_usage: dict[str, Any] = {}
     try:
-        llm_usage = _run_agent_session(
-            judge_input.model, mcp_servers, judge_input.workdir, prompt
-        )
+        llm_usage = _run_agent_session(judge_input.model, mcp_servers, judge_input.workdir, prompt)
         verdicts = _read_batch_verdict(verdict_path, n_criteria)
     except Exception as e:
         verdicts = _fail_all_verdicts(

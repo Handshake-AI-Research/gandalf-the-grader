@@ -1,7 +1,9 @@
 """Tests for gandalf_grader.judge."""
 
 import json
+import pathlib
 import tempfile
+from typing import Any
 from unittest.mock import patch
 
 from gandalf_grader.judge import (
@@ -15,7 +17,7 @@ from gandalf_grader.judge import (
 
 
 class TestBuildJudgePrompt:
-    def test_contains_all_sections(self):
+    def test_contains_all_sections(self) -> None:
         prompt = build_judge_prompt(
             instructions="Build a web app",
             final_output="Done!",
@@ -27,7 +29,7 @@ class TestBuildJudgePrompt:
         assert "The file index.html exists" in prompt
         assert "/tmp/verdict.json" in prompt
 
-    def test_no_user_prompt_section(self):
+    def test_no_user_prompt_section(self) -> None:
         prompt = build_judge_prompt(
             instructions="x",
             final_output="z",
@@ -36,7 +38,7 @@ class TestBuildJudgePrompt:
         )
         assert "Agent's Prompt" not in prompt
 
-    def test_requests_evidence_field(self):
+    def test_requests_evidence_field(self) -> None:
         prompt = build_judge_prompt(
             instructions="x",
             final_output="z",
@@ -45,7 +47,7 @@ class TestBuildJudgePrompt:
         )
         assert '"evidence"' in prompt
 
-    def test_includes_json_example(self):
+    def test_includes_json_example(self) -> None:
         prompt = build_judge_prompt(
             instructions="x",
             final_output="z",
@@ -55,7 +57,7 @@ class TestBuildJudgePrompt:
         assert '"met"' in prompt
         assert '"reasoning"' in prompt
 
-    def test_guidance_included_when_provided(self):
+    def test_guidance_included_when_provided(self) -> None:
         guidance = "Use openpyxl to inspect .xlsx files. Do not cat binary files."
         prompt = build_judge_prompt(
             instructions="x",
@@ -66,7 +68,7 @@ class TestBuildJudgePrompt:
         )
         assert guidance in prompt
 
-    def test_no_guidance_block_when_empty(self):
+    def test_no_guidance_block_when_empty(self) -> None:
         prompt_empty = build_judge_prompt(
             instructions="x",
             final_output="z",
@@ -82,7 +84,7 @@ class TestBuildJudgePrompt:
         )
         assert prompt_empty == prompt_default
 
-    def test_guidance_appears_before_task_instructions(self):
+    def test_guidance_appears_before_task_instructions(self) -> None:
         guidance = "GUIDANCE_MARKER"
         prompt = build_judge_prompt(
             instructions="INSTRUCTIONS_MARKER",
@@ -93,7 +95,7 @@ class TestBuildJudgePrompt:
         )
         assert prompt.index("GUIDANCE_MARKER") < prompt.index("INSTRUCTIONS_MARKER")
 
-    def test_section_order_with_guidance(self):
+    def test_section_order_with_guidance(self) -> None:
         prompt = build_judge_prompt(
             instructions="INSTR",
             final_output="OUTPUT",
@@ -118,13 +120,13 @@ class TestMakeVerdictPath:
     has already made world-writable), so sandbox_user never needs /tmp write access.
     """
 
-    def test_default_uses_system_tmpdir(self):
+    def test_default_uses_system_tmpdir(self) -> None:
         path = _make_verdict_path()
         assert path.startswith(tempfile.gettempdir())
         assert "verdict_" in path
         assert path.endswith(".json")
 
-    def test_dir_overrides_tmpdir(self, tmp_path):
+    def test_dir_overrides_tmpdir(self, tmp_path: pathlib.Path) -> None:
         """When dir is provided the verdict path must be inside it, not in /tmp.
 
         This test fails on the pre-fix code (_make_verdict_path had no dir param)
@@ -136,7 +138,7 @@ class TestMakeVerdictPath:
             "not in /tmp — sandbox_user may lack /tmp write access"
         )
 
-    def test_run_judge_verdict_goes_to_workdir(self, tmp_path):
+    def test_run_judge_verdict_goes_to_workdir(self, tmp_path: pathlib.Path) -> None:
         """run_judge must pass workdir to _make_verdict_path, not rely on /tmp.
 
         This test fails on the pre-fix code (verdict_path always used /tmp)
@@ -155,18 +157,18 @@ class TestMakeVerdictPath:
 
         captured_verdict_dir = {}
 
-        def _fake_make_verdict_path(prefix="verdict_", dir=None):
+        def _fake_make_verdict_path(prefix: str = "verdict_", dir: str | None = None) -> str:
             captured_verdict_dir["dir"] = dir
             # Return a path inside tmp_path so the test can write the verdict
             p = str(tmp_path / f"{prefix}test.json")
-            (tmp_path / f"{prefix}test.json").write_text(
-                json.dumps({"met": True, "reasoning": "ok", "evidence": []})
-            )
+            (tmp_path / f"{prefix}test.json").write_text(json.dumps({"met": True, "reasoning": "ok", "evidence": []}))
             return p
 
-        with patch("gandalf_grader.judge._make_verdict_path", side_effect=_fake_make_verdict_path):
-            with patch("gandalf_grader.judge._run_agent_session", return_value={}):
-                run_judge(input_path, output_path)
+        with (
+            patch("gandalf_grader.judge._make_verdict_path", side_effect=_fake_make_verdict_path),
+            patch("gandalf_grader.judge._run_agent_session", return_value={}),
+        ):
+            run_judge(input_path, output_path)
 
         assert captured_verdict_dir.get("dir") == str(tmp_path), (
             f"run_judge passed dir={captured_verdict_dir.get('dir')!r} to _make_verdict_path "
@@ -176,7 +178,7 @@ class TestMakeVerdictPath:
 
 
 class TestReadVerdict:
-    def test_valid_verdict(self, tmp_path):
+    def test_valid_verdict(self, tmp_path: pathlib.Path) -> None:
         p = tmp_path / "verdict.json"
         p.write_text(
             json.dumps(
@@ -192,40 +194,40 @@ class TestReadVerdict:
         assert result.reasoning == "Looks good."
         assert result.evidence == ["checked file"]
 
-    def test_missing_evidence_defaults_to_empty(self, tmp_path):
+    def test_missing_evidence_defaults_to_empty(self, tmp_path: pathlib.Path) -> None:
         p = tmp_path / "verdict.json"
         p.write_text(json.dumps({"met": True, "reasoning": "ok"}))
         result = _read_verdict(str(p))
         assert result.met is True
         assert result.evidence == []
 
-    def test_judge_writes_null_met_preserved(self, tmp_path):
+    def test_judge_writes_null_met_preserved(self, tmp_path: pathlib.Path) -> None:
         """If the judge writes {"met": null}, it must stay None, not become False."""
         p = tmp_path / "verdict.json"
         p.write_text(json.dumps({"met": None, "reasoning": "judge errored internally"}))
         result = _read_verdict(str(p))
         assert result.met is None
 
-    def test_empty_file(self, tmp_path):
+    def test_empty_file(self, tmp_path: pathlib.Path) -> None:
         p = tmp_path / "verdict.json"
         p.write_text("")
         result = _read_verdict(str(p))
         assert result.met is None
         assert "empty" in result.reasoning.lower()
 
-    def test_missing_file(self):
+    def test_missing_file(self) -> None:
         result = _read_verdict("/nonexistent/verdict.json")
         assert result.met is None
         assert "did not write" in result.reasoning.lower()
 
-    def test_invalid_json(self, tmp_path):
+    def test_invalid_json(self, tmp_path: pathlib.Path) -> None:
         p = tmp_path / "verdict.json"
         p.write_text("not json at all")
         result = _read_verdict(str(p))
         assert result.met is None
         assert "invalid JSON" in result.reasoning
 
-    def test_missing_met_field(self, tmp_path):
+    def test_missing_met_field(self, tmp_path: pathlib.Path) -> None:
         p = tmp_path / "verdict.json"
         p.write_text(json.dumps({"reasoning": "no met field"}))
         result = _read_verdict(str(p))
@@ -234,7 +236,7 @@ class TestReadVerdict:
 
 
 class TestReadBatchVerdict:
-    def test_valid_batch(self, tmp_path):
+    def test_valid_batch(self, tmp_path: pathlib.Path) -> None:
         p = tmp_path / "verdict.json"
         p.write_text(
             json.dumps(
@@ -249,7 +251,7 @@ class TestReadBatchVerdict:
         assert results[0]["met"] is True
         assert results[1]["met"] is False
 
-    def test_missing_index_gets_default_fail(self, tmp_path):
+    def test_missing_index_gets_default_fail(self, tmp_path: pathlib.Path) -> None:
         p = tmp_path / "verdict.json"
         p.write_text(json.dumps([{"index": 0, "met": True, "reasoning": "ok"}]))
         results = _read_batch_verdict(str(p), 2)
@@ -257,21 +259,19 @@ class TestReadBatchVerdict:
         assert results[1]["met"] is None
         assert "did not return" in results[1]["reasoning"].lower()
 
-    def test_non_integer_index_skipped(self, tmp_path):
+    def test_non_integer_index_skipped(self, tmp_path: pathlib.Path) -> None:
         p = tmp_path / "verdict.json"
-        p.write_text(
-            json.dumps([{"index": "zero", "met": True, "reasoning": "ok"}])
-        )
+        p.write_text(json.dumps([{"index": "zero", "met": True, "reasoning": "ok"}]))
         results = _read_batch_verdict(str(p), 1)
         assert results[0]["met"] is None
 
-    def test_out_of_range_index_skipped(self, tmp_path):
+    def test_out_of_range_index_skipped(self, tmp_path: pathlib.Path) -> None:
         p = tmp_path / "verdict.json"
         p.write_text(json.dumps([{"index": 5, "met": True, "reasoning": "ok"}]))
         results = _read_batch_verdict(str(p), 2)
         assert all(r["met"] is None for r in results)
 
-    def test_duplicate_index_last_wins(self, tmp_path):
+    def test_duplicate_index_last_wins(self, tmp_path: pathlib.Path) -> None:
         p = tmp_path / "verdict.json"
         p.write_text(
             json.dumps(
@@ -285,25 +285,25 @@ class TestReadBatchVerdict:
         assert results[0]["met"] is True
         assert results[0]["reasoning"] == "second"
 
-    def test_empty_file(self, tmp_path):
+    def test_empty_file(self, tmp_path: pathlib.Path) -> None:
         p = tmp_path / "verdict.json"
         p.write_text("")
         results = _read_batch_verdict(str(p), 2)
         assert len(results) == 2
         assert all(r["met"] is None for r in results)
 
-    def test_missing_file(self):
+    def test_missing_file(self) -> None:
         results = _read_batch_verdict("/nonexistent/verdict.json", 2)
         assert len(results) == 2
         assert all(r["met"] is None for r in results)
 
-    def test_invalid_json(self, tmp_path):
+    def test_invalid_json(self, tmp_path: pathlib.Path) -> None:
         p = tmp_path / "verdict.json"
         p.write_text("not json")
         results = _read_batch_verdict(str(p), 1)
         assert results[0]["met"] is None
 
-    def test_non_array_json(self, tmp_path):
+    def test_non_array_json(self, tmp_path: pathlib.Path) -> None:
         p = tmp_path / "verdict.json"
         p.write_text(json.dumps({"not": "an array"}))
         results = _read_batch_verdict(str(p), 1)
@@ -318,7 +318,7 @@ MOCK_USAGE = {
 }
 
 
-def _make_judge_input_json(tmp_path, criteria="check something"):
+def _make_judge_input_json(tmp_path: pathlib.Path, criteria: str = "check something") -> str:
     """Write a minimal JudgeInput JSON file and return its path."""
     data = {
         "model": "test-model",
@@ -332,16 +332,13 @@ def _make_judge_input_json(tmp_path, criteria="check something"):
     return str(p)
 
 
-def _make_batch_judge_input_json(tmp_path, n=2):
+def _make_batch_judge_input_json(tmp_path: pathlib.Path, n: int = 2) -> str:
     """Write a minimal BatchJudgeInput JSON file and return its path."""
     data = {
         "model": "test-model",
         "instructions": "do a thing",
         "final_output": "done",
-        "criteria": [
-            {"index": i, "criteria": f"criterion {i}"}
-            for i in range(n)
-        ],
+        "criteria": [{"index": i, "criteria": f"criterion {i}"} for i in range(n)],
         "workdir": str(tmp_path),
     }
     p = tmp_path / "batch_input.json"
@@ -353,7 +350,7 @@ class TestRunJudge:
     """Tests for run_judge — mocks _run_agent_session to avoid OpenHands."""
 
     @patch("gandalf_grader.judge._run_agent_session", return_value=MOCK_USAGE)
-    def test_success_includes_usage(self, mock_session, tmp_path):
+    def test_success_includes_usage(self, mock_session: Any, tmp_path: pathlib.Path) -> None:
         input_path = _make_judge_input_json(tmp_path)
         output_path = str(tmp_path / "output.json")
 
@@ -372,7 +369,7 @@ class TestRunJudge:
         assert result["llm_usage"]["cost_usd"] == 0.05
 
     @patch("gandalf_grader.judge._run_agent_session", return_value=MOCK_USAGE)
-    def test_preserves_usage_when_verdict_missing(self, mock_session, tmp_path):
+    def test_preserves_usage_when_verdict_missing(self, mock_session: Any, tmp_path: pathlib.Path) -> None:
         """If _run_agent_session succeeds but verdict file is missing, cost is kept."""
         input_path = _make_judge_input_json(tmp_path)
         output_path = str(tmp_path / "output.json")
@@ -392,7 +389,7 @@ class TestRunJudge:
         "gandalf_grader.judge._run_agent_session",
         side_effect=RuntimeError("LLM exploded"),
     )
-    def test_session_failure_has_empty_usage(self, mock_session, tmp_path):
+    def test_session_failure_has_empty_usage(self, mock_session: Any, tmp_path: pathlib.Path) -> None:
         """If _run_agent_session itself raises, usage stays empty."""
         input_path = _make_judge_input_json(tmp_path)
         output_path = str(tmp_path / "output.json")
@@ -414,8 +411,8 @@ class TestRunJudge:
         side_effect=RuntimeError("Unexpected parsing error"),
     )
     def test_preserves_usage_when_read_verdict_raises(
-        self, mock_read, mock_session, tmp_path
-    ):
+        self, mock_read: Any, mock_session: Any, tmp_path: pathlib.Path
+    ) -> None:
         """If _read_verdict raises after the session ran, usage is still preserved."""
         input_path = _make_judge_input_json(tmp_path)
         output_path = str(tmp_path / "output.json")
@@ -437,7 +434,7 @@ class TestRunJudgeBatch:
     """Tests for run_judge_batch — mocks _run_agent_session to avoid OpenHands."""
 
     @patch("gandalf_grader.judge._run_agent_session", return_value=MOCK_USAGE)
-    def test_output_wraps_verdicts_and_usage(self, mock_session, tmp_path):
+    def test_output_wraps_verdicts_and_usage(self, mock_session: Any, tmp_path: pathlib.Path) -> None:
         input_path = _make_batch_judge_input_json(tmp_path, n=2)
         output_path = str(tmp_path / "output.json")
 
@@ -460,7 +457,7 @@ class TestRunJudgeBatch:
         assert data["llm_usage"]["cost_usd"] == 0.05
 
     @patch("gandalf_grader.judge._run_agent_session", return_value=MOCK_USAGE)
-    def test_no_per_verdict_usage_keys(self, mock_session, tmp_path):
+    def test_no_per_verdict_usage_keys(self, mock_session: Any, tmp_path: pathlib.Path) -> None:
         """Verdicts should NOT contain llm_usage — it's a sibling field."""
         input_path = _make_batch_judge_input_json(tmp_path, n=1)
         output_path = str(tmp_path / "output.json")
@@ -478,7 +475,7 @@ class TestRunJudgeBatch:
             assert "llm_usage" not in v
 
     @patch("gandalf_grader.judge._run_agent_session", return_value=MOCK_USAGE)
-    def test_preserves_usage_when_verdict_missing(self, mock_session, tmp_path):
+    def test_preserves_usage_when_verdict_missing(self, mock_session: Any, tmp_path: pathlib.Path) -> None:
         input_path = _make_batch_judge_input_json(tmp_path, n=2)
         output_path = str(tmp_path / "output.json")
 
@@ -496,7 +493,7 @@ class TestRunJudgeBatch:
         "gandalf_grader.judge._run_agent_session",
         side_effect=RuntimeError("LLM exploded"),
     )
-    def test_session_failure_has_empty_usage(self, mock_session, tmp_path):
+    def test_session_failure_has_empty_usage(self, mock_session: Any, tmp_path: pathlib.Path) -> None:
         input_path = _make_batch_judge_input_json(tmp_path, n=2)
         output_path = str(tmp_path / "output.json")
 
@@ -516,8 +513,8 @@ class TestRunJudgeBatch:
         side_effect=RuntimeError("Batch parsing blew up"),
     )
     def test_preserves_usage_when_read_batch_verdict_raises(
-        self, mock_read, mock_session, tmp_path
-    ):
+        self, mock_read: Any, mock_session: Any, tmp_path: pathlib.Path
+    ) -> None:
         """If _read_batch_verdict raises after the session ran, usage is preserved."""
         input_path = _make_batch_judge_input_json(tmp_path, n=2)
         output_path = str(tmp_path / "output.json")

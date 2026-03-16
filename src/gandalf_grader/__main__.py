@@ -423,20 +423,14 @@ def _run_batch(
     Returns (results, llm_usage) where llm_usage is the token/cost
     totals from the single batch agent session.
     """
-    criteria_list = [
-        BatchCriterion(index=i, criteria=item.criteria)
-        for i, item in enumerate(rubric)
-    ]
+    criteria_list = [BatchCriterion(index=i, criteria=item.criteria) for i, item in enumerate(rubric)]
 
     n_criteria = len(criteria_list)
     batch_timeout = config.judge_timeout * n_criteria
     if config.batch_timeout is not None:
         batch_timeout = min(batch_timeout, config.batch_timeout)
 
-    print(
-        f"[batch] Evaluating all {n_criteria} criteria in one session "
-        f"(timeout={batch_timeout}s)..."
-    )
+    print(f"[batch] Evaluating all {n_criteria} criteria in one session (timeout={batch_timeout}s)...")
 
     judge_input = BatchJudgeInput(
         model=config.model,
@@ -639,12 +633,8 @@ def _write_info(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(
-        description="Verifier: evaluate agent output via agent-as-judge"
-    )
-    parser.add_argument(
-        "--config", required=True, help="Path to verifier config TOML file"
-    )
+    parser = argparse.ArgumentParser(description="Verifier: evaluate agent output via agent-as-judge")
+    parser.add_argument("--config", required=True, help="Path to verifier config TOML file")
     parser.add_argument(
         "--mode",
         choices=["sequential", "batch"],
