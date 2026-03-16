@@ -7,9 +7,13 @@ build/
 .pytest_cache/
 .ruff_cache/
 .mypy_cache/
+.coverage
+htmlcov/
+site/
+*.egg
+.hatch/
 .DS_Store
 .env
 .env.*
 !.env.example
 .claude/
-.trunk/
