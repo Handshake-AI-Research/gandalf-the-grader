@@ -1,1 +1,3 @@
-__version__ = "0.4.2"
+from gandalf_grader.__about__ import __version__
+
+__all__ = ["__version__"]

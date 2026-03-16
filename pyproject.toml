@@ -1,6 +1,6 @@
 [project]
 name = "gandalf-grader"
-version = "0.4.2"
+dynamic = ["version"]
 description = "Agent-as-judge grading framework for evaluating AI agent outputs against rubric criteria"
 readme = "README.md"
 license = "Apache-2.0"
@@ -33,6 +33,9 @@ gandalf-grader-judge = "gandalf_grader.judge:main"
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[tool.hatch.version]
+path = "src/gandalf_grader/__about__.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/gandalf_grader"]
