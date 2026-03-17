@@ -16,23 +16,11 @@ import argparse
 import contextlib
 import json
 import os
-import re
 import secrets
 import tempfile
-from pathlib import Path
 from typing import Any
 
-import jinja2
-
-from gandalf_grader.config import BatchJudgeInput, JudgeInput, Verdict
-
-TEMPLATES_DIR = Path(__file__).parent / "templates"
-
-
-def _render_template(template_name: str, **variables: Any) -> str:
-    """Render a Jinja2 prompt template from the templates directory."""
-    template_str = (TEMPLATES_DIR / template_name).read_text()
-    return jinja2.Template(template_str).render(**variables)
+from gandalf.config import BatchJudgeInput, JudgeInput, Verdict
 
 
 def build_judge_prompt(
@@ -42,15 +30,61 @@ def build_judge_prompt(
     verdict_path: str,
     judge_guidance: str = "",
 ) -> str:
-    """Build the user message sent to kick off a single-criterion judge session."""
-    return _render_template(
-        "judge_single.j2",
-        instructions=instructions,
-        final_output=final_output,
-        criteria=criteria,
-        verdict_path=verdict_path,
-        judge_guidance=judge_guidance,
-    )
+    """Build the full prompt for the judge agent."""
+    guidance_block = f"\n\n{judge_guidance}\n" if judge_guidance else ""
+    return f"""\
+You are an expert judge evaluating whether an AI agent successfully completed a task \
+according to a specific evaluation criteria. You have access to the agent's working \
+directory and can inspect files, run commands, and use tools to investigate.
+{guidance_block}
+## Task Instructions (given to the agent)
+{instructions}
+
+## Agent's Final Output
+{final_output}
+
+## Evaluation Criteria
+{criteria}
+
+## Your Task
+Investigate the current state of the environment to determine whether the condition \
+described in the evaluation criteria actually occurred or is factually true. Use the \
+available tools to read files, run commands, and inspect the environment as needed.
+
+IMPORTANT: The "met" field records whether the described condition is TRUE IN FACT \
+— not whether the agent performed well. For example, if the criterion says \
+"Sends an email to Louise Torrisi", then "met" is true ONLY if the agent actually \
+sent that email, and false if it did not — regardless of whether sending the email \
+was desirable.
+
+After your investigation, you MUST write your verdict as a JSON object to the file:
+  {verdict_path}
+
+IMPORTANT: You must use the file_editor tool (create command) or the terminal tool \
+(e.g. cat <<'EOF' > {verdict_path}) to physically write the file to disk. \
+Do NOT simply print or display the JSON in your response — the verdict will only be \
+read from the file on disk.
+
+The JSON object must have exactly these fields:
+- "met": true if the condition described in the criterion factually occurred or is \
+true, false if it did not occur or is not true
+- "reasoning": a brief explanation of your judgment
+- "evidence": an array of strings, each describing a concrete check you performed \
+(e.g. file path and observed content, command output, or tool-returned value)
+
+Example:
+```json
+{{
+  "met": true,
+  "reasoning": "The file foo.txt exists and contains the expected content.",
+  "evidence": [
+    "Read /workspace/foo.txt: contains 'hello world'",
+    "Ran 'wc -l foo.txt': output '1 foo.txt'"
+  ]
+}}
+```
+
+Write ONLY valid JSON to that file, with no additional text."""
 
 
 def build_batch_judge_prompt(
@@ -65,41 +99,82 @@ def build_batch_judge_prompt(
     Mirrors build_judge_prompt but evaluates multiple criteria at once,
     writing a JSON array of verdicts instead of a single object.
     """
-    return _render_template(
-        "judge_batch.j2",
-        instructions=instructions,
-        final_output=final_output,
-        criteria=criteria,
-        verdict_path=verdict_path,
-        judge_guidance=judge_guidance,
-        n_max=len(criteria) - 1,
-    )
+    guidance_block = f"\n\n{judge_guidance}\n" if judge_guidance else ""
 
+    criteria_lines = []
+    for c in criteria:
+        criteria_lines.append(f"  [{c['index']}] {c['criteria']}")
+    criteria_block = "\n".join(criteria_lines)
+    n_max = len(criteria) - 1
 
-# ---------------------------------------------------------------------------
-# JSON sanitisation
-# ---------------------------------------------------------------------------
+    return f"""\
+You are an expert judge evaluating whether an AI agent successfully completed a task \
+according to multiple evaluation criteria. You have access to the agent's working \
+directory and can inspect files, run commands, and use tools to investigate.
+{guidance_block}
+## Task Instructions (given to the agent)
+{instructions}
 
-# Matches either a valid JSON escape (group 1) or an invalid backslash
-# (group 2). Valid JSON escapes: \\ \" \/ \b \f \n \r \t \uXXXX.
-_ESCAPE_RE = re.compile(r'(\\(?:["\\/bfnrt]|u[0-9a-fA-F]{4}))|(\\)')
+## Agent's Final Output
+{final_output}
 
+## Evaluation Criteria
 
-def _sanitize_json(raw: str) -> str:
-    """Fix invalid backslash escapes in LLM-generated JSON.
+{criteria_block}
 
-    LLM agents sometimes embed content containing literal backslashes
-    (e.g. Excel number formats like ``\\$#,##0``) without doubling them.
-    This turns each invalid ``\\X`` into ``\\\\X`` so ``json.loads`` can
-    parse the string, while leaving valid escapes untouched.
-    """
+Your verdict for each criterion is binary: the described condition either occurred \
+(met) or did not occur (not met).
 
-    def _fix(m: re.Match) -> str:
-        if m.group(1):          # valid escape — leave as-is
-            return m.group(1)
-        return "\\\\"           # invalid escape — double the backslash
+## Your Task
+Investigate the current state of the environment to determine whether the condition \
+described in each evaluation criterion actually occurred or is factually true. Use the \
+available tools to read files, run commands, and inspect the environment as needed.
 
-    return _ESCAPE_RE.sub(_fix, raw)
+IMPORTANT: The "met" field records whether the described condition is TRUE IN FACT \
+— not whether the agent performed well. For example, if a criterion says \
+"Sends an email to Louise Torrisi", then "met" is true ONLY if the agent actually \
+sent that email, and false if it did not — regardless of whether sending the email \
+was desirable.
+
+After your investigation, you MUST write your verdicts as a JSON array to the file:
+  {verdict_path}
+
+IMPORTANT: You must use the file_editor tool (create command) or the terminal tool \
+(e.g. cat <<'EOF' > {verdict_path}) to physically write the file to disk. \
+Do NOT simply print or display the JSON in your response — the verdict will only be \
+read from the file on disk.
+
+Each element in the array must have exactly these fields:
+- "index": the criterion index (integer, 0-based)
+- "met": true if the condition described in the criterion factually occurred or is \
+true, false if it did not occur or is not true
+- "reasoning": a brief explanation of your judgment
+- "evidence": an array of strings, each describing a concrete check you performed \
+(e.g. file path and observed content, command output, or tool-returned value)
+
+Example:
+```json
+[
+  {{
+    "index": 0,
+    "met": true,
+    "reasoning": "The file foo.txt exists and contains the expected content.",
+    "evidence": [
+      "Read /workspace/foo.txt: contains 'hello world'",
+      "Ran 'wc -l foo.txt': output '1 foo.txt'"
+    ]
+  }},
+  {{
+    "index": 1,
+    "met": false,
+    "reasoning": "The output is missing the required header.",
+    "evidence": ["Read /workspace/output.txt: no header line found"]
+  }}
+]
+```
+
+You MUST include a verdict for every criterion index (0 through {n_max}).
+Write ONLY valid JSON to that file, with no additional text."""
 
 
 # ---------------------------------------------------------------------------
@@ -114,7 +189,7 @@ def _read_verdict(verdict_path: str) -> Verdict:
             content = f.read().strip()
         if not content:
             return Verdict(met=None, reasoning="Judge agent wrote an empty verdict file.")
-        data = json.loads(_sanitize_json(content))
+        data = json.loads(content)
         if "met" not in data:
             return Verdict(met=None, reasoning=f"Verdict missing 'met' field: {content[:200]}")
         raw_met = data["met"]
@@ -149,7 +224,7 @@ def _read_batch_verdict(verdict_path: str, n_criteria: int) -> list[dict[str, An
                 "Judge agent wrote an empty verdict file.",
             )
 
-        verdicts_raw = json.loads(_sanitize_json(content))
+        verdicts_raw = json.loads(content)
         if not isinstance(verdicts_raw, list):
             return _fail_all_verdicts(
                 n_criteria,

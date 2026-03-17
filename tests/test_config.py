@@ -1,4 +1,4 @@
-"""Tests for gandalf_grader.config."""
+"""Tests for gandalf.config."""
 
 import os
 import pathlib
@@ -6,7 +6,7 @@ import pathlib
 import pytest
 from pydantic import ValidationError
 
-from gandalf_grader.config import (
+from gandalf.config import (
     CriteriaResult,
     EvaluationInfo,
     JudgeInput,

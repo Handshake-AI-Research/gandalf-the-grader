@@ -11,7 +11,7 @@ from unittest.mock import patch
 
 import pytest
 
-from gandalf_grader.__main__ import (
+from gandalf.__main__ import (
     _JUDGE_ENV_ALLOWLIST,
     _clone_workspace,
     _judge_env_vars,
@@ -20,7 +20,7 @@ from gandalf_grader.__main__ import (
     evaluate_all_criteria,
     resolve_judge_guidance,
 )
-from gandalf_grader.config import (
+from gandalf.config import (
     BatchCriterion,
     BatchJudgeInput,
     CriteriaResult,
@@ -175,8 +175,8 @@ def _make_run_writing(content: Any) -> Callable[..., subprocess.CompletedProcess
 class TestEvaluateAllCriteria:
     """Tests for evaluate_all_criteria IPC contract: dict, list, invalid shapes, failures."""
 
-    @patch("gandalf_grader.__main__._clone_workspace")
-    @patch("gandalf_grader.__main__.subprocess.run")
+    @patch("gandalf.__main__._clone_workspace")
+    @patch("gandalf.__main__.subprocess.run")
     def test_new_dict_shape(self, mock_run: Any, mock_clone: Any, tmp_path: pathlib.Path) -> None:
         """New object format: {verdicts: [...], llm_usage: {...}}."""
         mock_clone.return_value = str(tmp_path)
@@ -199,8 +199,8 @@ class TestEvaluateAllCriteria:
         assert verdicts[1]["met"] is False
         assert usage["cost_usd"] == 0.1
 
-    @patch("gandalf_grader.__main__._clone_workspace")
-    @patch("gandalf_grader.__main__.subprocess.run")
+    @patch("gandalf.__main__._clone_workspace")
+    @patch("gandalf.__main__.subprocess.run")
     def test_legacy_array_shape(self, mock_run: Any, mock_clone: Any, tmp_path: pathlib.Path) -> None:
         """Legacy format: bare JSON array of verdicts, no usage info."""
         mock_clone.return_value = str(tmp_path)
@@ -220,8 +220,8 @@ class TestEvaluateAllCriteria:
         assert verdicts[0]["met"] is True
         assert usage == {}
 
-    @patch("gandalf_grader.__main__._clone_workspace")
-    @patch("gandalf_grader.__main__.subprocess.run")
+    @patch("gandalf.__main__._clone_workspace")
+    @patch("gandalf.__main__.subprocess.run")
     def test_unexpected_json_type_string(self, mock_run: Any, mock_clone: Any, tmp_path: pathlib.Path) -> None:
         """If the output file contains a JSON string, return fail-all."""
         mock_clone.return_value = str(tmp_path)
@@ -237,8 +237,8 @@ class TestEvaluateAllCriteria:
         assert "Unexpected JSON type" in verdicts[0]["reasoning"]
         assert usage == {}
 
-    @patch("gandalf_grader.__main__._clone_workspace")
-    @patch("gandalf_grader.__main__.subprocess.run")
+    @patch("gandalf.__main__._clone_workspace")
+    @patch("gandalf.__main__.subprocess.run")
     def test_unexpected_json_type_number(self, mock_run: Any, mock_clone: Any, tmp_path: pathlib.Path) -> None:
         """If the output file contains a JSON number, return fail-all."""
         mock_clone.return_value = str(tmp_path)
@@ -253,8 +253,8 @@ class TestEvaluateAllCriteria:
         assert verdicts[0]["met"] is None
         assert usage == {}
 
-    @patch("gandalf_grader.__main__._clone_workspace")
-    @patch("gandalf_grader.__main__.subprocess.run")
+    @patch("gandalf.__main__._clone_workspace")
+    @patch("gandalf.__main__.subprocess.run")
     def test_dict_without_expected_keys(self, mock_run: Any, mock_clone: Any, tmp_path: pathlib.Path) -> None:
         """Dict output missing 'verdicts' key: defaults to empty verdicts list."""
         mock_clone.return_value = str(tmp_path)
@@ -268,8 +268,8 @@ class TestEvaluateAllCriteria:
         assert verdicts == []
         assert usage == {}
 
-    @patch("gandalf_grader.__main__._clone_workspace")
-    @patch("gandalf_grader.__main__.subprocess.run")
+    @patch("gandalf.__main__._clone_workspace")
+    @patch("gandalf.__main__.subprocess.run")
     def test_nonzero_exit_returns_fail_all(self, mock_run: Any, mock_clone: Any, tmp_path: pathlib.Path) -> None:
         """Non-zero exit code from subprocess returns fail-all with empty usage."""
         mock_clone.return_value = str(tmp_path)
@@ -285,8 +285,8 @@ class TestEvaluateAllCriteria:
         assert "exit 1" in verdicts[0]["reasoning"]
         assert usage == {}
 
-    @patch("gandalf_grader.__main__._clone_workspace")
-    @patch("gandalf_grader.__main__.subprocess.run")
+    @patch("gandalf.__main__._clone_workspace")
+    @patch("gandalf.__main__.subprocess.run")
     def test_timeout_returns_fail_all(self, mock_run: Any, mock_clone: Any, tmp_path: pathlib.Path) -> None:
         """Subprocess timeout returns fail-all with empty usage."""
         mock_clone.return_value = str(tmp_path)
@@ -302,8 +302,8 @@ class TestEvaluateAllCriteria:
         assert "timed out" in verdicts[0]["reasoning"].lower()
         assert usage == {}
 
-    @patch("gandalf_grader.__main__._clone_workspace")
-    @patch("gandalf_grader.__main__.subprocess.run")
+    @patch("gandalf.__main__._clone_workspace")
+    @patch("gandalf.__main__.subprocess.run")
     def test_invalid_json_in_output_file(self, mock_run: Any, mock_clone: Any, tmp_path: pathlib.Path) -> None:
         """Non-JSON content in output file returns fail-all."""
         mock_clone.return_value = str(tmp_path)
@@ -326,8 +326,8 @@ class TestEvaluateAllCriteria:
         assert verdicts[0]["met"] is None
         assert usage == {}
 
-    @patch("gandalf_grader.__main__._clone_workspace")
-    @patch("gandalf_grader.__main__.subprocess.run")
+    @patch("gandalf.__main__._clone_workspace")
+    @patch("gandalf.__main__.subprocess.run")
     def test_empty_output_file(self, mock_run: Any, mock_clone: Any, tmp_path: pathlib.Path) -> None:
         """If the judge wrote nothing to the output file, return fail-all."""
         mock_clone.return_value = str(tmp_path)
@@ -465,8 +465,8 @@ class TestOutputFilePermissions:
     existing file, not *create* one in a restricted directory.
     """
 
-    @patch("gandalf_grader.__main__._clone_workspace")
-    @patch("gandalf_grader.__main__.subprocess.run")
+    @patch("gandalf.__main__._clone_workspace")
+    @patch("gandalf.__main__.subprocess.run")
     def test_output_file_exists_before_subprocess(self, mock_run: Any, mock_clone: Any, tmp_path: pathlib.Path) -> None:
         """Output file must be pre-created so sandbox_user can write it without /tmp access."""
         mock_clone.return_value = str(tmp_path)
@@ -491,8 +491,8 @@ class TestOutputFilePermissions:
             "sandbox_user would need to create it in /tmp (may not be world-writable)"
         )
 
-    @patch("gandalf_grader.__main__._clone_workspace")
-    @patch("gandalf_grader.__main__.subprocess.run")
+    @patch("gandalf.__main__._clone_workspace")
+    @patch("gandalf.__main__.subprocess.run")
     def test_output_file_is_world_writable(self, mock_run: Any, mock_clone: Any, tmp_path: pathlib.Path) -> None:
         """Pre-created output file must have world-write so sandbox_user can overwrite it.
 
@@ -529,11 +529,11 @@ class TestOutputFilePermissions:
 class TestRetryLogic:
     """Tests for retry and hard-fail logic in main()."""
 
-    @patch("gandalf_grader.__main__.resolve_judge_guidance", return_value="")
-    @patch("gandalf_grader.__main__.load_trajectory_final_output", return_value="done")
-    @patch("gandalf_grader.__main__.load_rubric")
-    @patch("gandalf_grader.__main__.load_config")
-    @patch("gandalf_grader.__main__.evaluate_criteria")
+    @patch("gandalf.__main__.resolve_judge_guidance", return_value="")
+    @patch("gandalf.__main__.load_trajectory_final_output", return_value="done")
+    @patch("gandalf.__main__.load_rubric")
+    @patch("gandalf.__main__.load_config")
+    @patch("gandalf.__main__.evaluate_criteria")
     def test_sequential_retry_resolves_errored_criterion(
         self,
         mock_eval: Any,
@@ -571,7 +571,7 @@ class TestRetryLogic:
             {"met": True, "reasoning": "ok on retry", "evidence": ["e2"]},
         ]
 
-        from gandalf_grader.__main__ import main
+        from gandalf.__main__ import main
 
         with patch("sys.argv", ["prog", "--config", "dummy.toml"]):
             main()
@@ -584,11 +584,11 @@ class TestRetryLogic:
         reward = json.loads((tmp_path / "output" / "reward.json").read_text())
         assert reward["reward"] == 1.0  # all met: 2.0 / 2.0 = 1.0
 
-    @patch("gandalf_grader.__main__.resolve_judge_guidance", return_value="")
-    @patch("gandalf_grader.__main__.load_trajectory_final_output", return_value="done")
-    @patch("gandalf_grader.__main__.load_rubric")
-    @patch("gandalf_grader.__main__.load_config")
-    @patch("gandalf_grader.__main__.evaluate_all_criteria")
+    @patch("gandalf.__main__.resolve_judge_guidance", return_value="")
+    @patch("gandalf.__main__.load_trajectory_final_output", return_value="done")
+    @patch("gandalf.__main__.load_rubric")
+    @patch("gandalf.__main__.load_config")
+    @patch("gandalf.__main__.evaluate_all_criteria")
     def test_batch_retry_resolves_errored_criteria(
         self,
         mock_eval_all: Any,
@@ -633,7 +633,7 @@ class TestRetryLogic:
             (retry_verdicts, {"cost_usd": 0.05}),
         ]
 
-        from gandalf_grader.__main__ import main
+        from gandalf.__main__ import main
 
         with patch("sys.argv", ["prog", "--config", "dummy.toml"]):
             main()
@@ -645,11 +645,11 @@ class TestRetryLogic:
         reward = json.loads((tmp_path / "output" / "reward.json").read_text())
         assert reward["reward"] == 1.0  # all met: 3.0 / 3.0 = 1.0
 
-    @patch("gandalf_grader.__main__.resolve_judge_guidance", return_value="")
-    @patch("gandalf_grader.__main__.load_trajectory_final_output", return_value="done")
-    @patch("gandalf_grader.__main__.load_rubric")
-    @patch("gandalf_grader.__main__.load_config")
-    @patch("gandalf_grader.__main__.evaluate_criteria")
+    @patch("gandalf.__main__.resolve_judge_guidance", return_value="")
+    @patch("gandalf.__main__.load_trajectory_final_output", return_value="done")
+    @patch("gandalf.__main__.load_rubric")
+    @patch("gandalf.__main__.load_config")
+    @patch("gandalf.__main__.evaluate_criteria")
     def test_judge_retries_zero_disables_retry(
         self,
         mock_eval: Any,
@@ -677,7 +677,7 @@ class TestRetryLogic:
         mock_rubric.return_value = [RubricItem(criteria="c1", weight=1.0)]
         mock_eval.return_value = {"met": None, "reasoning": "timeout"}
 
-        from gandalf_grader.__main__ import main
+        from gandalf.__main__ import main
 
         with patch("sys.argv", ["prog", "--config", "dummy.toml"]):
             with pytest.raises(SystemExit) as exc_info:
@@ -688,11 +688,11 @@ class TestRetryLogic:
         assert not (tmp_path / "output" / "reward.json").exists()
         assert mock_eval.call_count == 1
 
-    @patch("gandalf_grader.__main__.resolve_judge_guidance", return_value="")
-    @patch("gandalf_grader.__main__.load_trajectory_final_output", return_value="done")
-    @patch("gandalf_grader.__main__.load_rubric")
-    @patch("gandalf_grader.__main__.load_config")
-    @patch("gandalf_grader.__main__.evaluate_criteria")
+    @patch("gandalf.__main__.resolve_judge_guidance", return_value="")
+    @patch("gandalf.__main__.load_trajectory_final_output", return_value="done")
+    @patch("gandalf.__main__.load_rubric")
+    @patch("gandalf.__main__.load_config")
+    @patch("gandalf.__main__.evaluate_criteria")
     def test_hard_fail_writes_info_not_reward(
         self,
         mock_eval: Any,
@@ -720,7 +720,7 @@ class TestRetryLogic:
         mock_rubric.return_value = [RubricItem(criteria="c1", weight=1.0)]
         mock_eval.return_value = {"met": None, "reasoning": "always fails"}
 
-        from gandalf_grader.__main__ import main
+        from gandalf.__main__ import main
 
         with patch("sys.argv", ["prog", "--config", "dummy.toml"]):
             with pytest.raises(SystemExit) as exc_info:
@@ -732,11 +732,11 @@ class TestRetryLogic:
         assert info["errored_criteria_count"] == 1
         assert not (tmp_path / "output" / "reward.json").exists()
 
-    @patch("gandalf_grader.__main__.resolve_judge_guidance", return_value="")
-    @patch("gandalf_grader.__main__.load_trajectory_final_output", return_value="done")
-    @patch("gandalf_grader.__main__.load_rubric")
-    @patch("gandalf_grader.__main__.load_config")
-    @patch("gandalf_grader.__main__.evaluate_criteria")
+    @patch("gandalf.__main__.resolve_judge_guidance", return_value="")
+    @patch("gandalf.__main__.load_trajectory_final_output", return_value="done")
+    @patch("gandalf.__main__.load_rubric")
+    @patch("gandalf.__main__.load_config")
+    @patch("gandalf.__main__.evaluate_criteria")
     def test_all_resolved_after_retry(
         self,
         mock_eval: Any,
@@ -772,7 +772,7 @@ class TestRetryLogic:
             {"met": False, "reasoning": "genuinely failed", "evidence": []},
         ]
 
-        from gandalf_grader.__main__ import main
+        from gandalf.__main__ import main
 
         with patch("sys.argv", ["prog", "--config", "dummy.toml"]):
             main()
@@ -783,11 +783,11 @@ class TestRetryLogic:
         info = json.loads((tmp_path / "output" / "info.json").read_text())
         assert info["errored_criteria_count"] == 0
 
-    @patch("gandalf_grader.__main__.resolve_judge_guidance", return_value="")
-    @patch("gandalf_grader.__main__.load_trajectory_final_output", return_value="done")
-    @patch("gandalf_grader.__main__.load_rubric")
-    @patch("gandalf_grader.__main__.load_config")
-    @patch("gandalf_grader.__main__.evaluate_criteria")
+    @patch("gandalf.__main__.resolve_judge_guidance", return_value="")
+    @patch("gandalf.__main__.load_trajectory_final_output", return_value="done")
+    @patch("gandalf.__main__.load_rubric")
+    @patch("gandalf.__main__.load_config")
+    @patch("gandalf.__main__.evaluate_criteria")
     def test_reward_json_with_negative_weights(
         self,
         mock_eval: Any,
@@ -824,7 +824,7 @@ class TestRetryLogic:
             {"met": True, "reasoning": "hardcoded detected", "evidence": []},
         ]
 
-        from gandalf_grader.__main__ import main
+        from gandalf.__main__ import main
 
         with patch("sys.argv", ["prog", "--config", "dummy.toml"]):
             main()

@@ -7,7 +7,7 @@ Unlike simple LLM-as-a-Judge verifiers, this verifier can grade outputs that are
 
 ## Overview
 
-`gandalf-grader` uses LLM-powered judge agents to evaluate whether an AI agent successfully completed a task. It is the production verifier component of the [rle-pkg](https://github.com/Handshake-AI-Research/rle-pkg) architecture.
+`gandalf-the-grader` uses LLM-powered judge agents to evaluate whether an AI agent successfully completed a task. It is the production verifier component of the [rle-pkg](https://github.com/Handshake-AI-Research/rle-pkg) architecture.
 
 Given a task description, a rubric of evaluation criteria, and the agent's trajectory, the grader spawns judge agents that inspect the agent's workspace — reading files, running commands, and using tools — to determine whether each criterion's condition is met. The final reward is always in [0, 1], with raw scoring details included in `info.json`.
 
@@ -15,8 +15,8 @@ Given a task description, a rubric of evaluation criteria, and the agent's traje
 
 The grader uses a two-process architecture:
 
-- **Outer orchestrator** (`gandalf-grader`) — runs as the verifier user, manages the evaluation loop, computes reward/raw scoring outputs, and writes output files.
-- **Inner judge** (`gandalf-grader-judge`) — runs as the sandbox user (via `sudo`), executes an [OpenHands](https://github.com/All-Hands-AI/OpenHands) agent-as-judge session that investigates the workspace and writes a verdict.
+- **Outer orchestrator** (`gandalf-the-grader`) — runs as the verifier user, manages the evaluation loop, computes reward/raw scoring outputs, and writes output files.
+- **Inner judge** (`gandalf-the-grader-judge`) — runs as the sandbox user (via `sudo`), executes an [OpenHands](https://github.com/All-Hands-AI/OpenHands) agent-as-judge session that investigates the workspace and writes a verdict.
 
 Two evaluation modes are supported (configured via `mode` in the TOML config):
 
@@ -67,7 +67,7 @@ Create a rubric (`rubric.json`):
 Run the grader:
 
 ```bash
-gandalf-grader --config /tests/verifier.toml
+gandalf-the-grader --config /tests/verifier.toml
 ```
 
 ## Configuration

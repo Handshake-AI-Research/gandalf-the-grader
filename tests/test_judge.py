@@ -1,4 +1,4 @@
-"""Tests for gandalf_grader.judge."""
+"""Tests for gandalf.judge."""
 
 import json
 import pathlib
@@ -6,7 +6,7 @@ import tempfile
 from typing import Any
 from unittest.mock import patch
 
-from gandalf_grader.judge import (
+from gandalf.judge import (
     _make_verdict_path,
     _read_batch_verdict,
     _read_verdict,
@@ -219,8 +219,8 @@ class TestMakeVerdictPath:
             return p
 
         with (
-            patch("gandalf_grader.judge._make_verdict_path", side_effect=_fake_make_verdict_path),
-            patch("gandalf_grader.judge._run_agent_session", return_value={}),
+            patch("gandalf.judge._make_verdict_path", side_effect=_fake_make_verdict_path),
+            patch("gandalf.judge._run_agent_session", return_value={}),
         ):
             run_judge(input_path, output_path)
 
@@ -433,7 +433,7 @@ def _make_batch_judge_input_json(tmp_path: pathlib.Path, n: int = 2) -> str:
 class TestRunJudge:
     """Tests for run_judge — mocks _run_agent_session to avoid OpenHands."""
 
-    @patch("gandalf_grader.judge._run_agent_session", return_value=MOCK_USAGE)
+    @patch("gandalf.judge._run_agent_session", return_value=MOCK_USAGE)
     def test_success_includes_usage(self, mock_session: Any, tmp_path: pathlib.Path) -> None:
         input_path = _make_judge_input_json(tmp_path)
         output_path = str(tmp_path / "output.json")
@@ -442,7 +442,7 @@ class TestRunJudge:
         # _make_verdict_path uses tempfile.gettempdir(), so we patch it.
         verdict_data = {"met": True, "reasoning": "ok", "evidence": ["e1"]}
         with patch(
-            "gandalf_grader.judge._make_verdict_path",
+            "gandalf.judge._make_verdict_path",
             return_value=str(tmp_path / "verdict.json"),
         ):
             (tmp_path / "verdict.json").write_text(json.dumps(verdict_data))
@@ -452,14 +452,14 @@ class TestRunJudge:
         assert result["met"] is True
         assert result["llm_usage"]["cost_usd"] == 0.05
 
-    @patch("gandalf_grader.judge._run_agent_session", return_value=MOCK_USAGE)
+    @patch("gandalf.judge._run_agent_session", return_value=MOCK_USAGE)
     def test_preserves_usage_when_verdict_missing(self, mock_session: Any, tmp_path: pathlib.Path) -> None:
         """If _run_agent_session succeeds but verdict file is missing, cost is kept."""
         input_path = _make_judge_input_json(tmp_path)
         output_path = str(tmp_path / "output.json")
 
         with patch(
-            "gandalf_grader.judge._make_verdict_path",
+            "gandalf.judge._make_verdict_path",
             return_value=str(tmp_path / "no_such_verdict.json"),
         ):
             run_judge(input_path, output_path)
@@ -470,7 +470,7 @@ class TestRunJudge:
         assert result["llm_usage"]["prompt_tokens"] == 1000
 
     @patch(
-        "gandalf_grader.judge._run_agent_session",
+        "gandalf.judge._run_agent_session",
         side_effect=RuntimeError("LLM exploded"),
     )
     def test_session_failure_has_empty_usage(self, mock_session: Any, tmp_path: pathlib.Path) -> None:
@@ -479,7 +479,7 @@ class TestRunJudge:
         output_path = str(tmp_path / "output.json")
 
         with patch(
-            "gandalf_grader.judge._make_verdict_path",
+            "gandalf.judge._make_verdict_path",
             return_value=str(tmp_path / "verdict.json"),
         ):
             run_judge(input_path, output_path)
@@ -489,9 +489,9 @@ class TestRunJudge:
         assert result["llm_usage"] == {}
         assert "LLM exploded" in result["reasoning"]
 
-    @patch("gandalf_grader.judge._run_agent_session", return_value=MOCK_USAGE)
+    @patch("gandalf.judge._run_agent_session", return_value=MOCK_USAGE)
     @patch(
-        "gandalf_grader.judge._read_verdict",
+        "gandalf.judge._read_verdict",
         side_effect=RuntimeError("Unexpected parsing error"),
     )
     def test_preserves_usage_when_read_verdict_raises(
@@ -502,7 +502,7 @@ class TestRunJudge:
         output_path = str(tmp_path / "output.json")
 
         with patch(
-            "gandalf_grader.judge._make_verdict_path",
+            "gandalf.judge._make_verdict_path",
             return_value=str(tmp_path / "verdict.json"),
         ):
             run_judge(input_path, output_path)
@@ -517,7 +517,7 @@ class TestRunJudge:
 class TestRunJudgeBatch:
     """Tests for run_judge_batch — mocks _run_agent_session to avoid OpenHands."""
 
-    @patch("gandalf_grader.judge._run_agent_session", return_value=MOCK_USAGE)
+    @patch("gandalf.judge._run_agent_session", return_value=MOCK_USAGE)
     def test_output_wraps_verdicts_and_usage(self, mock_session: Any, tmp_path: pathlib.Path) -> None:
         input_path = _make_batch_judge_input_json(tmp_path, n=2)
         output_path = str(tmp_path / "output.json")
@@ -527,7 +527,7 @@ class TestRunJudgeBatch:
             {"index": 1, "met": False, "reasoning": "bad", "evidence": []},
         ]
         with patch(
-            "gandalf_grader.judge._make_verdict_path",
+            "gandalf.judge._make_verdict_path",
             return_value=str(tmp_path / "verdict.json"),
         ):
             (tmp_path / "verdict.json").write_text(json.dumps(verdict_data))
@@ -540,7 +540,7 @@ class TestRunJudgeBatch:
         assert data["verdicts"][0]["met"] is True
         assert data["llm_usage"]["cost_usd"] == 0.05
 
-    @patch("gandalf_grader.judge._run_agent_session", return_value=MOCK_USAGE)
+    @patch("gandalf.judge._run_agent_session", return_value=MOCK_USAGE)
     def test_no_per_verdict_usage_keys(self, mock_session: Any, tmp_path: pathlib.Path) -> None:
         """Verdicts should NOT contain llm_usage — it's a sibling field."""
         input_path = _make_batch_judge_input_json(tmp_path, n=1)
@@ -548,7 +548,7 @@ class TestRunJudgeBatch:
 
         verdict_data = [{"index": 0, "met": True, "reasoning": "ok"}]
         with patch(
-            "gandalf_grader.judge._make_verdict_path",
+            "gandalf.judge._make_verdict_path",
             return_value=str(tmp_path / "verdict.json"),
         ):
             (tmp_path / "verdict.json").write_text(json.dumps(verdict_data))
@@ -558,13 +558,13 @@ class TestRunJudgeBatch:
         for v in data["verdicts"]:
             assert "llm_usage" not in v
 
-    @patch("gandalf_grader.judge._run_agent_session", return_value=MOCK_USAGE)
+    @patch("gandalf.judge._run_agent_session", return_value=MOCK_USAGE)
     def test_preserves_usage_when_verdict_missing(self, mock_session: Any, tmp_path: pathlib.Path) -> None:
         input_path = _make_batch_judge_input_json(tmp_path, n=2)
         output_path = str(tmp_path / "output.json")
 
         with patch(
-            "gandalf_grader.judge._make_verdict_path",
+            "gandalf.judge._make_verdict_path",
             return_value=str(tmp_path / "no_such_verdict.json"),
         ):
             run_judge_batch(input_path, output_path)
@@ -574,7 +574,7 @@ class TestRunJudgeBatch:
         assert all(v["met"] is None for v in data["verdicts"])
 
     @patch(
-        "gandalf_grader.judge._run_agent_session",
+        "gandalf.judge._run_agent_session",
         side_effect=RuntimeError("LLM exploded"),
     )
     def test_session_failure_has_empty_usage(self, mock_session: Any, tmp_path: pathlib.Path) -> None:
@@ -582,7 +582,7 @@ class TestRunJudgeBatch:
         output_path = str(tmp_path / "output.json")
 
         with patch(
-            "gandalf_grader.judge._make_verdict_path",
+            "gandalf.judge._make_verdict_path",
             return_value=str(tmp_path / "verdict.json"),
         ):
             run_judge_batch(input_path, output_path)
@@ -591,9 +591,9 @@ class TestRunJudgeBatch:
         assert data["llm_usage"] == {}
         assert all(v["met"] is None for v in data["verdicts"])
 
-    @patch("gandalf_grader.judge._run_agent_session", return_value=MOCK_USAGE)
+    @patch("gandalf.judge._run_agent_session", return_value=MOCK_USAGE)
     @patch(
-        "gandalf_grader.judge._read_batch_verdict",
+        "gandalf.judge._read_batch_verdict",
         side_effect=RuntimeError("Batch parsing blew up"),
     )
     def test_preserves_usage_when_read_batch_verdict_raises(
@@ -604,7 +604,7 @@ class TestRunJudgeBatch:
         output_path = str(tmp_path / "output.json")
 
         with patch(
-            "gandalf_grader.judge._make_verdict_path",
+            "gandalf.judge._make_verdict_path",
             return_value=str(tmp_path / "verdict.json"),
         ):
             run_judge_batch(input_path, output_path)
