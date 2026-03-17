@@ -1,6 +1,6 @@
-"""Outer verifier orchestrator.
+"""Outer grader orchestrator.
 
-Runs as the verifier user and spawns the inner judge as the sandbox user
+Runs as the grader user and spawns the inner judge as the sandbox user
 (via sudo) to evaluate rubric criteria using an OpenHands agent-as-judge.
 
 Supports two evaluation modes (configured via ``mode`` in the TOML config):
@@ -8,8 +8,8 @@ Supports two evaluation modes (configured via ``mode`` in the TOML config):
   - **batch**: all criteria evaluated in a single agent session.
 
 Produces:
-  /logs/verifier/reward.json  - Reward file ([0,1] reward)
-  /logs/verifier/info.json    - Detailed per-criteria results + LLM usage
+  /logs/grader/reward.json  - Reward file ([0,1] reward)
+  /logs/grader/info.json    - Detailed per-criteria results + LLM usage
 """
 
 from __future__ import annotations
@@ -31,7 +31,7 @@ from gandalf.config import (
     EvaluationInfo,
     JudgeInput,
     RubricItem,
-    VerifierConfig,
+    GraderConfig,
     load_config,
     load_rubric,
 )
@@ -61,25 +61,25 @@ def _judge_env_vars() -> list[str]:
     return [f"{k}={v}" for k, v in os.environ.items() if k in _JUDGE_ENV_ALLOWLIST and v]
 
 
-def resolve_judge_guidance(config: VerifierConfig) -> str:
+def resolve_judge_guidance(config: GraderConfig) -> str:
     """Resolve and load judge guidance content.
 
     Resolution order:
       1. config.judge_guidance_path (from TOML)
-      2. VERIFIER_JUDGE_GUIDANCE_PATH env var
+      2. GRADER_JUDGE_GUIDANCE_PATH env var
       3. No guidance (empty string)
 
     If a path is resolved but the file does not exist, raises SystemExit
     with a clear error message.
     """
-    path = config.judge_guidance_path or os.environ.get("VERIFIER_JUDGE_GUIDANCE_PATH")
+    path = config.judge_guidance_path or os.environ.get("GRADER_JUDGE_GUIDANCE_PATH")
     if not path:
         return ""
     if not os.path.isfile(path):
         source = (
-            "judge_guidance_path in verifier config"
+            "judge_guidance_path in grader config"
             if config.judge_guidance_path
-            else "VERIFIER_JUDGE_GUIDANCE_PATH env var"
+            else "GRADER_JUDGE_GUIDANCE_PATH env var"
         )
         print(
             f"ERROR: Judge guidance file not found: {path}\n"
@@ -360,7 +360,7 @@ def _save_trace(trace_path: str, stdout: str, stderr: str, returncode: int) -> N
 
 
 def _run_sequential(
-    config: VerifierConfig,
+    config: GraderConfig,
     rubric: list[RubricItem],
     final_output: str,
     judge_guidance: str,
@@ -413,7 +413,7 @@ def _run_sequential(
 
 
 def _run_batch(
-    config: VerifierConfig,
+    config: GraderConfig,
     rubric: list[RubricItem],
     final_output: str,
     judge_guidance: str,
@@ -474,7 +474,7 @@ def _get_errored_indices(results: list[CriteriaResult]) -> list[int]:
 
 
 def _retry_sequential(
-    config: VerifierConfig,
+    config: GraderConfig,
     rubric: list[RubricItem],
     results: list[CriteriaResult],
     llm_usage: dict[str, Any],
@@ -522,7 +522,7 @@ def _retry_sequential(
 
 
 def _retry_batch(
-    config: VerifierConfig,
+    config: GraderConfig,
     rubric: list[RubricItem],
     results: list[CriteriaResult],
     llm_usage: dict[str, Any],
@@ -580,7 +580,7 @@ def _retry_batch(
 
 
 def _write_info(
-    config: VerifierConfig,
+    config: GraderConfig,
     results: list[CriteriaResult],
     llm_usage: dict[str, Any],
     errored_criteria_count: int,
@@ -632,8 +632,8 @@ def _write_info(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Verifier: evaluate agent output via agent-as-judge")
-    parser.add_argument("--config", required=True, help="Path to verifier config TOML file")
+    parser = argparse.ArgumentParser(description="Grader: evaluate agent output via agent-as-judge")
+    parser.add_argument("--config", required=True, help="Path to grader config TOML file")
     parser.add_argument(
         "--mode",
         choices=["sequential", "batch"],
@@ -703,7 +703,7 @@ def main() -> None:
     print(f"\nReward: {reward} (raw: {raw_score})")
     if total_cost > 0:
         print(
-            f"Verifier LLM cost: ${total_cost:.4f} "
+            f"Grader LLM cost: ${total_cost:.4f} "
             f"({len(rubric)} criteria, "
             f"{total_prompt} prompt + {total_completion} completion tokens)"
         )

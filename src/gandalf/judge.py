@@ -1,6 +1,6 @@
 """Inner judge: evaluates rubric criteria using an OpenHands agent.
 
-This script is invoked as the sandbox user (via sudo) from the outer verifier
+This script is invoked as the sandbox user (via sudo) from the outer grader
 orchestrator. It receives all context via an input JSON file and writes its
 verdict to an output JSON file.
 
@@ -287,7 +287,7 @@ def _make_verdict_path(prefix: str = "verdict_", dir: str | None = None) -> str:
     to use file_editor create rather than error-prone shell echo fallbacks.
 
     Uses *dir* as the base directory when provided (e.g. the workdir, which
-    the verifier has already made world-writable), falling back to the system
+    the grader has already made world-writable), falling back to the system
     temp dir.  This avoids requiring sandbox_user to have general write access
     to /tmp.
     """

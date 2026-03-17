@@ -12,7 +12,7 @@ from gandalf.config import (
     JudgeInput,
     MCPServer,
     Verdict,
-    VerifierConfig,
+    GraderConfig,
     load_config,
     load_rubric,
 )
@@ -22,18 +22,18 @@ FIXTURES = os.path.join(os.path.dirname(__file__), "fixtures")
 
 class TestLoadConfig:
     def test_parses_all_fields(self) -> None:
-        cfg = load_config(os.path.join(FIXTURES, "sample_verifier.toml"))
+        cfg = load_config(os.path.join(FIXTURES, "sample_grader.toml"))
         assert cfg.model == "google/gemini-2.5-flash"
         assert cfg.sandbox_user == "sandbox"
         assert cfg.instructions == "Build a web app that displays hello world."
         assert cfg.rubric_path == "/tests/rubric.json"
         assert cfg.workdir == "/home/agent/workspace"
         assert cfg.trajectory_path == "/logs/agent/trajectory.json"
-        assert cfg.output_dir == "/logs/verifier"
+        assert cfg.output_dir == "/logs/grader"
         assert cfg.judge_timeout == 120
 
     def test_parses_mcp_servers(self) -> None:
-        cfg = load_config(os.path.join(FIXTURES, "sample_verifier.toml"))
+        cfg = load_config(os.path.join(FIXTURES, "sample_grader.toml"))
         assert len(cfg.mcp_servers) == 1
         mcp = cfg.mcp_servers[0]
         assert mcp.name == "magic-server"
@@ -49,7 +49,7 @@ rubric_path = "/tests/rubric.json"
 workdir = "/workspace"
 trajectory_path = "/logs/trajectory.json"
 """
-        p = tmp_path / "verifier.toml"
+        p = tmp_path / "grader.toml"
         p.write_text(toml_content)
         cfg = load_config(str(p))
         assert cfg.model == "google/gemini-2.5-flash"
@@ -63,15 +63,15 @@ rubric_path = "/tests/rubric.json"
 workdir = "/workspace"
 trajectory_path = "/logs/trajectory.json"
 """
-        p = tmp_path / "verifier.toml"
+        p = tmp_path / "grader.toml"
         p.write_text(toml_content)
         cfg = load_config(str(p))
-        assert cfg.output_dir == "/logs/verifier"
+        assert cfg.output_dir == "/logs/grader"
         assert cfg.judge_timeout == 300
 
     def test_missing_file_raises(self) -> None:
         with pytest.raises(FileNotFoundError):
-            load_config("/nonexistent/verifier.toml")
+            load_config("/nonexistent/grader.toml")
 
     def test_missing_required_field_raises(self, tmp_path: pathlib.Path) -> None:
         p = tmp_path / "bad.toml"
@@ -116,8 +116,8 @@ class TestPydanticModels:
         with pytest.raises(ValidationError):
             MCPServer(name="test", command="/bin/test", transport="sse")  # type: ignore[arg-type]
 
-    def test_verifier_config_has_trajectory_path(self) -> None:
-        cfg = VerifierConfig(
+    def test_grader_config_has_trajectory_path(self) -> None:
+        cfg = GraderConfig(
             instructions="test",
             rubric_path="/rubric.json",
             workdir="/workspace",
@@ -127,8 +127,8 @@ class TestPydanticModels:
         assert cfg.trajectory_path == "/logs/trajectory.json"
         assert cfg.model == "google/gemini-2.5-flash"
 
-    def test_verifier_config_judge_guidance_path_defaults_none(self) -> None:
-        cfg = VerifierConfig(
+    def test_grader_config_judge_guidance_path_defaults_none(self) -> None:
+        cfg = GraderConfig(
             instructions="test",
             rubric_path="/rubric.json",
             workdir="/workspace",
@@ -137,16 +137,16 @@ class TestPydanticModels:
         )
         assert cfg.judge_guidance_path is None
 
-    def test_verifier_config_judge_guidance_path_set(self) -> None:
-        cfg = VerifierConfig(
+    def test_grader_config_judge_guidance_path_set(self) -> None:
+        cfg = GraderConfig(
             instructions="test",
             rubric_path="/rubric.json",
             workdir="/workspace",
             trajectory_path="/logs/trajectory.json",
             sandbox_user="sandbox",
-            judge_guidance_path="/opt/verifier/judge-guidance.md",
+            judge_guidance_path="/opt/grader/judge-guidance.md",
         )
-        assert cfg.judge_guidance_path == "/opt/verifier/judge-guidance.md"
+        assert cfg.judge_guidance_path == "/opt/grader/judge-guidance.md"
 
     def test_judge_input_includes_final_output(self) -> None:
         ji = JudgeInput(
@@ -243,8 +243,8 @@ class TestPydanticModels:
         assert info.maximum_score == 6.0
         assert len(info.criteria_results) == 3
 
-    def test_verifier_config_judge_retries_default(self) -> None:
-        cfg = VerifierConfig(
+    def test_grader_config_judge_retries_default(self) -> None:
+        cfg = GraderConfig(
             instructions="test",
             rubric_path="/rubric.json",
             workdir="/workspace",
@@ -253,8 +253,8 @@ class TestPydanticModels:
         )
         assert cfg.judge_retries == 1
 
-    def test_verifier_config_judge_retries_explicit(self) -> None:
-        cfg = VerifierConfig(
+    def test_grader_config_judge_retries_explicit(self) -> None:
+        cfg = GraderConfig(
             instructions="test",
             rubric_path="/rubric.json",
             workdir="/workspace",
