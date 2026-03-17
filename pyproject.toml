@@ -1,5 +1,5 @@
 [project]
-name = "gandalf-grader"
+name = "gandalf-the-grader"
 dynamic = ["version"]
 description = "Agent-as-judge grading framework for evaluating AI agent outputs against rubric criteria"
 readme = "README.md"
@@ -28,18 +28,18 @@ repository = "https://github.com/Handshake-AI-Research/gandalf-the-grader"
 issues = "https://github.com/Handshake-AI-Research/gandalf-the-grader/issues"
 
 [project.scripts]
-gandalf-grader = "gandalf_grader.__main__:main"
-gandalf-grader-judge = "gandalf_grader.judge:main"
+gandalf-the-grader = "gandalf.__main__:main"
+gandalf-the-grader-judge = "gandalf.judge:main"
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.version]
-path = "src/gandalf_grader/__about__.py"
+path = "src/gandalf/__about__.py"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/gandalf_grader"]
+packages = ["src/gandalf"]
 
 [tool.hatch.envs.default]
 installer = "uv"

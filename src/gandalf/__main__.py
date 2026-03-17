@@ -24,7 +24,7 @@ import sys
 import tempfile
 from typing import Any
 
-from gandalf_grader.config import (
+from gandalf.config import (
     BatchCriterion,
     BatchJudgeInput,
     CriteriaResult,
@@ -35,7 +35,7 @@ from gandalf_grader.config import (
     load_config,
     load_rubric,
 )
-from gandalf_grader.trajectory import load_trajectory_final_output
+from gandalf.trajectory import load_trajectory_final_output
 
 # Environment variables forwarded to the inner judge subprocess (via sudo).
 # Only these are passed — everything else is stripped to avoid leaking secrets
@@ -193,7 +193,7 @@ def evaluate_criteria(
             # writable, isolated directory instead of the original user's home.
             f"HOME={clone_dir}",
             *_judge_env_vars(),
-            "gandalf-grader-judge",
+            "gandalf-the-grader-judge",
             "--input",
             input_path,
             "--output",
@@ -300,7 +300,7 @@ def evaluate_all_criteria(
             # writable, isolated directory instead of the original user's home.
             f"HOME={clone_dir}",
             *_judge_env_vars(),
-            "gandalf-grader-judge",
+            "gandalf-the-grader-judge",
             "--input",
             input_path,
             "--output",

@@ -20,7 +20,7 @@ import secrets
 import tempfile
 from typing import Any
 
-from gandalf_grader.config import BatchJudgeInput, JudgeInput, Verdict
+from gandalf.config import BatchJudgeInput, JudgeInput, Verdict
 
 
 def build_judge_prompt(

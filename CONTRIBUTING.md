@@ -1,6 +1,6 @@
 # Contributing
 
-Thank you for your interest in contributing to gandalf-grader!
+Thank you for your interest in contributing to gandalf-the-grader!
 
 ## Development Setup
 

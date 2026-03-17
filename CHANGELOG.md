@@ -43,7 +43,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ## [0.1.0]
 
 ### Added
-- Initial open-source release of gandalf-grader.
+- Initial open-source release of gandalf-the-grader.
 - Agent-as-judge grading framework with outer orchestrator and inner judge architecture.
 - Sequential and batch evaluation modes.
 - Configurable rubric-based scoring with weighted criteria.

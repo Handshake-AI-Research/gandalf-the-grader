@@ -26,7 +26,7 @@ class VerifierConfig(BaseModel):
 
     mode controls how rubric criteria are evaluated:
       - "sequential" (default): each criterion is evaluated in its own agent
-        session (one invocation of gandalf-grader-judge per criterion).
+        session (one invocation of gandalf-the-grader-judge per criterion).
       - "batch": all criteria are sent to a single agent session, which writes
         a JSON array of verdicts in one go.
 
