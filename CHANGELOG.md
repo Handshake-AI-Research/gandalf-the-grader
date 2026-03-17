@@ -48,7 +48,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Sequential and batch evaluation modes.
 - Configurable rubric-based scoring with weighted criteria.
 - MCP server support for tool-augmented judging.
-- TOML-based verifier configuration.
+- TOML-based grader configuration.
 - ATIF trajectory format support.
 
 [0.4.2]: https://github.com/Handshake-AI-Research/gandalf-the-grader/compare/v0.4.1...v0.4.2

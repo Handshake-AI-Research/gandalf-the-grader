@@ -170,7 +170,7 @@ class TestMakeVerdictPath:
 
     Regression: the old code always used tempfile.gettempdir() (/tmp), requiring
     sandbox_user to have write access to /tmp.  The fix accepts a *dir* parameter
-    and run_judge/run_judge_batch pass judge_input.workdir (which the verifier
+    and run_judge/run_judge_batch pass judge_input.workdir (which the grader
     has already made world-writable), so sandbox_user never needs /tmp write access.
     """
 

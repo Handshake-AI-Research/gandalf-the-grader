@@ -1,13 +1,13 @@
 # gandalf-the-grader
 
 Agent-as-a-Judge grading framework for evaluating AI outputs against rubric criteria.
-Unlike simple LLM-as-a-Judge verifiers, this verifier can grade outputs that are complex files (such as Excel or Powerpoint deliverables).
+Unlike simple LLM-as-a-Judge graders, this grader can grade outputs that are complex files (such as Excel or Powerpoint deliverables).
 
 ![You shall not pass quote](assets/shallnotpass.png)
 
 ## Overview
 
-`gandalf-the-grader` uses LLM-powered judge agents to evaluate whether an AI agent successfully completed a task. It is the production verifier component of the [rle-pkg](https://github.com/Handshake-AI-Research/rle-pkg) architecture.
+`gandalf-the-grader` uses LLM-powered judge agents to evaluate whether an AI agent successfully completed a task. It is the production grader component of the [rle-pkg](https://github.com/Handshake-AI-Research/rle-pkg) architecture.
 
 Given a task description, a rubric of evaluation criteria, and the agent's trajectory, the grader spawns judge agents that inspect the agent's workspace — reading files, running commands, and using tools — to determine whether each criterion's condition is met. The final reward is always in [0, 1], with raw scoring details included in `info.json`.
 
@@ -15,7 +15,7 @@ Given a task description, a rubric of evaluation criteria, and the agent's traje
 
 The grader uses a two-process architecture:
 
-- **Outer orchestrator** (`gandalf-the-grader`) — runs as the verifier user, manages the evaluation loop, computes reward/raw scoring outputs, and writes output files.
+- **Outer orchestrator** (`gandalf-the-grader`) — runs as the grader user, manages the evaluation loop, computes reward/raw scoring outputs, and writes output files.
 - **Inner judge** (`gandalf-the-grader-judge`) — runs as the sandbox user (via `sudo`), executes an [OpenHands](https://github.com/All-Hands-AI/OpenHands) agent-as-judge session that investigates the workspace and writes a verdict.
 
 Two evaluation modes are supported (configured via `mode` in the TOML config):
@@ -44,7 +44,7 @@ uv tool install git+https://github.com/Handshake-AI-Research/gandalf-the-grader.
 
 ## Quick Start
 
-Create a verifier config (`verifier.toml`):
+Create a grader config (`grader.toml`):
 
 ```toml
 model = "google/gemini-2.5-flash"
@@ -67,12 +67,12 @@ Create a rubric (`rubric.json`):
 Run the grader:
 
 ```bash
-gandalf-the-grader --config /tests/verifier.toml
+gandalf-the-grader --config /tests/grader.toml
 ```
 
 ## Configuration
 
-### `verifier.toml`
+### `grader.toml`
 
 | Field | Required | Default | Description |
 |---|---|---|---|
@@ -82,7 +82,7 @@ gandalf-the-grader --config /tests/verifier.toml
 | `rubric_path` | Yes | | Path to rubric JSON file |
 | `workdir` | Yes | | Agent workspace directory |
 | `trajectory_path` | Yes | | Path to ATIF trajectory JSON |
-| `output_dir` | No | `/logs/verifier` | Directory for output files |
+| `output_dir` | No | `/logs/grader` | Directory for output files |
 | `judge_timeout` | No | `300` | Max seconds per judge invocation |
 | `mode` | No | `individual` | Evaluation mode: `individual` or `batch` |
 | `max_concurrency` | No | `None` | Max parallel judge sessions (None = no parallelism) |
@@ -150,7 +150,7 @@ For a complete container architecture with task runners and agent environments, 
 |---|---|
 | `LLM_API_KEY` | API key for the LLM provider |
 | `LLM_BASE_URL` | Base URL for the LLM API (optional) |
-| `VERIFIER_JUDGE_GUIDANCE_PATH` | Fallback path to judge guidance file (if not set in TOML) |
+| `GRADER_JUDGE_GUIDANCE_PATH` | Fallback path to judge guidance file (if not set in TOML) |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | OTLP endpoint URL for trace export (optional) |
 | `OTEL_EXPORTER_OTLP_HEADERS` | OTLP auth headers, URL-encoded (optional) |
 | `OTEL_EXPORTER_OTLP_TRACES_PROTOCOL` | OTLP transport protocol, e.g. `http/protobuf` (optional) |
@@ -173,7 +173,7 @@ export OTEL_EXPORTER_OTLP_TRACES_PROTOCOL=http/protobuf
 
 ## Output
 
-The grader writes to `output_dir` (default `/logs/verifier`):
+The grader writes to `output_dir` (default `/logs/grader`):
 
 - `reward.json` — Reward file: `{"reward": 0.75}` (always in [0, 1])
 - `info.json` — Per-criteria results with `met`/not-met, reasoning, evidence, LLM usage, plus `reward`, `raw_score`, `minimum_score`, and `maximum_score`

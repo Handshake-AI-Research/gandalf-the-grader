@@ -1,4 +1,4 @@
-"""Configuration models for the verifier."""
+"""Configuration models for the grader."""
 
 from __future__ import annotations
 
@@ -21,8 +21,8 @@ class MCPServer(BaseModel):
     args: list[str] = Field(default_factory=list)
 
 
-class VerifierConfig(BaseModel):
-    """Top-level verifier configuration loaded from a TOML file.
+class GraderConfig(BaseModel):
+    """Top-level grader configuration loaded from a TOML file.
 
     mode controls how rubric criteria are evaluated:
       - "sequential" (default): each criterion is evaluated in its own agent
@@ -42,7 +42,7 @@ class VerifierConfig(BaseModel):
     trajectory_path: str
     sandbox_user: str
     mcp_servers: list[MCPServer] = Field(default_factory=list)
-    output_dir: str = "/logs/verifier"
+    output_dir: str = "/logs/grader"
     judge_timeout: int = 300
     judge_guidance_path: str | None = None
     batch_timeout: int | None = None
@@ -128,11 +128,11 @@ class EvaluationInfo(BaseModel):
     evaluated_criteria_pct: float = 100.0
 
 
-def load_config(path: str) -> VerifierConfig:
-    """Load verifier configuration from a TOML file."""
+def load_config(path: str) -> GraderConfig:
+    """Load grader configuration from a TOML file."""
     with open(path, "rb") as f:
         data = tomllib.load(f)
-    return VerifierConfig.model_validate(data)
+    return GraderConfig.model_validate(data)
 
 
 def load_rubric(path: str) -> list[RubricItem]:

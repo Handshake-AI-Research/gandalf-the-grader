@@ -25,12 +25,12 @@ from gandalf.config import (
     BatchJudgeInput,
     CriteriaResult,
     RubricItem,
-    VerifierConfig,
+    GraderConfig,
 )
 
 
-def _make_config(**overrides: Any) -> VerifierConfig:
-    """Create a VerifierConfig with sensible defaults for testing."""
+def _make_config(**overrides: Any) -> GraderConfig:
+    """Create a GraderConfig with sensible defaults for testing."""
     defaults: dict[str, Any] = {
         "instructions": "test",
         "rubric_path": "/rubric.json",
@@ -39,17 +39,17 @@ def _make_config(**overrides: Any) -> VerifierConfig:
         "sandbox_user": "sandbox",
     }
     defaults.update(overrides)
-    return VerifierConfig(**defaults)
+    return GraderConfig(**defaults)
 
 
 class TestResolveJudgeGuidance:
     def test_no_path_returns_empty(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.delenv("VERIFIER_JUDGE_GUIDANCE_PATH", raising=False)
+        monkeypatch.delenv("GRADER_JUDGE_GUIDANCE_PATH", raising=False)
         config = _make_config()
         assert resolve_judge_guidance(config) == ""
 
     def test_reads_file_from_toml_path(self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.delenv("VERIFIER_JUDGE_GUIDANCE_PATH", raising=False)
+        monkeypatch.delenv("GRADER_JUDGE_GUIDANCE_PATH", raising=False)
         guidance_file = tmp_path / "guidance.md"
         guidance_file.write_text("Use openpyxl for .xlsx files.")
         config = _make_config(judge_guidance_path=str(guidance_file))
@@ -58,7 +58,7 @@ class TestResolveJudgeGuidance:
     def test_reads_file_from_env_var(self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
         guidance_file = tmp_path / "guidance.md"
         guidance_file.write_text("From env var.")
-        monkeypatch.setenv("VERIFIER_JUDGE_GUIDANCE_PATH", str(guidance_file))
+        monkeypatch.setenv("GRADER_JUDGE_GUIDANCE_PATH", str(guidance_file))
         config = _make_config()  # no judge_guidance_path in TOML
         assert resolve_judge_guidance(config) == "From env var."
 
@@ -67,18 +67,18 @@ class TestResolveJudgeGuidance:
         toml_file.write_text("From TOML.")
         env_file = tmp_path / "env_guidance.md"
         env_file.write_text("From env.")
-        monkeypatch.setenv("VERIFIER_JUDGE_GUIDANCE_PATH", str(env_file))
+        monkeypatch.setenv("GRADER_JUDGE_GUIDANCE_PATH", str(env_file))
         config = _make_config(judge_guidance_path=str(toml_file))
         assert resolve_judge_guidance(config) == "From TOML."
 
     def test_missing_configured_toml_path_exits(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.delenv("VERIFIER_JUDGE_GUIDANCE_PATH", raising=False)
+        monkeypatch.delenv("GRADER_JUDGE_GUIDANCE_PATH", raising=False)
         config = _make_config(judge_guidance_path="/nonexistent/guidance.md")
         with pytest.raises(SystemExit):
             resolve_judge_guidance(config)
 
     def test_missing_configured_env_path_exits(self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("VERIFIER_JUDGE_GUIDANCE_PATH", "/nonexistent/guidance.md")
+        monkeypatch.setenv("GRADER_JUDGE_GUIDANCE_PATH", "/nonexistent/guidance.md")
         config = _make_config()
         with pytest.raises(SystemExit):
             resolve_judge_guidance(config)
@@ -86,7 +86,7 @@ class TestResolveJudgeGuidance:
     def test_error_message_mentions_file_path(
         self, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.delenv("VERIFIER_JUDGE_GUIDANCE_PATH", raising=False)
+        monkeypatch.delenv("GRADER_JUDGE_GUIDANCE_PATH", raising=False)
         config = _make_config(judge_guidance_path="/missing/guidance.md")
         with pytest.raises(SystemExit):
             resolve_judge_guidance(config)
@@ -97,13 +97,13 @@ class TestResolveJudgeGuidance:
     def test_error_message_mentions_env_var_source(
         self, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setenv("VERIFIER_JUDGE_GUIDANCE_PATH", "/missing/env_guidance.md")
+        monkeypatch.setenv("GRADER_JUDGE_GUIDANCE_PATH", "/missing/env_guidance.md")
         config = _make_config()
         with pytest.raises(SystemExit):
             resolve_judge_guidance(config)
         stderr = capsys.readouterr().err
         assert "/missing/env_guidance.md" in stderr
-        assert "VERIFIER_JUDGE_GUIDANCE_PATH" in stderr
+        assert "GRADER_JUDGE_GUIDANCE_PATH" in stderr
 
 
 class TestJudgeEnvVars:
@@ -331,7 +331,7 @@ class TestEvaluateAllCriteria:
     def test_empty_output_file(self, mock_run: Any, mock_clone: Any, tmp_path: pathlib.Path) -> None:
         """If the judge wrote nothing to the output file, return fail-all."""
         mock_clone.return_value = str(tmp_path)
-        # mock_run does not write to the output file — it stays empty (pre-created by verifier)
+        # mock_run does not write to the output file — it stays empty (pre-created by grader)
         mock_run.return_value = subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
 
         judge_input = _make_batch_input(tmp_path, n=2)
@@ -548,7 +548,7 @@ class TestRetryLogic:
         output_dir = str(tmp_path / "output")
         os.makedirs(output_dir, exist_ok=True)
 
-        mock_config.return_value = VerifierConfig(
+        mock_config.return_value = GraderConfig(
             instructions="test",
             rubric_path="/rubric.json",
             workdir=str(tmp_path),
@@ -603,7 +603,7 @@ class TestRetryLogic:
         output_dir = str(tmp_path / "output")
         os.makedirs(output_dir, exist_ok=True)
 
-        mock_config.return_value = VerifierConfig(
+        mock_config.return_value = GraderConfig(
             instructions="test",
             rubric_path="/rubric.json",
             workdir=str(tmp_path),
@@ -664,7 +664,7 @@ class TestRetryLogic:
         output_dir = str(tmp_path / "output")
         os.makedirs(output_dir, exist_ok=True)
 
-        mock_config.return_value = VerifierConfig(
+        mock_config.return_value = GraderConfig(
             instructions="test",
             rubric_path="/rubric.json",
             workdir=str(tmp_path),
@@ -707,7 +707,7 @@ class TestRetryLogic:
         output_dir = str(tmp_path / "output")
         os.makedirs(output_dir, exist_ok=True)
 
-        mock_config.return_value = VerifierConfig(
+        mock_config.return_value = GraderConfig(
             instructions="test",
             rubric_path="/rubric.json",
             workdir=str(tmp_path),
@@ -751,7 +751,7 @@ class TestRetryLogic:
         output_dir = str(tmp_path / "output")
         os.makedirs(output_dir, exist_ok=True)
 
-        mock_config.return_value = VerifierConfig(
+        mock_config.return_value = GraderConfig(
             instructions="test",
             rubric_path="/rubric.json",
             workdir=str(tmp_path),
@@ -803,7 +803,7 @@ class TestRetryLogic:
         output_dir = str(tmp_path / "output")
         os.makedirs(output_dir, exist_ok=True)
 
-        mock_config.return_value = VerifierConfig(
+        mock_config.return_value = GraderConfig(
             instructions="test",
             rubric_path="/rubric.json",
             workdir=str(tmp_path),
@@ -947,7 +947,7 @@ class TestCloneWorkspace:
         (typically world-executable) on the root clone dir.  The new os.walk
         implementation creates clone_dir via mkdtemp (mode 0o700) and must
         explicitly grant world bits — otherwise sandbox_user (not in the
-        verifier's group) cannot traverse or write to the workspace.
+        grader's group) cannot traverse or write to the workspace.
 
         This test fails on the pre-fix code (|0o070 → 0o770, no world bits)
         and passes with the fix (|0o077 → 0o777).
