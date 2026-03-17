@@ -13,18 +13,19 @@ classifiers = [
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
 dependencies = [
-    "openhands-sdk>=1.11.2",
-    "openhands-tools>=1.11.2",
-    "pydantic>=2.12.5",
+    "openhands-sdk>=1.11.2,<2",
+    "openhands-tools>=1.11.2,<2",
+    "pydantic>=2.12.5,<3",
 ]
 
 [project.urls]
-Homepage = "https://github.com/Handshake-AI-Research/gandalf-the-grader"
-Repository = "https://github.com/Handshake-AI-Research/gandalf-the-grader"
-Issues = "https://github.com/Handshake-AI-Research/gandalf-the-grader/issues"
+homepage = "https://github.com/Handshake-AI-Research/gandalf-the-grader"
+repository = "https://github.com/Handshake-AI-Research/gandalf-the-grader"
+issues = "https://github.com/Handshake-AI-Research/gandalf-the-grader/issues"
 
 [project.scripts]
 gandalf-grader = "gandalf_grader.__main__:main"
@@ -44,7 +45,7 @@ packages = ["src/gandalf_grader"]
 installer = "uv"
 
 [[tool.hatch.envs.hatch-test.matrix]]
-python = ["3.12", "3.13"]
+python = ["3.12", "3.13", "3.14"]
 
 [tool.hatch.envs.types]
 extra-dependencies = [
@@ -70,10 +71,6 @@ xml = "coverage xml"
 omit = [
     "*/tests/*",
 ]
-
-[tool.ruff]
-line-length = 120
-lint.select = ["E", "W", "F", "UP", "B", "SIM", "I", "RUF"]
 
 [tool.mypy]
 strict = true
