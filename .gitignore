@@ -16,5 +16,4 @@ site/
 .DS_Store
 .env
 .env.*
-!.env.example
 .claude/
