@@ -585,13 +585,12 @@ def _write_info(
     llm_usage: dict[str, Any],
     errored_criteria_count: int,
 ) -> tuple[float, float]:
-    """Compute reward and raw score, ALWAYS write info.json. Returns (reward, raw_score).
+    """Compute reward and raw score and write info.json. Returns (reward, raw_score).
 
     raw_score: sum of weights for criteria whose condition was met (negative weights
     contribute when their criterion is met).  Errored criteria (met=None) contribute 0.
 
-    reward: clip(0, 1, raw_score / sum_of_positive_weights).  This is the
-    reward written to reward.json — always in [0, 1].
+    reward: clip(0, 1, raw_score / sum_of_positive_weights), always in [0, 1].
     """
     raw_score = round(
         sum(r.weight for r in results if r.met is True),
