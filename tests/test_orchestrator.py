@@ -445,7 +445,7 @@ class TestEvaluateAllCriteria:
         assert usage == {}
 
 
-@pytest.fixture()
+@pytest.fixture
 def _fake_judge(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> pathlib.Path:
     """Create a fake ``gandalf-the-grader-judge`` on PATH.
 
