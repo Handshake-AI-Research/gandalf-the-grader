@@ -1,10 +1,13 @@
 """Tests for gandalf.judge."""
 
 import json
+import os
 import pathlib
 import tempfile
 from typing import Any
 from unittest.mock import patch
+
+import pytest
 
 from gandalf.judge import (
     _make_verdict_path,
@@ -614,3 +617,56 @@ class TestRunJudgeBatch:
         assert data["llm_usage"]["prompt_tokens"] == 1000
         assert all(v["met"] is None for v in data["verdicts"])
         assert "Batch parsing blew up" in data["verdicts"][0]["reasoning"]
+
+
+class TestRunJudgeLLM:
+    """End-to-end tests that call a real LLM via the OpenHands SDK.
+
+    Each test is parameterized across providers. Tests for providers whose
+    API key is not set in the environment are skipped automatically.
+    """
+
+    @pytest.mark.llm
+    @pytest.mark.parametrize(
+        ("model", "api_key_env"),
+        [
+            ("gemini/gemini-2.5-flash", "GOOGLE_API_KEY"),
+            ("anthropic/claude-haiku-4-5-20251001", "ANTHROPIC_API_KEY"),
+            ("openai/gpt-4o-mini", "OPENAI_API_KEY"),
+        ],
+        ids=["gemini", "anthropic", "openai"],
+    )
+    def test_single_criterion_met(
+        self,
+        model: str,
+        api_key_env: str,
+        tmp_path: pathlib.Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Judge should detect that a file exists in the workspace."""
+        api_key = os.environ.get(api_key_env, "")
+        if not api_key:
+            pytest.skip(f"{api_key_env} not set")
+        monkeypatch.setenv("LLM_API_KEY", api_key)
+
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        (workspace / "hello.txt").write_text("hello world")
+
+        judge_input = {
+            "model": model,
+            "instructions": "Create a file called hello.txt containing 'hello world'.",
+            "final_output": "Done, I created hello.txt.",
+            "criteria": "The file hello.txt exists in the workspace and contains 'hello world'.",
+            "workdir": str(workspace),
+        }
+        input_path = str(tmp_path / "input.json")
+        output_path = str(tmp_path / "output.json")
+        pathlib.Path(input_path).write_text(json.dumps(judge_input))
+
+        run_judge(input_path, output_path)
+
+        result = json.loads(pathlib.Path(output_path).read_text())
+        assert result["met"] is True
+        assert result["reasoning"]
+        assert isinstance(result["evidence"], list)
