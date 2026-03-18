@@ -81,6 +81,7 @@ gandalf-the-grader --config /tests/grader.toml
 | `mode` | No | `sequential` | Evaluation mode: `sequential` or `batch` |
 | `judge_guidance_path` | No | | Path to a markdown file with extra judge instructions |
 | `batch_timeout` | No | | Max total seconds for batch mode (caps `judge_timeout * N`) |
+| `judge_retries` | No | `1` | Number of retry attempts for criteria that error due to infrastructure failures |
 
 MCP servers can be configured as TOML array of tables:
 
