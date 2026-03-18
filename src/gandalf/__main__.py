@@ -7,9 +7,9 @@ Supports two evaluation modes (configured via ``mode`` in the TOML config):
   - **sequential** (default): one agent session per rubric criterion.
   - **batch**: all criteria evaluated in a single agent session.
 
-Produces:
-  /logs/grader/reward.json  - Reward file ([0,1] reward)
-  /logs/grader/info.json    - Detailed per-criteria results + LLM usage
+Produces (in ``output_dir``):
+  reward.json  - Reward file ([0,1] reward)
+  info.json    - Detailed per-criteria results + LLM usage
 """
 
 from __future__ import annotations

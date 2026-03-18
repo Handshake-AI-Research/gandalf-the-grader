@@ -48,13 +48,14 @@ instructions = "Do something."
 rubric_path = "/tests/rubric.json"
 workdir = "/workspace"
 trajectory_path = "/logs/trajectory.json"
+output_dir = "/logs/grader"
 """
         p = tmp_path / "grader.toml"
         p.write_text(toml_content)
         cfg = load_config(str(p))
         assert cfg.model == "google/gemini-2.5-flash"
 
-    def test_defaults_output_dir_and_timeout(self, tmp_path: pathlib.Path) -> None:
+    def test_defaults_timeout(self, tmp_path: pathlib.Path) -> None:
         toml_content = """\
 model = "openai/gpt-4o"
 sandbox_user = "sandbox"
@@ -62,11 +63,11 @@ instructions = "Do something."
 rubric_path = "/tests/rubric.json"
 workdir = "/workspace"
 trajectory_path = "/logs/trajectory.json"
+output_dir = "/logs/grader"
 """
         p = tmp_path / "grader.toml"
         p.write_text(toml_content)
         cfg = load_config(str(p))
-        assert cfg.output_dir == "/logs/grader"
         assert cfg.judge_timeout == 300
 
     def test_missing_file_raises(self) -> None:
@@ -123,6 +124,7 @@ class TestPydanticModels:
             workdir="/workspace",
             trajectory_path="/logs/trajectory.json",
             sandbox_user="sandbox",
+            output_dir="/logs/grader",
         )
         assert cfg.trajectory_path == "/logs/trajectory.json"
         assert cfg.model == "google/gemini-2.5-flash"
@@ -134,6 +136,7 @@ class TestPydanticModels:
             workdir="/workspace",
             trajectory_path="/logs/trajectory.json",
             sandbox_user="sandbox",
+            output_dir="/logs/grader",
         )
         assert cfg.judge_guidance_path is None
 
@@ -144,6 +147,7 @@ class TestPydanticModels:
             workdir="/workspace",
             trajectory_path="/logs/trajectory.json",
             sandbox_user="sandbox",
+            output_dir="/logs/grader",
             judge_guidance_path="/opt/grader/judge-guidance.md",
         )
         assert cfg.judge_guidance_path == "/opt/grader/judge-guidance.md"
@@ -250,6 +254,7 @@ class TestPydanticModels:
             workdir="/workspace",
             trajectory_path="/logs/trajectory.json",
             sandbox_user="sandbox",
+            output_dir="/logs/grader",
         )
         assert cfg.judge_retries == 1
 
@@ -260,6 +265,7 @@ class TestPydanticModels:
             workdir="/workspace",
             trajectory_path="/logs/trajectory.json",
             sandbox_user="sandbox",
+            output_dir="/logs/grader",
             judge_retries=3,
         )
         assert cfg.judge_retries == 3

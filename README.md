@@ -53,6 +53,7 @@ instructions = "Build a web app that displays hello world."
 rubric_path = "/tests/rubric.json"
 workdir = "/home/agent/workspace"
 trajectory_path = "/logs/agent/trajectory.json"
+output_dir = "/logs/grader"
 ```
 
 Create a rubric (`rubric.json`):
@@ -82,7 +83,7 @@ gandalf-the-grader --config /tests/grader.toml
 | `rubric_path` | Yes | | Path to rubric JSON file |
 | `workdir` | Yes | | Agent workspace directory |
 | `trajectory_path` | Yes | | Path to ATIF trajectory JSON |
-| `output_dir` | No | `/logs/grader` | Directory for output files |
+| `output_dir` | Yes | | Directory for output files |
 | `judge_timeout` | No | `300` | Max seconds per judge invocation |
 | `mode` | No | `individual` | Evaluation mode: `individual` or `batch` |
 | `max_concurrency` | No | `None` | Max parallel judge sessions (None = no parallelism) |
@@ -173,7 +174,7 @@ export OTEL_EXPORTER_OTLP_TRACES_PROTOCOL=http/protobuf
 
 ## Output
 
-The grader writes to `output_dir` (default `/logs/grader`):
+The grader writes to `output_dir`:
 
 - `reward.json` — Reward file: `{"reward": 0.75}` (always in [0, 1])
 - `info.json` — Per-criteria results with `met`/not-met, reasoning, evidence, LLM usage, plus `reward`, `raw_score`, `minimum_score`, and `maximum_score`

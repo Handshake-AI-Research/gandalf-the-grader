@@ -42,7 +42,7 @@ class GraderConfig(BaseModel):
     trajectory_path: str
     sandbox_user: str
     mcp_servers: list[MCPServer] = Field(default_factory=list)
-    output_dir: str = "/logs/grader"
+    output_dir: str
     judge_timeout: int = 300
     judge_guidance_path: str | None = None
     batch_timeout: int | None = None

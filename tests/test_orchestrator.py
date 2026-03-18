@@ -37,6 +37,7 @@ def _make_config(**overrides: Any) -> GraderConfig:
         "workdir": "/workspace",
         "trajectory_path": "/logs/trajectory.json",
         "sandbox_user": "sandbox",
+        "output_dir": "/logs/grader",
     }
     defaults.update(overrides)
     return GraderConfig(**defaults)
