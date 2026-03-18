@@ -28,7 +28,7 @@ repository = "https://github.com/Handshake-AI-Research/gandalf-the-grader"
 issues = "https://github.com/Handshake-AI-Research/gandalf-the-grader/issues"
 
 [project.scripts]
-gandalf-the-grader = "gandalf.__main__:main"
+gandalf-the-grader = "gandalf.orchestrator:main"
 gandalf-the-grader-judge = "gandalf.judge:main"
 
 [build-system]
