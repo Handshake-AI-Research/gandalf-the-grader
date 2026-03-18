@@ -80,5 +80,5 @@ module = ["openhands.sdk", "openhands.tools.*", "litellm"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
 markers = ["llm: end-to-end tests that call a real LLM (require LLM_API_KEY)"]
+addopts = "-m 'not llm'"

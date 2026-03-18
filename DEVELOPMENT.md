@@ -22,12 +22,18 @@ The [`test` command][hatch-test] supports options such as `-c` for measuring tes
 
 ### LLM end-to-end tests
 
-Tests marked with `@pytest.mark.llm` call real LLMs and are excluded from the default CI run.
+Tests marked with `@pytest.mark.llm` call real LLMs and are excluded from `hatch test` by default.
 
 Each test reads a provider-specific key (e.g. `GOOGLE_API_KEY`, `ANTHROPIC_API_KEY`) and sets `LLM_API_KEY` for its own scope via `monkeypatch`, so different tests can use different providers without conflicting. Tests call `pytest.skip()` when the required key is not set. To run LLM tests:
 
 ```bash
 hatch test -m llm
+```
+
+To run all tests (including LLM tests):
+
+```bash
+hatch test -m ""
 ```
 
 ## Type checking
