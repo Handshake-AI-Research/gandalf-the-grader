@@ -16,7 +16,11 @@ Run the unit tests on your local machine with:
 hatch test
 ```
 
-The [`test` command][hatch-test] supports options such as `-c` for measuring test coverage, `-a` for testing with a matrix of Python versions, and appending an argument like `hatch test tests/test_config.py::TestLoadConfig` for running a single test.
+The [`test` command][hatch-test] supports options such as `-c` for measuring test coverage and `-a` for testing with a matrix of Python versions. To run a specific test, pass a pytest node ID:
+
+```bash
+hatch test tests/test_config.py::TestLoadConfig::test_parses_all_fields
+```
 
 [hatch-test]: https://hatch.pypa.io/latest/tutorials/testing/overview/
 
@@ -24,7 +28,7 @@ The [`test` command][hatch-test] supports options such as `-c` for measuring tes
 
 Tests marked with `@pytest.mark.llm` call real LLMs and are excluded from `hatch test` by default.
 
-Each test reads a provider-specific key (e.g. `GOOGLE_API_KEY`, `ANTHROPIC_API_KEY`) and sets `LLM_API_KEY` for its own scope via `monkeypatch`, so different tests can use different providers without conflicting. Tests call `pytest.skip()` when the required key is not set. To run LLM tests:
+Some tests are parameterized across providers and read a provider-specific key (e.g. `GOOGLE_API_KEY`, `ANTHROPIC_API_KEY`), setting `LLM_API_KEY` for their own scope via `monkeypatch` so different providers don't conflict. Tests call `pytest.skip()` when the required key is not set. To run LLM tests:
 
 ```bash
 hatch test -m llm
