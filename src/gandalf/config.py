@@ -35,7 +35,7 @@ class GraderConfig(BaseModel):
     optionally capped by batch_timeout.
     """
 
-    model: str = "google/gemini-2.5-flash"
+    model: str = "gemini/gemini-2.5-flash"
     instructions: str
     rubric_path: str
     workdir: str
