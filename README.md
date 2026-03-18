@@ -47,7 +47,7 @@ uv tool install git+https://github.com/Handshake-AI-Research/gandalf-the-grader.
 Create a grader config (`grader.toml`):
 
 ```toml
-model = "google/gemini-2.5-flash"
+model = "gemini/gemini-2.5-flash"
 sandbox_user = "sandbox"
 instructions = "Build a web app that displays hello world."
 rubric_path = "/tests/rubric.json"
@@ -77,7 +77,7 @@ gandalf-the-grader --config /tests/grader.toml
 
 | Field | Required | Default | Description |
 |---|---|---|---|
-| `model` | No | `google/gemini-2.5-flash` | LLM model for the judge agent |
+| `model` | No | `gemini/gemini-2.5-flash` | LLM model for the judge agent |
 | `sandbox_user` | Yes | | Username for running the inner judge (via sudo) |
 | `instructions` | Yes | | Task instructions given to the original agent |
 | `rubric_path` | Yes | | Path to rubric JSON file |

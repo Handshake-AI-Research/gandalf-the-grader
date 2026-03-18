@@ -23,7 +23,7 @@ FIXTURES = os.path.join(os.path.dirname(__file__), "fixtures")
 class TestLoadConfig:
     def test_parses_all_fields(self) -> None:
         cfg = load_config(os.path.join(FIXTURES, "sample_grader.toml"))
-        assert cfg.model == "google/gemini-2.5-flash"
+        assert cfg.model == "gemini/gemini-2.5-flash"
         assert cfg.sandbox_user == "sandbox"
         assert cfg.instructions == "Build a web app that displays hello world."
         assert cfg.rubric_path == "/tests/rubric.json"
@@ -53,7 +53,7 @@ output_dir = "/logs/grader"
         p = tmp_path / "grader.toml"
         p.write_text(toml_content)
         cfg = load_config(str(p))
-        assert cfg.model == "google/gemini-2.5-flash"
+        assert cfg.model == "gemini/gemini-2.5-flash"
 
     def test_defaults_timeout(self, tmp_path: pathlib.Path) -> None:
         toml_content = """\
@@ -127,7 +127,7 @@ class TestPydanticModels:
             output_dir="/logs/grader",
         )
         assert cfg.trajectory_path == "/logs/trajectory.json"
-        assert cfg.model == "google/gemini-2.5-flash"
+        assert cfg.model == "gemini/gemini-2.5-flash"
 
     def test_grader_config_judge_guidance_path_defaults_none(self) -> None:
         cfg = GraderConfig(
