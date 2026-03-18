@@ -11,20 +11,21 @@ from unittest.mock import patch
 
 import pytest
 
+from gandalf.config import (
+    BatchCriterion,
+    BatchJudgeInput,
+    CriteriaResult,
+    GraderConfig,
+    RubricItem,
+)
 from gandalf.orchestrator import (
     _JUDGE_ENV_ALLOWLIST,
     _clone_workspace,
     _judge_env_vars,
     _write_info,
     evaluate_all_criteria,
+    main,
     resolve_judge_guidance,
-)
-from gandalf.config import (
-    BatchCriterion,
-    BatchJudgeInput,
-    CriteriaResult,
-    RubricItem,
-    GraderConfig,
 )
 
 
@@ -77,7 +78,7 @@ class TestResolveJudgeGuidance:
         with pytest.raises(SystemExit):
             resolve_judge_guidance(config)
 
-    def test_missing_configured_env_path_exits(self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_missing_configured_env_path_exits(self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:  # noqa: ARG002
         monkeypatch.setenv("GRADER_JUDGE_GUIDANCE_PATH", "/nonexistent/guidance.md")
         config = _make_config()
         with pytest.raises(SystemExit):
@@ -162,7 +163,7 @@ def _run_ok(output_path: str, content: Any) -> subprocess.CompletedProcess[str]:
 def _make_run_writing(content: Any) -> Callable[..., subprocess.CompletedProcess[str]]:
     """Return a mock_run side_effect that writes *content* to the --output path in the cmd."""
 
-    def _side_effect(cmd: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+    def _side_effect(cmd: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[str]:
         for i, arg in enumerate(cmd):
             if arg == "--output" and i + 1 < len(cmd):
                 pathlib.Path(cmd[i + 1]).write_text(json.dumps(content))
@@ -308,7 +309,7 @@ class TestEvaluateAllCriteria:
         """Non-JSON content in output file returns fail-all."""
         mock_clone.return_value = str(tmp_path)
 
-        def _write_invalid(cmd: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        def _write_invalid(cmd: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[str]:
             for i, arg in enumerate(cmd):
                 if arg == "--output" and i + 1 < len(cmd):
                     pathlib.Path(cmd[i + 1]).write_text("not valid json {{{")
@@ -344,7 +345,7 @@ class TestEvaluateAllCriteria:
         assert usage == {}
 
 
-def _cr(weight: float, met: bool | None) -> CriteriaResult:
+def _cr(*, weight: float, met: bool | None) -> CriteriaResult:
     """Helper to build a CriteriaResult for scoring tests."""
     return CriteriaResult(
         criteria="test",
@@ -374,7 +375,7 @@ class TestScoring:
 
     def test_all_positive_all_met(self, tmp_path: pathlib.Path) -> None:
         """weights=[2,3], met=[T,T] → raw=5, reward=1.0, min=0, max=5."""
-        info = self._info([_cr(2.0, True), _cr(3.0, True)], tmp_path)
+        info = self._info([_cr(weight=2.0, met=True), _cr(weight=3.0, met=True)], tmp_path)
         assert info["raw_score"] == 5.0
         assert info["reward"] == 1.0
         assert info["minimum_score"] == 0.0
@@ -382,37 +383,37 @@ class TestScoring:
 
     def test_all_positive_partial_met(self, tmp_path: pathlib.Path) -> None:
         """weights=[2,3], met=[T,F] → raw=2, reward=0.4."""
-        info = self._info([_cr(2.0, True), _cr(3.0, False)], tmp_path)
+        info = self._info([_cr(weight=2.0, met=True), _cr(weight=3.0, met=False)], tmp_path)
         assert info["raw_score"] == 2.0
         assert info["reward"] == 0.4
 
     def test_all_positive_none_met(self, tmp_path: pathlib.Path) -> None:
         """weights=[2,3], met=[F,F] → raw=0, reward=0.0."""
-        info = self._info([_cr(2.0, False), _cr(3.0, False)], tmp_path)
+        info = self._info([_cr(weight=2.0, met=False), _cr(weight=3.0, met=False)], tmp_path)
         assert info["raw_score"] == 0.0
         assert info["reward"] == 0.0
 
     def test_mixed_negative_penalty_applied(self, tmp_path: pathlib.Path) -> None:
         """weights=[3,-1], met=[T,T] → raw=2, reward=2/3."""
-        info = self._info([_cr(3.0, True), _cr(-1.0, True)], tmp_path)
+        info = self._info([_cr(weight=3.0, met=True), _cr(weight=-1.0, met=True)], tmp_path)
         assert info["raw_score"] == 2.0
         assert info["reward"] == 0.6667
 
     def test_mixed_negative_drives_below_zero_clipped(self, tmp_path: pathlib.Path) -> None:
         """weights=[1,-3], met=[F,T] → raw=-3, reward=0.0 (clip lower bound)."""
-        info = self._info([_cr(1.0, False), _cr(-3.0, True)], tmp_path)
+        info = self._info([_cr(weight=1.0, met=False), _cr(weight=-3.0, met=True)], tmp_path)
         assert info["raw_score"] == -3.0
         assert info["reward"] == 0.0
 
     def test_negative_not_met_no_penalty(self, tmp_path: pathlib.Path) -> None:
         """weights=[3,-1], met=[T,F] → raw=3, reward=1.0."""
-        info = self._info([_cr(3.0, True), _cr(-1.0, False)], tmp_path)
+        info = self._info([_cr(weight=3.0, met=True), _cr(weight=-1.0, met=False)], tmp_path)
         assert info["raw_score"] == 3.0
         assert info["reward"] == 1.0
 
     def test_all_negative_denominator_zero(self, tmp_path: pathlib.Path) -> None:
         """weights=[-2,-3], met=[T,T] → raw=-5, reward=0.0 (no divide-by-zero)."""
-        info = self._info([_cr(-2.0, True), _cr(-3.0, True)], tmp_path)
+        info = self._info([_cr(weight=-2.0, met=True), _cr(weight=-3.0, met=True)], tmp_path)
         assert info["raw_score"] == -5.0
         assert info["reward"] == 0.0
 
@@ -424,13 +425,13 @@ class TestScoring:
 
     def test_errored_positive_criterion(self, tmp_path: pathlib.Path) -> None:
         """weights=[3,2], met=[T,None] → raw=3, reward=3/5=0.6."""
-        info = self._info([_cr(3.0, True), _cr(2.0, None)], tmp_path)
+        info = self._info([_cr(weight=3.0, met=True), _cr(weight=2.0, met=None)], tmp_path)
         assert info["raw_score"] == 3.0
         assert info["reward"] == 0.6
 
     def test_errored_negative_criterion(self, tmp_path: pathlib.Path) -> None:
         """weights=[3,-2], met=[T,None] → raw=3, reward=3/3=1.0."""
-        info = self._info([_cr(3.0, True), _cr(-2.0, None)], tmp_path)
+        info = self._info([_cr(weight=3.0, met=True), _cr(weight=-2.0, met=None)], tmp_path)
         assert info["raw_score"] == 3.0
         assert info["reward"] == 1.0
 
@@ -438,7 +439,7 @@ class TestScoring:
 
     def test_info_json_contains_reward_and_raw_score(self, tmp_path: pathlib.Path) -> None:
         """info.json must contain both reward and raw_score fields."""
-        info = self._info([_cr(2.0, True), _cr(3.0, False)], tmp_path)
+        info = self._info([_cr(weight=2.0, met=True), _cr(weight=3.0, met=False)], tmp_path)
         assert "reward" in info
         assert "raw_score" in info
         assert isinstance(info["reward"], float)
@@ -446,11 +447,13 @@ class TestScoring:
 
     def test_info_json_no_legacy_score_field(self, tmp_path: pathlib.Path) -> None:
         """The old 'score' key must not appear in info.json."""
-        info = self._info([_cr(1.0, True)], tmp_path)
+        info = self._info([_cr(weight=1.0, met=True)], tmp_path)
         assert "score" not in info
 
     def test_info_json_contains_minimum_and_maximum_score(self, tmp_path: pathlib.Path) -> None:
-        info = self._info([_cr(10.0, True), _cr(5.0, False), _cr(-3.0, True)], tmp_path)
+        info = self._info(
+            [_cr(weight=10.0, met=True), _cr(weight=5.0, met=False), _cr(weight=-3.0, met=True)], tmp_path
+        )
         assert info["minimum_score"] == -3.0
         assert info["maximum_score"] == 15.0
 
@@ -472,7 +475,7 @@ class TestOutputFilePermissions:
         mock_clone.return_value = str(tmp_path)
         captured_cmd: dict[str, Any] = {}
 
-        def _capture(cmd: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        def _capture(cmd: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[str]:
             output_path = cmd[cmd.index("--output") + 1]
             captured_cmd["output_path"] = output_path
             captured_cmd["existed_before_run"] = pathlib.Path(output_path).exists()
@@ -502,7 +505,7 @@ class TestOutputFilePermissions:
         mock_clone.return_value = str(tmp_path)
         captured: dict[str, Any] = {}
 
-        def _capture_and_check_permissions(cmd: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        def _capture_and_check_permissions(cmd: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[str]:
             output_path = cmd[cmd.index("--output") + 1]
             captured["path"] = output_path
             captured["exists"] = pathlib.Path(output_path).exists()
@@ -539,8 +542,8 @@ class TestRetryLogic:
         mock_eval: Any,
         mock_config: Any,
         mock_rubric: Any,
-        mock_trajectory: Any,
-        mock_guidance: Any,
+        mock_trajectory: Any,  # noqa: ARG002
+        mock_guidance: Any,  # noqa: ARG002
         tmp_path: pathlib.Path,
     ) -> None:
         """Sequential retry resolves an errored criterion on the second attempt."""
@@ -571,8 +574,6 @@ class TestRetryLogic:
             {"met": True, "reasoning": "ok on retry", "evidence": ["e2"]},
         ]
 
-        from gandalf.orchestrator import main
-
         with patch("sys.argv", ["prog", "--config", "dummy.toml"]):
             main()
 
@@ -594,8 +595,8 @@ class TestRetryLogic:
         mock_eval_all: Any,
         mock_config: Any,
         mock_rubric: Any,
-        mock_trajectory: Any,
-        mock_guidance: Any,
+        mock_trajectory: Any,  # noqa: ARG002
+        mock_guidance: Any,  # noqa: ARG002
         tmp_path: pathlib.Path,
     ) -> None:
         """Batch retry resolves errored criteria with correct re-indexing."""
@@ -633,8 +634,6 @@ class TestRetryLogic:
             (retry_verdicts, {"cost_usd": 0.05}),
         ]
 
-        from gandalf.orchestrator import main
-
         with patch("sys.argv", ["prog", "--config", "dummy.toml"]):
             main()
 
@@ -655,8 +654,8 @@ class TestRetryLogic:
         mock_eval: Any,
         mock_config: Any,
         mock_rubric: Any,
-        mock_trajectory: Any,
-        mock_guidance: Any,
+        mock_trajectory: Any,  # noqa: ARG002
+        mock_guidance: Any,  # noqa: ARG002
         tmp_path: pathlib.Path,
     ) -> None:
         """judge_retries=0 skips retry loop entirely — errors cause hard fail."""
@@ -677,8 +676,6 @@ class TestRetryLogic:
         mock_rubric.return_value = [RubricItem(criteria="c1", weight=1.0)]
         mock_eval.return_value = {"met": None, "reasoning": "timeout"}
 
-        from gandalf.orchestrator import main
-
         with patch("sys.argv", ["prog", "--config", "dummy.toml"]):
             with pytest.raises(SystemExit) as exc_info:
                 main()
@@ -698,8 +695,8 @@ class TestRetryLogic:
         mock_eval: Any,
         mock_config: Any,
         mock_rubric: Any,
-        mock_trajectory: Any,
-        mock_guidance: Any,
+        mock_trajectory: Any,  # noqa: ARG002
+        mock_guidance: Any,  # noqa: ARG002
         tmp_path: pathlib.Path,
     ) -> None:
         """Persistent errors: info.json written, reward.json NOT written, exit 1."""
@@ -719,8 +716,6 @@ class TestRetryLogic:
         )
         mock_rubric.return_value = [RubricItem(criteria="c1", weight=1.0)]
         mock_eval.return_value = {"met": None, "reasoning": "always fails"}
-
-        from gandalf.orchestrator import main
 
         with patch("sys.argv", ["prog", "--config", "dummy.toml"]):
             with pytest.raises(SystemExit) as exc_info:
@@ -742,8 +737,8 @@ class TestRetryLogic:
         mock_eval: Any,
         mock_config: Any,
         mock_rubric: Any,
-        mock_trajectory: Any,
-        mock_guidance: Any,
+        mock_trajectory: Any,  # noqa: ARG002
+        mock_guidance: Any,  # noqa: ARG002
         tmp_path: pathlib.Path,
     ) -> None:
         """After retry resolves all errors: reward.json written with correct reward."""
@@ -772,8 +767,6 @@ class TestRetryLogic:
             {"met": False, "reasoning": "genuinely failed", "evidence": []},
         ]
 
-        from gandalf.orchestrator import main
-
         with patch("sys.argv", ["prog", "--config", "dummy.toml"]):
             main()
 
@@ -793,8 +786,8 @@ class TestRetryLogic:
         mock_eval: Any,
         mock_config: Any,
         mock_rubric: Any,
-        mock_trajectory: Any,
-        mock_guidance: Any,
+        mock_trajectory: Any,  # noqa: ARG002
+        mock_guidance: Any,  # noqa: ARG002
         tmp_path: pathlib.Path,
     ) -> None:
         """reward.json must contain the [0,1] reward, not the raw score,
@@ -823,8 +816,6 @@ class TestRetryLogic:
             {"met": True, "reasoning": "ok", "evidence": []},
             {"met": True, "reasoning": "hardcoded detected", "evidence": []},
         ]
-
-        from gandalf.orchestrator import main
 
         with patch("sys.argv", ["prog", "--config", "dummy.toml"]):
             main()

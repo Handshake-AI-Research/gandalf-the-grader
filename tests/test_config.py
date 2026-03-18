@@ -9,10 +9,10 @@ from pydantic import ValidationError
 from gandalf.config import (
     CriteriaResult,
     EvaluationInfo,
+    GraderConfig,
     JudgeInput,
     MCPServer,
     Verdict,
-    GraderConfig,
     load_config,
     load_rubric,
 )

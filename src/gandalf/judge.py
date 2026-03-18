@@ -20,6 +20,10 @@ import secrets
 import tempfile
 from typing import Any
 
+from openhands.sdk import LLM, Agent, Conversation, Tool
+from openhands.tools.file_editor import FileEditorTool
+from openhands.tools.terminal import TerminalTool
+
 from gandalf.config import BatchJudgeInput, JudgeInput, Verdict
 
 
@@ -101,9 +105,7 @@ def build_batch_judge_prompt(
     """
     guidance_block = f"\n\n{judge_guidance}\n" if judge_guidance else ""
 
-    criteria_lines = []
-    for c in criteria:
-        criteria_lines.append(f"  [{c['index']}] {c['criteria']}")
+    criteria_lines = [f"  [{c['index']}] {c['criteria']}" for c in criteria]
     criteria_block = "\n".join(criteria_lines)
     n_max = len(criteria) - 1
 
@@ -261,7 +263,6 @@ def _read_batch_verdict(verdict_path: str, n_criteria: int) -> list[dict[str, An
                         "evidence": [],
                     }
                 )
-        return results
 
     except FileNotFoundError:
         return _fail_all_verdicts(
@@ -273,6 +274,8 @@ def _read_batch_verdict(verdict_path: str, n_criteria: int) -> list[dict[str, An
             n_criteria,
             f"Judge agent wrote invalid JSON: {e}",
         )
+    else:
+        return results
 
 
 # ---------------------------------------------------------------------------
@@ -280,18 +283,18 @@ def _read_batch_verdict(verdict_path: str, n_criteria: int) -> list[dict[str, An
 # ---------------------------------------------------------------------------
 
 
-def _make_verdict_path(prefix: str = "verdict_", dir: str | None = None) -> str:
+def _make_verdict_path(prefix: str = "verdict_", directory: str | None = None) -> str:
     """Generate a unique path for the judge to write verdicts to.
 
     Unlike mkstemp, this does NOT pre-create the file — allowing the agent
     to use file_editor create rather than error-prone shell echo fallbacks.
 
-    Uses *dir* as the base directory when provided (e.g. the workdir, which
-    the grader has already made world-writable), falling back to the system
-    temp dir.  This avoids requiring sandbox_user to have general write access
-    to /tmp.
+    Uses *directory* as the base directory when provided (e.g. the workdir,
+    which the grader has already made world-writable), falling back to the
+    system temp dir.  This avoids requiring sandbox_user to have general write
+    access to /tmp.
     """
-    base = dir if dir is not None else tempfile.gettempdir()
+    base = directory if directory is not None else tempfile.gettempdir()
     return os.path.join(base, f"{prefix}{secrets.token_hex(8)}.json")
 
 
@@ -306,24 +309,21 @@ def _run_agent_session(
     The agent writes its output to a file (path embedded in *prompt*).
     Returns a dict of LLM usage metrics (may be empty if extraction fails).
     """
-    # Pin HOME to the judge workspace before importing the OpenHands SDK.
+    # Pin HOME to the judge workspace before instantiating the OpenHands SDK.
     # The SDK writes state to ~/.openhands/ (profiles, agents, etc.) on init.
     # Without this, HOME may point to a directory owned by a different user
     # (e.g. /home/agent when the judge runs as judge-sandbox via sudo),
     # causing PermissionError on mkdir.
     os.environ["HOME"] = workdir
 
-    from openhands.sdk import LLM, Agent, Conversation, Tool
-    from openhands.tools.file_editor import FileEditorTool
-    from openhands.tools.terminal import TerminalTool
-
     api_key = os.environ.get("LLM_API_KEY")
     if not api_key:
-        raise RuntimeError(
+        msg = (
             "LLM_API_KEY environment variable is not set. "
             "The caller must map the provider-specific key "
             "(e.g. ANTHROPIC_API_KEY) to LLM_API_KEY."
         )
+        raise RuntimeError(msg)
 
     llm = LLM(
         model=model,
@@ -364,7 +364,7 @@ def _run_agent_session(
             "completion_tokens": token_usage.completion_tokens if token_usage else 0,
             "cache_read_tokens": token_usage.cache_read_tokens if token_usage else 0,
         }
-    except Exception:
+    except Exception:  # noqa: BLE001, S110
         pass
     return llm_usage
 
@@ -379,7 +379,7 @@ def run_judge(input_path: str, output_path: str) -> None:
     with open(input_path) as f:
         judge_input = JudgeInput.model_validate_json(f.read())
 
-    verdict_path = _make_verdict_path(prefix="verdict_", dir=judge_input.workdir)
+    verdict_path = _make_verdict_path(prefix="verdict_", directory=judge_input.workdir)
 
     prompt = build_judge_prompt(
         instructions=judge_input.instructions,
@@ -408,7 +408,7 @@ def run_judge(input_path: str, output_path: str) -> None:
             "evidence": verdict.evidence,
             "llm_usage": llm_usage,
         }
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         output = {
             "met": None,
             "reasoning": f"Judge execution error: {e}",
@@ -439,7 +439,7 @@ def run_judge_batch(input_path: str, output_path: str) -> None:
     criteria_dicts = [c.model_dump() for c in judge_input.criteria]
     n_criteria = len(criteria_dicts)
 
-    verdict_path = _make_verdict_path(prefix="verdict_batch_", dir=judge_input.workdir)
+    verdict_path = _make_verdict_path(prefix="verdict_batch_", directory=judge_input.workdir)
 
     prompt = build_batch_judge_prompt(
         instructions=judge_input.instructions,
@@ -462,7 +462,7 @@ def run_judge_batch(input_path: str, output_path: str) -> None:
     try:
         llm_usage = _run_agent_session(judge_input.model, mcp_servers, judge_input.workdir, prompt)
         verdicts = _read_batch_verdict(verdict_path, n_criteria)
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         verdicts = _fail_all_verdicts(
             n_criteria,
             f"Judge execution error: {e}",
@@ -491,4 +491,3 @@ def main() -> None:
         run_judge_batch(args.input, args.output)
     else:
         run_judge(args.input, args.output)
-
