@@ -13,6 +13,7 @@ from gandalf.judge import (
     _make_verdict_path,
     _read_batch_verdict,
     _read_verdict,
+    build_batch_judge_prompt,
     build_judge_prompt,
     run_judge,
     run_judge_batch,
@@ -539,6 +540,111 @@ class TestRunJudgeBatch:
         assert data["llm_usage"]["prompt_tokens"] == 1000
         assert all(v["met"] is None for v in data["verdicts"])
         assert "Batch parsing blew up" in data["verdicts"][0]["reasoning"]
+
+
+class TestBuildJudgePromptXMLTags:
+    """Verify prompts use XML tags instead of Markdown headings."""
+
+    def test_single_uses_xml_tags(self) -> None:
+        prompt = build_judge_prompt(
+            instructions="x",
+            final_output="y",
+            criteria="c",
+            verdict_path="/tmp/v.json",
+        )
+        assert "<task_instructions>" in prompt
+        assert "</task_instructions>" in prompt
+        assert "<agent_final_output>" in prompt
+        assert "<evaluation_criteria>" in prompt
+        assert "<judge_instructions>" in prompt
+        assert "## " not in prompt
+
+    def test_batch_uses_xml_tags(self) -> None:
+        criteria = [{"index": 0, "criteria": "c0"}, {"index": 1, "criteria": "c1"}]
+        prompt = build_batch_judge_prompt(
+            instructions="x",
+            final_output="y",
+            criteria=criteria,
+            verdict_path="/tmp/v.json",
+        )
+        assert "<task_instructions>" in prompt
+        assert "<evaluation_criteria>" in prompt
+        assert "<judge_instructions>" in prompt
+        assert "## " not in prompt
+
+    def test_single_guidance_uses_xml_tag(self) -> None:
+        prompt = build_judge_prompt(
+            instructions="x",
+            final_output="y",
+            criteria="c",
+            verdict_path="/tmp/v.json",
+            judge_guidance="GUIDANCE_TEXT",
+        )
+        assert "<judge_guidance>" in prompt
+        assert "GUIDANCE_TEXT" in prompt
+        assert "</judge_guidance>" in prompt
+
+    def test_single_no_guidance_tag_when_empty(self) -> None:
+        prompt = build_judge_prompt(
+            instructions="x",
+            final_output="y",
+            criteria="c",
+            verdict_path="/tmp/v.json",
+        )
+        assert "<judge_guidance>" not in prompt
+
+
+class TestBuildJudgePromptCustomTemplate:
+    """Verify system_prompt_template overrides the built-in prompt."""
+
+    def test_single_custom_template(self) -> None:
+        template = "CUSTOM: {{ instructions }} | {{ criteria }} | {{ verdict_path }}"
+        prompt = build_judge_prompt(
+            instructions="do stuff",
+            final_output="done",
+            criteria="check it",
+            verdict_path="/tmp/v.json",
+            system_prompt_template=template,
+        )
+        assert prompt == "CUSTOM: do stuff | check it | /tmp/v.json"
+
+    def test_batch_custom_template(self) -> None:
+        template = "BATCH: {{ criteria_block }} | n_max={{ n_max }}"
+        criteria = [{"index": 0, "criteria": "c0"}, {"index": 1, "criteria": "c1"}]
+        prompt = build_batch_judge_prompt(
+            instructions="x",
+            final_output="y",
+            criteria=criteria,
+            verdict_path="/tmp/v.json",
+            system_prompt_template=template,
+        )
+        assert "BATCH:" in prompt
+        assert "[0] c0" in prompt
+        assert "n_max=1" in prompt
+
+    def test_custom_template_receives_judge_guidance(self) -> None:
+        template = "{% if judge_guidance %}G:{{ judge_guidance }}{% endif %}"
+        prompt = build_judge_prompt(
+            instructions="x",
+            final_output="y",
+            criteria="c",
+            verdict_path="/tmp/v.json",
+            judge_guidance="be careful",
+            system_prompt_template=template,
+        )
+        assert prompt == "G:be careful"
+
+    def test_custom_template_no_builtin_content(self) -> None:
+        template = "ONLY THIS"
+        prompt = build_judge_prompt(
+            instructions="x",
+            final_output="y",
+            criteria="c",
+            verdict_path="/tmp/v.json",
+            system_prompt_template=template,
+        )
+        assert prompt == "ONLY THIS"
+        assert "expert judge" not in prompt
 
 
 class TestRunJudgeLLM:
