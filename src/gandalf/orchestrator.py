@@ -29,9 +29,9 @@ from gandalf.config import (
     BatchJudgeInput,
     CriteriaResult,
     EvaluationInfo,
+    GraderConfig,
     JudgeInput,
     RubricItem,
-    GraderConfig,
     load_config,
     load_rubric,
 )
@@ -81,7 +81,7 @@ def resolve_judge_guidance(config: GraderConfig) -> str:
             if config.judge_guidance_path
             else "GRADER_JUDGE_GUIDANCE_PATH env var"
         )
-        print(
+        print(  # noqa: T201
             f"ERROR: Judge guidance file not found: {path}\n"
             f"  Configured via: {source}\n"
             f"  Fix: ensure the file exists at that path, or remove the setting to run without guidance.",
@@ -106,7 +106,7 @@ def _clone_workspace(src: str) -> str:
     clone_dir = tempfile.mkdtemp(prefix="judge_workspace_", dir="/tmp")
     # Root dir is created by mkdtemp at 0o700; open it up immediately so
     # sandbox_user can traverse and write to it.
-    os.chmod(clone_dir, 0o777)
+    os.chmod(clone_dir, 0o777)  # noqa: S103
     skipped: list[str] = []
 
     def _on_walk_error(err: OSError) -> None:
@@ -116,7 +116,7 @@ def _clone_workspace(src: str) -> str:
         rel = os.path.relpath(dirpath, src)
         dst_dir = os.path.join(clone_dir, rel)
         os.makedirs(dst_dir, exist_ok=True)
-        os.chmod(dst_dir, 0o777)
+        os.chmod(dst_dir, 0o777)  # noqa: S103
 
         for fname in filenames:
             src_file = os.path.join(dirpath, fname)
@@ -132,15 +132,16 @@ def _clone_workspace(src: str) -> str:
                 # IsADirectoryError (symlinks to dirs in filenames), etc.
                 skipped.append(src_file)
 
+    max_skipped_log = 20
     if skipped:
-        print(
+        print(  # noqa: T201
             f"[gandalf] workspace clone: skipped {len(skipped)} unreadable path(s):",
             file=sys.stderr,
         )
-        for p in skipped[:20]:
-            print(f"  - {p}", file=sys.stderr)
-        if len(skipped) > 20:
-            print(f"  ... and {len(skipped) - 20} more", file=sys.stderr)
+        for p in skipped[:max_skipped_log]:
+            print(f"  - {p}", file=sys.stderr)  # noqa: T201
+        if len(skipped) > max_skipped_log:
+            print(f"  ... and {len(skipped) - max_skipped_log} more", file=sys.stderr)  # noqa: T201
 
     return clone_dir
 
@@ -154,7 +155,7 @@ def evaluate_criteria(
     """Run the inner judge as the sandbox user for a single criteria."""
     try:
         clone_dir = _clone_workspace(judge_input.workdir)
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         return {"met": None, "reasoning": f"Failed to clone workspace: {e}"}
 
     cloned_input = judge_input.model_copy(update={"workdir": clone_dir})
@@ -179,7 +180,7 @@ def evaluate_criteria(
         delete=False,
     ) as output_f:
         output_path = output_f.name
-    os.chmod(output_path, 0o666)
+    os.chmod(output_path, 0o666)  # noqa: S103
 
     try:
         os.chmod(input_path, 0o644)
@@ -202,6 +203,7 @@ def evaluate_criteria(
 
         result = subprocess.run(
             cmd,
+            check=False,
             capture_output=True,
             text=True,
             timeout=timeout,
@@ -260,7 +262,7 @@ def evaluate_all_criteria(
 
     try:
         clone_dir = _clone_workspace(judge_input.workdir)
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         return _fail_all(n_criteria, f"Failed to clone workspace: {e}"), {}
 
     cloned_input = judge_input.model_copy(update={"workdir": clone_dir})
@@ -285,7 +287,7 @@ def evaluate_all_criteria(
         delete=False,
     ) as output_f:
         output_path = output_f.name
-    os.chmod(output_path, 0o666)
+    os.chmod(output_path, 0o666)  # noqa: S103
 
     try:
         os.chmod(input_path, 0o644)
@@ -310,6 +312,7 @@ def evaluate_all_criteria(
 
         result = subprocess.run(
             cmd,
+            check=False,
             capture_output=True,
             text=True,
             timeout=timeout,
@@ -373,7 +376,7 @@ def _run_sequential(
     results: list[CriteriaResult] = []
     total_usage: dict[str, float | int] = {}
     for i, item in enumerate(rubric):
-        print(f"[{i + 1}/{len(rubric)}] Evaluating: {item.criteria[:80]}...")
+        print(f"[{i + 1}/{len(rubric)}] Evaluating: {item.criteria[:80]}...")  # noqa: T201
 
         judge_input = JudgeInput(
             model=config.model,
@@ -407,7 +410,7 @@ def _run_sequential(
         results.append(result)
 
         status = "MET" if result.met is True else ("ERROR" if result.met is None else "UNMET")
-        print(f"  -> {status}: {result.reasoning[:120]}")
+        print(f"  -> {status}: {result.reasoning[:120]}")  # noqa: T201
 
     return results, total_usage
 
@@ -430,7 +433,7 @@ def _run_batch(
     if config.batch_timeout is not None:
         batch_timeout = min(batch_timeout, config.batch_timeout)
 
-    print(f"[batch] Evaluating all {n_criteria} criteria in one session (timeout={batch_timeout}s)...")
+    print(f"[batch] Evaluating all {n_criteria} criteria in one session (timeout={batch_timeout}s)...")  # noqa: T201
 
     judge_input = BatchJudgeInput(
         model=config.model,
@@ -463,7 +466,7 @@ def _run_batch(
         results.append(result)
 
         status = "MET" if result.met is True else ("ERROR" if result.met is None else "UNMET")
-        print(f"  [{i + 1}/{len(rubric)}] {status}: {result.reasoning[:120]}")
+        print(f"  [{i + 1}/{len(rubric)}] {status}: {result.reasoning[:120]}")  # noqa: T201
 
     return results, llm_usage
 
@@ -485,7 +488,7 @@ def _retry_sequential(
     """Re-run each errored criterion individually and merge results in-place."""
     for idx in errored_indices:
         item = rubric[idx]
-        print(f"  [retry {idx}] Evaluating: {item.criteria[:80]}...")
+        print(f"  [retry {idx}] Evaluating: {item.criteria[:80]}...")  # noqa: T201
 
         judge_input = JudgeInput(
             model=config.model,
@@ -518,7 +521,7 @@ def _retry_sequential(
         )
 
         status = "MET" if results[idx].met is True else ("ERROR" if results[idx].met is None else "UNMET")
-        print(f"    -> {status}: {results[idx].reasoning[:120]}")
+        print(f"    -> {status}: {results[idx].reasoning[:120]}")  # noqa: T201
 
 
 def _retry_batch(
@@ -541,7 +544,7 @@ def _retry_batch(
     if config.batch_timeout is not None:
         batch_timeout = min(batch_timeout, config.batch_timeout)
 
-    print(f"  [retry batch] Re-evaluating {n_retry} criteria (timeout={batch_timeout}s)...")
+    print(f"  [retry batch] Re-evaluating {n_retry} criteria (timeout={batch_timeout}s)...")  # noqa: T201
 
     judge_input = BatchJudgeInput(
         model=config.model,
@@ -576,7 +579,7 @@ def _retry_batch(
 
         met = results[orig_idx].met
         status = "MET" if met is True else ("ERROR" if met is None else "UNMET")
-        print(f"    [{orig_idx}] {status}: {results[orig_idx].reasoning[:120]}")
+        print(f"    [{orig_idx}] {status}: {results[orig_idx].reasoning[:120]}")  # noqa: T201
 
 
 def _write_info(
@@ -671,7 +674,7 @@ def main() -> None:
         errored = _get_errored_indices(results)
         if not errored:
             break
-        print(f"\n[retry {attempt + 1}/{config.judge_retries}] Retrying {len(errored)} errored criteria...")
+        print(f"\n[retry {attempt + 1}/{config.judge_retries}] Retrying {len(errored)} errored criteria...")  # noqa: T201
         if config.mode == "batch":
             _retry_batch(config, rubric, results, llm_usage, final_output, judge_guidance, errored)
         else:
@@ -688,27 +691,26 @@ def main() -> None:
 
     # 5. If any criteria still errored: do NOT write reward.json, exit 1
     if final_errored:
-        print(
+        print(  # noqa: T201
             f"\nERROR: {errored_count} criteria could not be evaluated "
             f"(initial errors: {initial_errored}, after retries: {errored_count}).",
             file=sys.stderr,
         )
-        print(f"info.json written to {config.output_dir}/ (reward.json NOT written)", file=sys.stderr)
+        print(f"info.json written to {config.output_dir}/ (reward.json NOT written)", file=sys.stderr)  # noqa: T201
         sys.exit(1)
 
     # 6. All resolved — write reward.json
     with open(os.path.join(config.output_dir, "reward.json"), "w") as f:
         json.dump({"reward": reward}, f, indent=2)
 
-    print(f"\nReward: {reward} (raw: {raw_score})")
+    print(f"\nReward: {reward} (raw: {raw_score})")  # noqa: T201
     if total_cost > 0:
-        print(
+        print(  # noqa: T201
             f"Grader LLM cost: ${total_cost:.4f} "
             f"({len(rubric)} criteria, "
             f"{total_prompt} prompt + {total_completion} completion tokens)"
         )
-    print(f"Mode: {config.mode}")
+    print(f"Mode: {config.mode}")  # noqa: T201
     if initial_errored > 0:
-        print(f"Retried: {initial_errored} criteria recovered after retry")
-    print(f"Results written to {config.output_dir}/")
-
+        print(f"Retried: {initial_errored} criteria recovered after retry")  # noqa: T201
+    print(f"Results written to {config.output_dir}/")  # noqa: T201

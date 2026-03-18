@@ -189,7 +189,7 @@ class TestMakeVerdictPath:
         This test fails on the pre-fix code (_make_verdict_path had no dir param)
         and passes with the fix.
         """
-        path = _make_verdict_path(dir=str(tmp_path))
+        path = _make_verdict_path(directory=str(tmp_path))
         assert path.startswith(str(tmp_path)), (
             f"Verdict path {path!r} should be inside workdir {tmp_path}, "
             "not in /tmp — sandbox_user may lack /tmp write access"
@@ -214,8 +214,8 @@ class TestMakeVerdictPath:
 
         captured_verdict_dir = {}
 
-        def _fake_make_verdict_path(prefix: str = "verdict_", dir: str | None = None) -> str:
-            captured_verdict_dir["dir"] = dir
+        def _fake_make_verdict_path(prefix: str = "verdict_", directory: str | None = None) -> str:
+            captured_verdict_dir["dir"] = directory
             # Return a path inside tmp_path so the test can write the verdict
             p = str(tmp_path / f"{prefix}test.json")
             (tmp_path / f"{prefix}test.json").write_text(json.dumps({"met": True, "reasoning": "ok", "evidence": []}))
@@ -437,7 +437,7 @@ class TestRunJudge:
     """Tests for run_judge — mocks _run_agent_session to avoid OpenHands."""
 
     @patch("gandalf.judge._run_agent_session", return_value=MOCK_USAGE)
-    def test_success_includes_usage(self, mock_session: Any, tmp_path: pathlib.Path) -> None:
+    def test_success_includes_usage(self, mock_session: Any, tmp_path: pathlib.Path) -> None:  # noqa: ARG002
         input_path = _make_judge_input_json(tmp_path)
         output_path = str(tmp_path / "output.json")
 
@@ -456,7 +456,7 @@ class TestRunJudge:
         assert result["llm_usage"]["cost_usd"] == 0.05
 
     @patch("gandalf.judge._run_agent_session", return_value=MOCK_USAGE)
-    def test_preserves_usage_when_verdict_missing(self, mock_session: Any, tmp_path: pathlib.Path) -> None:
+    def test_preserves_usage_when_verdict_missing(self, mock_session: Any, tmp_path: pathlib.Path) -> None:  # noqa: ARG002
         """If _run_agent_session succeeds but verdict file is missing, cost is kept."""
         input_path = _make_judge_input_json(tmp_path)
         output_path = str(tmp_path / "output.json")
@@ -476,7 +476,7 @@ class TestRunJudge:
         "gandalf.judge._run_agent_session",
         side_effect=RuntimeError("LLM exploded"),
     )
-    def test_session_failure_has_empty_usage(self, mock_session: Any, tmp_path: pathlib.Path) -> None:
+    def test_session_failure_has_empty_usage(self, mock_session: Any, tmp_path: pathlib.Path) -> None:  # noqa: ARG002
         """If _run_agent_session itself raises, usage stays empty."""
         input_path = _make_judge_input_json(tmp_path)
         output_path = str(tmp_path / "output.json")
@@ -498,7 +498,10 @@ class TestRunJudge:
         side_effect=RuntimeError("Unexpected parsing error"),
     )
     def test_preserves_usage_when_read_verdict_raises(
-        self, mock_read: Any, mock_session: Any, tmp_path: pathlib.Path
+        self,
+        mock_read: Any,  # noqa: ARG002
+        mock_session: Any,  # noqa: ARG002
+        tmp_path: pathlib.Path,
     ) -> None:
         """If _read_verdict raises after the session ran, usage is still preserved."""
         input_path = _make_judge_input_json(tmp_path)
@@ -521,7 +524,7 @@ class TestRunJudgeBatch:
     """Tests for run_judge_batch — mocks _run_agent_session to avoid OpenHands."""
 
     @patch("gandalf.judge._run_agent_session", return_value=MOCK_USAGE)
-    def test_output_wraps_verdicts_and_usage(self, mock_session: Any, tmp_path: pathlib.Path) -> None:
+    def test_output_wraps_verdicts_and_usage(self, mock_session: Any, tmp_path: pathlib.Path) -> None:  # noqa: ARG002
         input_path = _make_batch_judge_input_json(tmp_path, n=2)
         output_path = str(tmp_path / "output.json")
 
@@ -544,7 +547,7 @@ class TestRunJudgeBatch:
         assert data["llm_usage"]["cost_usd"] == 0.05
 
     @patch("gandalf.judge._run_agent_session", return_value=MOCK_USAGE)
-    def test_no_per_verdict_usage_keys(self, mock_session: Any, tmp_path: pathlib.Path) -> None:
+    def test_no_per_verdict_usage_keys(self, mock_session: Any, tmp_path: pathlib.Path) -> None:  # noqa: ARG002
         """Verdicts should NOT contain llm_usage — it's a sibling field."""
         input_path = _make_batch_judge_input_json(tmp_path, n=1)
         output_path = str(tmp_path / "output.json")
@@ -562,7 +565,7 @@ class TestRunJudgeBatch:
             assert "llm_usage" not in v
 
     @patch("gandalf.judge._run_agent_session", return_value=MOCK_USAGE)
-    def test_preserves_usage_when_verdict_missing(self, mock_session: Any, tmp_path: pathlib.Path) -> None:
+    def test_preserves_usage_when_verdict_missing(self, mock_session: Any, tmp_path: pathlib.Path) -> None:  # noqa: ARG002
         input_path = _make_batch_judge_input_json(tmp_path, n=2)
         output_path = str(tmp_path / "output.json")
 
@@ -580,7 +583,7 @@ class TestRunJudgeBatch:
         "gandalf.judge._run_agent_session",
         side_effect=RuntimeError("LLM exploded"),
     )
-    def test_session_failure_has_empty_usage(self, mock_session: Any, tmp_path: pathlib.Path) -> None:
+    def test_session_failure_has_empty_usage(self, mock_session: Any, tmp_path: pathlib.Path) -> None:  # noqa: ARG002
         input_path = _make_batch_judge_input_json(tmp_path, n=2)
         output_path = str(tmp_path / "output.json")
 
@@ -600,7 +603,10 @@ class TestRunJudgeBatch:
         side_effect=RuntimeError("Batch parsing blew up"),
     )
     def test_preserves_usage_when_read_batch_verdict_raises(
-        self, mock_read: Any, mock_session: Any, tmp_path: pathlib.Path
+        self,
+        mock_read: Any,  # noqa: ARG002
+        mock_session: Any,  # noqa: ARG002
+        tmp_path: pathlib.Path,
     ) -> None:
         """If _read_batch_verdict raises after the session ran, usage is preserved."""
         input_path = _make_batch_judge_input_json(tmp_path, n=2)
