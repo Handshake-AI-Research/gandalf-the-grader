@@ -492,6 +492,3 @@ def main() -> None:
     else:
         run_judge(args.input, args.output)
 
-
-if __name__ == "__main__":
-    main()

@@ -712,6 +712,3 @@ def main() -> None:
         print(f"Retried: {initial_errored} criteria recovered after retry")
     print(f"Results written to {config.output_dir}/")
 
-
-if __name__ == "__main__":
-    main()
