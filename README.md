@@ -71,7 +71,7 @@ gandalf-the-grader --config /tests/grader.toml
 | Field | Required | Default | Description |
 |---|---|---|---|
 | `model` | No | `gemini/gemini-2.5-flash` | LLM model for the judge agent |
-| `sandbox_user` | Yes | | Username for running the inner judge (via sudo) |
+| `sandbox_user` | No | | Username for running the inner judge (via sudo). When omitted the judge runs as the current user. |
 | `instructions` | Yes | | Task instructions given to the original agent |
 | `rubric_path` | Yes | | Path to rubric JSON file |
 | `workdir` | Yes | | Agent workspace directory |

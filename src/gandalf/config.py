@@ -38,7 +38,7 @@ class GraderConfig(BaseModel):
     rubric_path: str
     workdir: str
     trajectory_path: str
-    sandbox_user: str
+    sandbox_user: str | None = None
     mcp_servers: list[MCPServer] = Field(default_factory=list)
     output_dir: str
     judge_timeout: int = 300

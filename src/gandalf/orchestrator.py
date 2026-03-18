@@ -179,11 +179,15 @@ def _clone_workspace(src: str) -> str:
 
 def evaluate_criteria(
     judge_input: JudgeInput,
-    sandbox_user: str,
+    sandbox_user: str | None,
     trace_path: str,
     timeout: int = 300,
 ) -> dict[str, Any]:
-    """Run the inner judge as the sandbox user for a single criteria."""
+    """Run the inner judge for a single criteria.
+
+    When *sandbox_user* is set the judge is executed via ``sudo -u``.
+    When it is ``None`` the judge runs as the ambient (current) user.
+    """
     try:
         clone_dir = _clone_workspace(judge_input.workdir)
     except Exception as e:  # noqa: BLE001
@@ -215,22 +219,30 @@ def evaluate_criteria(
 
     try:
         os.chmod(input_path, 0o644)
-        cmd = [
-            "sudo",
-            "-u",
-            sandbox_user,
-            "env",
-            # Set HOME to the cloned workspace so the judge process (and any
-            # SDK it imports, e.g. OpenHands) writes ephemeral state to a
-            # writable, isolated directory instead of the original user's home.
-            f"HOME={clone_dir}",
-            *_judge_env_vars(),
-            "gandalf-the-grader-judge",
-            "--input",
-            input_path,
-            "--output",
-            output_path,
-        ]
+        env_vars = [f"HOME={clone_dir}", *_judge_env_vars()]
+        if sandbox_user is not None:
+            cmd = [
+                "sudo",
+                "-u",
+                sandbox_user,
+                "env",
+                *env_vars,
+                "gandalf-the-grader-judge",
+                "--input",
+                input_path,
+                "--output",
+                output_path,
+            ]
+        else:
+            cmd = [
+                "env",
+                *env_vars,
+                "gandalf-the-grader-judge",
+                "--input",
+                input_path,
+                "--output",
+                output_path,
+            ]
 
         result = subprocess.run(
             cmd,
@@ -272,7 +284,7 @@ def _fail_all(n: int, reason: str) -> list[dict[str, Any]]:
 
 def evaluate_all_criteria(
     judge_input: BatchJudgeInput,
-    sandbox_user: str,
+    sandbox_user: str | None,
     trace_path: str,
     timeout: int = 300,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
@@ -280,7 +292,8 @@ def evaluate_all_criteria(
 
     Args:
         judge_input: Batch input with all context needed by the judge.
-        sandbox_user: Username to run the judge process as (via sudo).
+        sandbox_user: Username to run the judge process as (via sudo),
+            or ``None`` to run as the ambient user.
         trace_path: Path to write the judge's stdout/stderr trace.
         timeout: Max seconds to wait for the judge to complete.
 
@@ -323,23 +336,32 @@ def evaluate_all_criteria(
     try:
         os.chmod(input_path, 0o644)
 
-        cmd = [
-            "sudo",
-            "-u",
-            sandbox_user,
-            "env",
-            # Set HOME to the cloned workspace so the judge process (and any
-            # SDK it imports, e.g. OpenHands) writes ephemeral state to a
-            # writable, isolated directory instead of the original user's home.
-            f"HOME={clone_dir}",
-            *_judge_env_vars(),
-            "gandalf-the-grader-judge",
-            "--input",
-            input_path,
-            "--output",
-            output_path,
-            "--batch",
-        ]
+        env_vars = [f"HOME={clone_dir}", *_judge_env_vars()]
+        if sandbox_user is not None:
+            cmd = [
+                "sudo",
+                "-u",
+                sandbox_user,
+                "env",
+                *env_vars,
+                "gandalf-the-grader-judge",
+                "--input",
+                input_path,
+                "--output",
+                output_path,
+                "--batch",
+            ]
+        else:
+            cmd = [
+                "env",
+                *env_vars,
+                "gandalf-the-grader-judge",
+                "--input",
+                input_path,
+                "--output",
+                output_path,
+                "--batch",
+            ]
 
         result = subprocess.run(
             cmd,

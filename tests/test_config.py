@@ -249,6 +249,40 @@ class TestPydanticModels:
         assert info.maximum_score == 6.0
         assert len(info.criteria_results) == 3
 
+    def test_grader_config_sandbox_user_defaults_none(self) -> None:
+        cfg = GraderConfig(
+            instructions="test",
+            rubric_path="/rubric.json",
+            workdir="/workspace",
+            trajectory_path="/logs/trajectory.json",
+            output_dir="/logs/grader",
+        )
+        assert cfg.sandbox_user is None
+
+    def test_grader_config_sandbox_user_explicit(self) -> None:
+        cfg = GraderConfig(
+            instructions="test",
+            rubric_path="/rubric.json",
+            workdir="/workspace",
+            trajectory_path="/logs/trajectory.json",
+            output_dir="/logs/grader",
+            sandbox_user="sandbox",
+        )
+        assert cfg.sandbox_user == "sandbox"
+
+    def test_grader_config_sandbox_user_omitted_from_toml(self, tmp_path: pathlib.Path) -> None:
+        toml_content = """\
+instructions = "Do something."
+rubric_path = "/tests/rubric.json"
+workdir = "/workspace"
+trajectory_path = "/logs/trajectory.json"
+output_dir = "/logs/grader"
+"""
+        p = tmp_path / "grader.toml"
+        p.write_text(toml_content)
+        cfg = load_config(str(p))
+        assert cfg.sandbox_user is None
+
     def test_grader_config_judge_retries_default(self) -> None:
         cfg = GraderConfig(
             instructions="test",

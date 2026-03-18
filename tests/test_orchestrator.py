@@ -16,6 +16,7 @@ from gandalf.config import (
     BatchJudgeInput,
     CriteriaResult,
     GraderConfig,
+    JudgeInput,
     RubricItem,
 )
 from gandalf.orchestrator import (
@@ -25,6 +26,7 @@ from gandalf.orchestrator import (
     _run_batch_concurrent,
     _write_info,
     evaluate_all_criteria,
+    evaluate_criteria,
     main,
     resolve_judge_guidance,
     resolve_system_prompt,
@@ -441,6 +443,87 @@ class TestEvaluateAllCriteria:
         assert len(verdicts) == 2
         assert all(v["met"] is None for v in verdicts)
         assert usage == {}
+
+
+@pytest.fixture()
+def _fake_judge(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> pathlib.Path:
+    """Create a fake ``gandalf-the-grader-judge`` on PATH.
+
+    The script reads --input/--output args and writes a valid verdict to the
+    output file.  When ``--batch`` is passed it writes the dict-with-verdicts
+    format; otherwise a single-criterion verdict dict.
+    """
+    script = tmp_path / "bin" / "gandalf-the-grader-judge"
+    script.parent.mkdir()
+    script.write_text(
+        """\
+#!/usr/bin/env python3
+import argparse, json, sys
+
+parser = argparse.ArgumentParser()
+parser.add_argument("--input", required=True)
+parser.add_argument("--output", required=True)
+parser.add_argument("--batch", action="store_true")
+args = parser.parse_args()
+
+inp = json.load(open(args.input))
+
+if args.batch:
+    verdicts = [
+        {"index": c["index"], "met": True, "reasoning": "ok", "evidence": []}
+        for c in inp["criteria"]
+    ]
+    result = {"verdicts": verdicts, "llm_usage": {"cost_usd": 0.01}}
+else:
+    result = {"met": True, "reasoning": "ok", "evidence": []}
+
+with open(args.output, "w") as f:
+    json.dump(result, f)
+""",
+    )
+    script.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{script.parent}:{os.environ.get('PATH', '')}")
+    return script
+
+
+class TestSandboxUserNone:
+    """When sandbox_user is None the judge runs as the ambient user (no sudo)."""
+
+    @pytest.mark.usefixtures("_fake_judge")
+    def test_evaluate_criteria_no_sudo(self, tmp_path: pathlib.Path) -> None:
+        workdir = tmp_path / "workspace"
+        workdir.mkdir()
+        (workdir / "hello.txt").write_text("hi")
+
+        judge_input = JudgeInput(
+            model="test-model",
+            instructions="test",
+            final_output="done",
+            criteria="check something",
+            workdir=str(workdir),
+        )
+        trace_path = str(tmp_path / "trace.txt")
+
+        result = evaluate_criteria(judge_input, sandbox_user=None, trace_path=trace_path)
+
+        assert result["met"] is True
+        assert result["reasoning"] == "ok"
+
+    @pytest.mark.usefixtures("_fake_judge")
+    def test_evaluate_all_criteria_no_sudo(self, tmp_path: pathlib.Path) -> None:
+        workdir = tmp_path / "workspace"
+        workdir.mkdir()
+        (workdir / "hello.txt").write_text("hi")
+
+        judge_input = _make_batch_input(tmp_path, n=2)
+        judge_input = judge_input.model_copy(update={"workdir": str(workdir)})
+        trace_path = str(tmp_path / "trace.txt")
+
+        verdicts, usage = evaluate_all_criteria(judge_input, sandbox_user=None, trace_path=trace_path)
+
+        assert len(verdicts) == 2
+        assert all(v["met"] is True for v in verdicts)
+        assert usage["cost_usd"] == 0.01
 
 
 def _cr(*, weight: float, met: bool | None) -> CriteriaResult:
