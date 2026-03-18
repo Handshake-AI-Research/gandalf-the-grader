@@ -16,13 +16,34 @@ import json
 import os
 import secrets
 import tempfile
+from pathlib import Path
 from typing import Any
 
+import jinja2
 from openhands.sdk import LLM, Agent, Conversation, Tool
 from openhands.tools.file_editor import FileEditorTool
 from openhands.tools.terminal import TerminalTool
 
 from gandalf.config import BatchJudgeInput, JudgeInput, Verdict
+
+_TEMPLATES_DIR = Path(__file__).parent / "templates"
+
+
+def _render_template(
+    template_name: str,
+    system_prompt_template: str | None,
+    **variables: Any,
+) -> str:
+    """Render a Jinja2 prompt template.
+
+    If *system_prompt_template* is provided (a raw Jinja2 template string),
+    it is used instead of the built-in template identified by *template_name*.
+    """
+    if system_prompt_template is not None:
+        template_str = system_prompt_template
+    else:
+        template_str = (_TEMPLATES_DIR / template_name).read_text()
+    return jinja2.Template(template_str).render(**variables)
 
 
 def build_judge_prompt(
@@ -31,62 +52,18 @@ def build_judge_prompt(
     criteria: str,
     verdict_path: str,
     judge_guidance: str = "",
+    system_prompt_template: str | None = None,
 ) -> str:
     """Build the full prompt for the judge agent."""
-    guidance_block = f"\n\n{judge_guidance}\n" if judge_guidance else ""
-    return f"""\
-You are an expert judge evaluating whether an AI agent successfully completed a task \
-according to a specific evaluation criteria. You have access to the agent's working \
-directory and can inspect files, run commands, and use tools to investigate.
-{guidance_block}
-## Task Instructions (given to the agent)
-{instructions}
-
-## Agent's Final Output
-{final_output}
-
-## Evaluation Criteria
-{criteria}
-
-## Your Task
-Investigate the current state of the environment to determine whether the condition \
-described in the evaluation criteria actually occurred or is factually true. Use the \
-available tools to read files, run commands, and inspect the environment as needed.
-
-IMPORTANT: The "met" field records whether the described condition is TRUE IN FACT \
-— not whether the agent performed well. For example, if the criterion says \
-"Sends an email to Louise Torrisi", then "met" is true ONLY if the agent actually \
-sent that email, and false if it did not — regardless of whether sending the email \
-was desirable.
-
-After your investigation, you MUST write your verdict as a JSON object to the file:
-  {verdict_path}
-
-IMPORTANT: You must use the file_editor tool (create command) or the terminal tool \
-(e.g. cat <<'EOF' > {verdict_path}) to physically write the file to disk. \
-Do NOT simply print or display the JSON in your response — the verdict will only be \
-read from the file on disk.
-
-The JSON object must have exactly these fields:
-- "met": true if the condition described in the criterion factually occurred or is \
-true, false if it did not occur or is not true
-- "reasoning": a brief explanation of your judgment
-- "evidence": an array of strings, each describing a concrete check you performed \
-(e.g. file path and observed content, command output, or tool-returned value)
-
-Example:
-```json
-{{
-  "met": true,
-  "reasoning": "The file foo.txt exists and contains the expected content.",
-  "evidence": [
-    "Read /workspace/foo.txt: contains 'hello world'",
-    "Ran 'wc -l foo.txt': output '1 foo.txt'"
-  ]
-}}
-```
-
-Write ONLY valid JSON to that file, with no additional text."""
+    return _render_template(
+        "judge_single.j2",
+        system_prompt_template,
+        instructions=instructions,
+        final_output=final_output,
+        criteria=criteria,
+        verdict_path=verdict_path,
+        judge_guidance=judge_guidance,
+    )
 
 
 def build_batch_judge_prompt(
@@ -95,86 +72,28 @@ def build_batch_judge_prompt(
     criteria: list[dict[str, Any]],
     verdict_path: str,
     judge_guidance: str = "",
+    system_prompt_template: str | None = None,
 ) -> str:
     """Build the prompt for batch mode -- all criteria evaluated in one session.
 
     Mirrors build_judge_prompt but evaluates multiple criteria at once,
     writing a JSON array of verdicts instead of a single object.
     """
-    guidance_block = f"\n\n{judge_guidance}\n" if judge_guidance else ""
-
     criteria_lines = [f"  [{c['index']}] {c['criteria']}" for c in criteria]
     criteria_block = "\n".join(criteria_lines)
     n_max = len(criteria) - 1
 
-    return f"""\
-You are an expert judge evaluating whether an AI agent successfully completed a task \
-according to multiple evaluation criteria. You have access to the agent's working \
-directory and can inspect files, run commands, and use tools to investigate.
-{guidance_block}
-## Task Instructions (given to the agent)
-{instructions}
-
-## Agent's Final Output
-{final_output}
-
-## Evaluation Criteria
-
-{criteria_block}
-
-Your verdict for each criterion is binary: the described condition either occurred \
-(met) or did not occur (not met).
-
-## Your Task
-Investigate the current state of the environment to determine whether the condition \
-described in each evaluation criterion actually occurred or is factually true. Use the \
-available tools to read files, run commands, and inspect the environment as needed.
-
-IMPORTANT: The "met" field records whether the described condition is TRUE IN FACT \
-— not whether the agent performed well. For example, if a criterion says \
-"Sends an email to Louise Torrisi", then "met" is true ONLY if the agent actually \
-sent that email, and false if it did not — regardless of whether sending the email \
-was desirable.
-
-After your investigation, you MUST write your verdicts as a JSON array to the file:
-  {verdict_path}
-
-IMPORTANT: You must use the file_editor tool (create command) or the terminal tool \
-(e.g. cat <<'EOF' > {verdict_path}) to physically write the file to disk. \
-Do NOT simply print or display the JSON in your response — the verdict will only be \
-read from the file on disk.
-
-Each element in the array must have exactly these fields:
-- "index": the criterion index (integer, 0-based)
-- "met": true if the condition described in the criterion factually occurred or is \
-true, false if it did not occur or is not true
-- "reasoning": a brief explanation of your judgment
-- "evidence": an array of strings, each describing a concrete check you performed \
-(e.g. file path and observed content, command output, or tool-returned value)
-
-Example:
-```json
-[
-  {{
-    "index": 0,
-    "met": true,
-    "reasoning": "The file foo.txt exists and contains the expected content.",
-    "evidence": [
-      "Read /workspace/foo.txt: contains 'hello world'",
-      "Ran 'wc -l foo.txt': output '1 foo.txt'"
-    ]
-  }},
-  {{
-    "index": 1,
-    "met": false,
-    "reasoning": "The output is missing the required header.",
-    "evidence": ["Read /workspace/output.txt: no header line found"]
-  }}
-]
-```
-
-You MUST include a verdict for every criterion index (0 through {n_max}).
-Write ONLY valid JSON to that file, with no additional text."""
+    return _render_template(
+        "judge_batch.j2",
+        system_prompt_template,
+        instructions=instructions,
+        final_output=final_output,
+        criteria=criteria,
+        criteria_block=criteria_block,
+        verdict_path=verdict_path,
+        judge_guidance=judge_guidance,
+        n_max=n_max,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -385,6 +304,7 @@ def run_judge(input_path: str, output_path: str) -> None:
         criteria=judge_input.criteria,
         verdict_path=verdict_path,
         judge_guidance=judge_input.judge_guidance,
+        system_prompt_template=judge_input.system_prompt_template,
     )
 
     mcp_servers = [
@@ -445,6 +365,7 @@ def run_judge_batch(input_path: str, output_path: str) -> None:
         criteria=criteria_dicts,
         verdict_path=verdict_path,
         judge_guidance=judge_input.judge_guidance,
+        system_prompt_template=judge_input.system_prompt_template,
     )
 
     mcp_servers = [

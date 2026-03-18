@@ -59,35 +59,68 @@ def _judge_env_vars() -> list[str]:
     return [f"{k}={v}" for k, v in os.environ.items() if k in _JUDGE_ENV_ALLOWLIST and v]
 
 
-def resolve_judge_guidance(config: GraderConfig) -> str:
-    """Resolve and load judge guidance content.
+def _resolve_optional_file(
+    inline: str | None,
+    path: str | None,
+    label: str,
+) -> str | None:
+    """Return *inline* content, or read from *path*, or ``None``.
 
-    Resolution order:
-      1. config.judge_guidance_path (from TOML)
-      2. GRADER_JUDGE_GUIDANCE_PATH env var
-      3. No guidance (empty string)
-
-    If a path is resolved but the file does not exist, raises SystemExit
-    with a clear error message.
+    The caller is expected to ensure *inline* and *path* are mutually
+    exclusive (enforced by ``GraderConfig``'s model validator).  If a
+    path is given but does not exist, exits with a clear error.
     """
-    path = config.judge_guidance_path or os.environ.get("GRADER_JUDGE_GUIDANCE_PATH")
+    if inline is not None:
+        return inline
     if not path:
-        return ""
+        return None
     if not os.path.isfile(path):
-        source = (
-            "judge_guidance_path in grader config"
-            if config.judge_guidance_path
-            else "GRADER_JUDGE_GUIDANCE_PATH env var"
-        )
         print(  # noqa: T201
-            f"ERROR: Judge guidance file not found: {path}\n"
-            f"  Configured via: {source}\n"
-            f"  Fix: ensure the file exists at that path, or remove the setting to run without guidance.",
+            f"ERROR: File not found: {path}\n  Configured via: {label}",
             file=sys.stderr,
         )
         sys.exit(1)
     with open(path) as f:
         return f.read()
+
+
+def resolve_system_prompt(config: GraderConfig) -> str | None:
+    """Resolve the custom system prompt template (inline, path, or env var).
+
+    Resolution order:
+      1. config.system_prompt (inline in TOML)
+      2. config.system_prompt_path (from TOML)
+      3. GRADER_SYSTEM_PROMPT_PATH env var
+      4. No custom template (returns None, uses built-in)
+    """
+    path = config.system_prompt_path or os.environ.get("GRADER_SYSTEM_PROMPT_PATH")
+    source = "system_prompt_path in grader config" if config.system_prompt_path else "GRADER_SYSTEM_PROMPT_PATH env var"
+    return _resolve_optional_file(
+        config.system_prompt,
+        path,
+        source,
+    )
+
+
+def resolve_judge_guidance(config: GraderConfig) -> str:
+    """Resolve judge guidance content (inline, path, or env var).
+
+    Resolution order:
+      1. config.judge_guidance (inline in TOML)
+      2. config.judge_guidance_path (from TOML)
+      3. GRADER_JUDGE_GUIDANCE_PATH env var
+      4. No guidance (empty string)
+    """
+    path = config.judge_guidance_path or os.environ.get("GRADER_JUDGE_GUIDANCE_PATH")
+    source = (
+        "judge_guidance_path in grader config" if config.judge_guidance_path else "GRADER_JUDGE_GUIDANCE_PATH env var"
+    )
+    result = _resolve_optional_file(
+        config.judge_guidance,
+        path,
+        source,
+    )
+    return result or ""
 
 
 def _clone_workspace(src: str) -> str:
@@ -365,6 +398,7 @@ def _run_sequential(
     rubric: list[RubricItem],
     final_output: str,
     judge_guidance: str,
+    system_prompt_template: str | None,
 ) -> tuple[list[CriteriaResult], dict[str, Any]]:
     """Evaluate each criterion in its own agent session.
 
@@ -384,6 +418,7 @@ def _run_sequential(
             workdir=config.workdir,
             mcp_servers=config.mcp_servers,
             judge_guidance=judge_guidance,
+            system_prompt_template=system_prompt_template,
         )
 
         trace_path = os.path.join(config.output_dir, f"judge_trace_{i}.txt")
@@ -418,6 +453,7 @@ def _run_batch(
     rubric: list[RubricItem],
     final_output: str,
     judge_guidance: str,
+    system_prompt_template: str | None,
 ) -> tuple[list[CriteriaResult], dict[str, Any]]:
     """Evaluate all criteria in a single agent session.
 
@@ -441,6 +477,7 @@ def _run_batch(
         workdir=config.workdir,
         mcp_servers=config.mcp_servers,
         judge_guidance=judge_guidance,
+        system_prompt_template=system_prompt_template,
     )
 
     trace_path = os.path.join(config.output_dir, "judge_trace_batch.txt")
@@ -481,6 +518,7 @@ def _retry_sequential(
     llm_usage: dict[str, Any],
     final_output: str,
     judge_guidance: str,
+    system_prompt_template: str | None,
     errored_indices: list[int],
 ) -> None:
     """Re-run each errored criterion individually and merge results in-place."""
@@ -496,6 +534,7 @@ def _retry_sequential(
             workdir=config.workdir,
             mcp_servers=config.mcp_servers,
             judge_guidance=judge_guidance,
+            system_prompt_template=system_prompt_template,
         )
 
         trace_path = os.path.join(config.output_dir, f"judge_trace_{idx}_retry.txt")
@@ -529,6 +568,7 @@ def _retry_batch(
     llm_usage: dict[str, Any],
     final_output: str,
     judge_guidance: str,
+    system_prompt_template: str | None,
     errored_indices: list[int],
 ) -> None:
     """Re-run errored criteria as a batch and merge results in-place."""
@@ -552,6 +592,7 @@ def _retry_batch(
         workdir=config.workdir,
         mcp_servers=config.mcp_servers,
         judge_guidance=judge_guidance,
+        system_prompt_template=system_prompt_template,
     )
 
     trace_path = os.path.join(config.output_dir, "judge_trace_batch_retry.txt")
@@ -655,14 +696,15 @@ def main() -> None:
     rubric = load_rubric(config.rubric_path)
     final_output = load_trajectory_final_output(config.trajectory_path)
     judge_guidance = resolve_judge_guidance(config)
+    system_prompt_template = resolve_system_prompt(config)
 
     os.makedirs(config.output_dir, exist_ok=True)
 
     # 1. Initial evaluation
     if config.mode == "batch":
-        results, llm_usage = _run_batch(config, rubric, final_output, judge_guidance)
+        results, llm_usage = _run_batch(config, rubric, final_output, judge_guidance, system_prompt_template)
     else:
-        results, llm_usage = _run_sequential(config, rubric, final_output, judge_guidance)
+        results, llm_usage = _run_sequential(config, rubric, final_output, judge_guidance, system_prompt_template)
 
     # 2. Record initial error count for observability
     initial_errored = len(_get_errored_indices(results))
@@ -674,9 +716,13 @@ def main() -> None:
             break
         print(f"\n[retry {attempt + 1}/{config.judge_retries}] Retrying {len(errored)} errored criteria...")  # noqa: T201
         if config.mode == "batch":
-            _retry_batch(config, rubric, results, llm_usage, final_output, judge_guidance, errored)
+            _retry_batch(
+                config, rubric, results, llm_usage, final_output, judge_guidance, system_prompt_template, errored
+            )
         else:
-            _retry_sequential(config, rubric, results, llm_usage, final_output, judge_guidance, errored)
+            _retry_sequential(
+                config, rubric, results, llm_usage, final_output, judge_guidance, system_prompt_template, errored
+            )
 
     # 4. ALWAYS write info.json (even on hard fail)
     final_errored = _get_errored_indices(results)

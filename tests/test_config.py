@@ -2,11 +2,13 @@
 
 import os
 import pathlib
+from typing import Any
 
 import pytest
 from pydantic import ValidationError
 
 from gandalf.config import (
+    BatchJudgeInput,
     CriteriaResult,
     EvaluationInfo,
     GraderConfig,
@@ -322,73 +324,109 @@ class TestPydanticModels:
         assert restored.final_output == ji.final_output
         assert len(restored.mcp_servers) == 1
 
-    def test_verifier_config_max_concurrency_default(self):
-        cfg = VerifierConfig(
-            instructions="test",
-            rubric_path="/rubric.json",
-            workdir="/workspace",
-            trajectory_path="/logs/trajectory.json",
-            sandbox_user="sandbox",
-        )
-        assert cfg.max_concurrency is None
 
-    def test_verifier_config_max_concurrency_explicit(self):
-        cfg = VerifierConfig(
-            instructions="test",
-            rubric_path="/rubric.json",
-            workdir="/workspace",
-            trajectory_path="/logs/trajectory.json",
-            sandbox_user="sandbox",
-            max_concurrency=2,
-        )
-        assert cfg.max_concurrency == 2
+class TestMutualExclusivity:
+    """Verify that inline and path variants cannot both be set."""
 
-    def test_verifier_config_max_concurrency_rejects_zero(self):
-        with pytest.raises(ValidationError):
-            VerifierConfig(
-                instructions="test",
-                rubric_path="/rubric.json",
-                workdir="/workspace",
-                trajectory_path="/logs/trajectory.json",
-                sandbox_user="sandbox",
-                max_concurrency=0,
+    def _base_kwargs(self) -> dict[str, Any]:
+        return {
+            "instructions": "test",
+            "rubric_path": "/rubric.json",
+            "workdir": "/workspace",
+            "trajectory_path": "/logs/trajectory.json",
+            "sandbox_user": "sandbox",
+            "output_dir": "/logs/grader",
+        }
+
+    def test_judge_guidance_inline_only(self) -> None:
+        cfg = GraderConfig(**self._base_kwargs(), judge_guidance="inline text")
+        assert cfg.judge_guidance == "inline text"
+        assert cfg.judge_guidance_path is None
+
+    def test_judge_guidance_path_only(self) -> None:
+        cfg = GraderConfig(**self._base_kwargs(), judge_guidance_path="/some/file.md")
+        assert cfg.judge_guidance_path == "/some/file.md"
+        assert cfg.judge_guidance is None
+
+    def test_judge_guidance_both_raises(self) -> None:
+        with pytest.raises(ValidationError, match="judge_guidance"):
+            GraderConfig(
+                **self._base_kwargs(),
+                judge_guidance="inline",
+                judge_guidance_path="/some/file.md",
             )
 
-    def test_verifier_config_max_concurrency_rejects_negative(self):
-        with pytest.raises(ValidationError):
-            VerifierConfig(
-                instructions="test",
-                rubric_path="/rubric.json",
-                workdir="/workspace",
-                trajectory_path="/logs/trajectory.json",
-                sandbox_user="sandbox",
-                max_concurrency=-1,
+    def test_system_prompt_inline_only(self) -> None:
+        cfg = GraderConfig(**self._base_kwargs(), system_prompt="template text")
+        assert cfg.system_prompt == "template text"
+        assert cfg.system_prompt_path is None
+
+    def test_system_prompt_path_only(self) -> None:
+        cfg = GraderConfig(**self._base_kwargs(), system_prompt_path="/some/template.j2")
+        assert cfg.system_prompt_path == "/some/template.j2"
+        assert cfg.system_prompt is None
+
+    def test_system_prompt_both_raises(self) -> None:
+        with pytest.raises(ValidationError, match="system_prompt"):
+            GraderConfig(
+                **self._base_kwargs(),
+                system_prompt="inline",
+                system_prompt_path="/some/template.j2",
             )
 
-    def test_verifier_config_mode_sequential_migrates_to_individual(self):
-        """mode='sequential' is accepted but migrated to 'individual' with a deprecation warning."""
-        import warnings
-        with warnings.catch_warnings(record=True) as w:
-            warnings.simplefilter("always")
-            cfg = VerifierConfig(
-                instructions="test",
-                rubric_path="/rubric.json",
-                workdir="/workspace",
-                trajectory_path="/logs/trajectory.json",
-                sandbox_user="sandbox",
-                mode="sequential",
-            )
-        assert cfg.mode == "individual"
-        assert len(w) == 1
-        assert "deprecated" in str(w[0].message).lower()
+    def test_neither_set_is_valid(self) -> None:
+        cfg = GraderConfig(**self._base_kwargs())
+        assert cfg.judge_guidance is None
+        assert cfg.judge_guidance_path is None
+        assert cfg.system_prompt is None
+        assert cfg.system_prompt_path is None
 
-    def test_verifier_config_mode_individual(self):
-        cfg = VerifierConfig(
-            instructions="test",
-            rubric_path="/rubric.json",
-            workdir="/workspace",
-            trajectory_path="/logs/trajectory.json",
-            sandbox_user="sandbox",
-            mode="individual",
+
+class TestSystemPromptTemplate:
+    """Verify system_prompt_template field on JudgeInput / BatchJudgeInput."""
+
+    def test_judge_input_defaults_none(self) -> None:
+        ji = JudgeInput(
+            model="m",
+            instructions="i",
+            final_output="o",
+            criteria="c",
+            workdir="/w",
         )
-        assert cfg.mode == "individual"
+        assert ji.system_prompt_template is None
+
+    def test_judge_input_roundtrip(self) -> None:
+        ji = JudgeInput(
+            model="m",
+            instructions="i",
+            final_output="o",
+            criteria="c",
+            workdir="/w",
+            system_prompt_template="Hello {{ instructions }}",
+        )
+        raw = ji.model_dump_json()
+        restored = JudgeInput.model_validate_json(raw)
+        assert restored.system_prompt_template == "Hello {{ instructions }}"
+
+    def test_batch_judge_input_defaults_none(self) -> None:
+        bji = BatchJudgeInput(
+            model="m",
+            instructions="i",
+            final_output="o",
+            criteria=[],
+            workdir="/w",
+        )
+        assert bji.system_prompt_template is None
+
+    def test_batch_judge_input_roundtrip(self) -> None:
+        bji = BatchJudgeInput(
+            model="m",
+            instructions="i",
+            final_output="o",
+            criteria=[],
+            workdir="/w",
+            system_prompt_template="Batch {{ n_max }}",
+        )
+        raw = bji.model_dump_json()
+        restored = BatchJudgeInput.model_validate_json(raw)
+        assert restored.system_prompt_template == "Batch {{ n_max }}"

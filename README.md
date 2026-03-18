@@ -79,7 +79,10 @@ gandalf-the-grader --config /tests/grader.toml
 | `output_dir` | Yes | | Directory for output files |
 | `judge_timeout` | No | `300` | Max seconds per judge invocation |
 | `mode` | No | `sequential` | Evaluation mode: `sequential` or `batch` |
-| `judge_guidance_path` | No | | Path to a markdown file with extra judge instructions |
+| `judge_guidance` | No | | Inline judge guidance text (mutually exclusive with `judge_guidance_path`) |
+| `judge_guidance_path` | No | | Path to a file with extra judge instructions (mutually exclusive with `judge_guidance`) |
+| `system_prompt` | No | | Inline Jinja2 template that completely overrides the built-in judge prompt (mutually exclusive with `system_prompt_path`) |
+| `system_prompt_path` | No | | Path to a Jinja2 template file that completely overrides the built-in judge prompt (mutually exclusive with `system_prompt`) |
 | `batch_timeout` | No | | Max total seconds for batch mode (caps `judge_timeout * N`) |
 | `judge_retries` | No | `1` | Number of retry attempts for criteria that error due to infrastructure failures |
 
@@ -92,6 +95,24 @@ transport = "stdio"
 command = "/usr/bin/mcp-server"
 args = ["--verbose"]
 ```
+
+### Custom System Prompt
+
+By default, the grader uses a built-in prompt template for the judge agent. You can completely override it with a [Jinja2](https://jinja.palletsprojects.com/) template via `system_prompt` (inline) or `system_prompt_path` (file path).
+
+The template receives these variables:
+
+| Variable | Type | Description |
+|---|---|---|
+| `instructions` | `str` | Task instructions given to the original agent |
+| `final_output` | `str` | Agent's final message from the trajectory |
+| `criteria` | `str` or `list[dict]` | Single criterion string (sequential mode), or list of `{"index": int, "criteria": str}` dicts (batch mode) |
+| `criteria_block` | `str` | Pre-formatted criteria list (batch mode only) |
+| `verdict_path` | `str` | File path the judge must write its verdict to |
+| `judge_guidance` | `str` | Additional guidance text (may be empty) |
+| `n_max` | `int` | Max criterion index, i.e. `len(criteria) - 1` (batch mode only) |
+
+The same template is used for both sequential and batch modes. Use `{% if criteria is string %}` to distinguish if needed.
 
 ### Rubric JSON
 
@@ -144,6 +165,7 @@ For a complete container architecture with task runners and agent environments, 
 | `LLM_API_KEY` | API key for the LLM provider |
 | `LLM_BASE_URL` | Base URL for the LLM API (optional) |
 | `GRADER_JUDGE_GUIDANCE_PATH` | Fallback path to judge guidance file (if not set in TOML) |
+| `GRADER_SYSTEM_PROMPT_PATH` | Fallback path to custom system prompt template (if not set in TOML) |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | OTLP endpoint URL for trace export (optional) |
 | `OTEL_EXPORTER_OTLP_HEADERS` | OTLP auth headers, URL-encoded (optional) |
 | `OTEL_EXPORTER_OTLP_TRACES_PROTOCOL` | OTLP transport protocol, e.g. `http/protobuf` (optional) |

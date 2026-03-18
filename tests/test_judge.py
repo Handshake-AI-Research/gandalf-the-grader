@@ -13,64 +13,11 @@ from gandalf.judge import (
     _make_verdict_path,
     _read_batch_verdict,
     _read_verdict,
-    _sanitize_json,
+    build_batch_judge_prompt,
     build_judge_prompt,
     run_judge,
     run_judge_batch,
 )
-
-
-class TestSanitizeJson:
-    """Tests for _sanitize_json — fixes invalid backslash escapes from LLM output."""
-
-    def test_passthrough_valid_json(self):
-        valid = '{"key": "value with \\\\ and \\n and \\t"}'
-        assert _sanitize_json(valid) == valid
-
-    def test_fixes_backslash_dollar(self):
-        raw = r'{"evidence": "format: \$#,##0"}'
-        fixed = _sanitize_json(raw)
-        assert json.loads(fixed)["evidence"] == "format: \\$#,##0"
-
-    def test_preserves_already_escaped_backslash_dollar(self):
-        raw = r'{"evidence": "format: \\$#,##0"}'
-        fixed = _sanitize_json(raw)
-        assert fixed == raw
-        assert json.loads(fixed)["evidence"] == "format: \\$#,##0"
-
-    def test_fixes_backslash_paren(self):
-        raw = r'{"evidence": "format: \(0.00\)"}'
-        fixed = _sanitize_json(raw)
-        parsed = json.loads(fixed)
-        assert "\\(" in parsed["evidence"]
-
-    def test_preserves_valid_escapes(self):
-        raw = r'{"a": "line1\nline2", "b": "tab\there", "c": "quote\"d"}'
-        assert _sanitize_json(raw) == raw
-
-    def test_preserves_unicode_escapes(self):
-        raw = r'{"a": "\u0041"}'
-        assert _sanitize_json(raw) == raw
-        assert json.loads(_sanitize_json(raw))["a"] == "A"
-
-    def test_fixes_truncated_unicode_escape(self):
-        raw = r'{"evidence": "bad unicode: \u12"}'
-        fixed = _sanitize_json(raw)
-        parsed = json.loads(fixed)
-        assert parsed["evidence"] == r"bad unicode: \u12"
-
-    def test_fixes_non_hex_unicode_escape(self):
-        raw = r'{"evidence": "bad unicode: \uZZZZ"}'
-        fixed = _sanitize_json(raw)
-        parsed = json.loads(fixed)
-        assert parsed["evidence"] == r"bad unicode: \uZZZZ"
-
-    def test_excel_number_format_roundtrip(self):
-        """Reproduces the exact pattern that caused the observed failure."""
-        raw = r'{"evidence": "DCF_Debt!L37 format: \$#,##0;(\$#,##0)"}'
-        fixed = _sanitize_json(raw)
-        parsed = json.loads(fixed)
-        assert "\\$#,##0" in parsed["evidence"]
 
 
 class TestBuildJudgePrompt:
@@ -291,18 +238,6 @@ class TestReadVerdict:
         assert result.met is None
         assert "missing" in result.reasoning.lower()
 
-    def test_recovers_from_invalid_escape(self, tmp_path):
-        p = tmp_path / "verdict.json"
-        p.write_text(r'{"met": true, "reasoning": "format is \$#,##0", "evidence": []}')
-        result = _read_verdict(str(p))
-        assert result.met is True
-
-    def test_recovers_from_invalid_unicode_escape(self, tmp_path):
-        p = tmp_path / "verdict.json"
-        p.write_text(r'{"met": true, "reasoning": "bad unicode: \u12", "evidence": []}')
-        result = _read_verdict(str(p))
-        assert result.met is True
-
 
 class TestReadBatchVerdict:
     def test_valid_batch(self, tmp_path: pathlib.Path) -> None:
@@ -377,24 +312,6 @@ class TestReadBatchVerdict:
         p.write_text(json.dumps({"not": "an array"}))
         results = _read_batch_verdict(str(p), 1)
         assert results[0]["met"] is None
-
-    def test_recovers_from_invalid_escape(self, tmp_path):
-        p = tmp_path / "verdict.json"
-        p.write_text(
-            r'[{"index": 0, "met": true, "reasoning": "ok", "evidence": ["format: \$#,##0;(\$#,##0)"]}]'
-        )
-        results = _read_batch_verdict(str(p), 1)
-        assert results[0]["met"] is True
-        assert r"\$" in results[0]["evidence"][0]
-
-    def test_recovers_from_invalid_unicode_escape(self, tmp_path):
-        p = tmp_path / "verdict.json"
-        p.write_text(
-            r'[{"index": 0, "met": true, "reasoning": "ok", "evidence": ["bad unicode: \u12"]}]'
-        )
-        results = _read_batch_verdict(str(p), 1)
-        assert results[0]["met"] is True
-        assert r"\u12" in results[0]["evidence"][0]
 
 
 MOCK_USAGE = {
@@ -623,6 +540,111 @@ class TestRunJudgeBatch:
         assert data["llm_usage"]["prompt_tokens"] == 1000
         assert all(v["met"] is None for v in data["verdicts"])
         assert "Batch parsing blew up" in data["verdicts"][0]["reasoning"]
+
+
+class TestBuildJudgePromptXMLTags:
+    """Verify prompts use XML tags instead of Markdown headings."""
+
+    def test_single_uses_xml_tags(self) -> None:
+        prompt = build_judge_prompt(
+            instructions="x",
+            final_output="y",
+            criteria="c",
+            verdict_path="/tmp/v.json",
+        )
+        assert "<task_instructions>" in prompt
+        assert "</task_instructions>" in prompt
+        assert "<agent_final_output>" in prompt
+        assert "<evaluation_criteria>" in prompt
+        assert "<judge_instructions>" in prompt
+        assert "## " not in prompt
+
+    def test_batch_uses_xml_tags(self) -> None:
+        criteria = [{"index": 0, "criteria": "c0"}, {"index": 1, "criteria": "c1"}]
+        prompt = build_batch_judge_prompt(
+            instructions="x",
+            final_output="y",
+            criteria=criteria,
+            verdict_path="/tmp/v.json",
+        )
+        assert "<task_instructions>" in prompt
+        assert "<evaluation_criteria>" in prompt
+        assert "<judge_instructions>" in prompt
+        assert "## " not in prompt
+
+    def test_single_guidance_uses_xml_tag(self) -> None:
+        prompt = build_judge_prompt(
+            instructions="x",
+            final_output="y",
+            criteria="c",
+            verdict_path="/tmp/v.json",
+            judge_guidance="GUIDANCE_TEXT",
+        )
+        assert "<judge_guidance>" in prompt
+        assert "GUIDANCE_TEXT" in prompt
+        assert "</judge_guidance>" in prompt
+
+    def test_single_no_guidance_tag_when_empty(self) -> None:
+        prompt = build_judge_prompt(
+            instructions="x",
+            final_output="y",
+            criteria="c",
+            verdict_path="/tmp/v.json",
+        )
+        assert "<judge_guidance>" not in prompt
+
+
+class TestBuildJudgePromptCustomTemplate:
+    """Verify system_prompt_template overrides the built-in prompt."""
+
+    def test_single_custom_template(self) -> None:
+        template = "CUSTOM: {{ instructions }} | {{ criteria }} | {{ verdict_path }}"
+        prompt = build_judge_prompt(
+            instructions="do stuff",
+            final_output="done",
+            criteria="check it",
+            verdict_path="/tmp/v.json",
+            system_prompt_template=template,
+        )
+        assert prompt == "CUSTOM: do stuff | check it | /tmp/v.json"
+
+    def test_batch_custom_template(self) -> None:
+        template = "BATCH: {{ criteria_block }} | n_max={{ n_max }}"
+        criteria = [{"index": 0, "criteria": "c0"}, {"index": 1, "criteria": "c1"}]
+        prompt = build_batch_judge_prompt(
+            instructions="x",
+            final_output="y",
+            criteria=criteria,
+            verdict_path="/tmp/v.json",
+            system_prompt_template=template,
+        )
+        assert "BATCH:" in prompt
+        assert "[0] c0" in prompt
+        assert "n_max=1" in prompt
+
+    def test_custom_template_receives_judge_guidance(self) -> None:
+        template = "{% if judge_guidance %}G:{{ judge_guidance }}{% endif %}"
+        prompt = build_judge_prompt(
+            instructions="x",
+            final_output="y",
+            criteria="c",
+            verdict_path="/tmp/v.json",
+            judge_guidance="be careful",
+            system_prompt_template=template,
+        )
+        assert prompt == "G:be careful"
+
+    def test_custom_template_no_builtin_content(self) -> None:
+        template = "ONLY THIS"
+        prompt = build_judge_prompt(
+            instructions="x",
+            final_output="y",
+            criteria="c",
+            verdict_path="/tmp/v.json",
+            system_prompt_template=template,
+        )
+        assert prompt == "ONLY THIS"
+        assert "expert judge" not in prompt
 
 
 class TestRunJudgeLLM:
