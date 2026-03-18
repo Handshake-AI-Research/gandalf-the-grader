@@ -14,6 +14,7 @@ from gandalf.config import (
     GraderConfig,
     JudgeInput,
     MCPServer,
+    RubricItem,
     Verdict,
     load_config,
     load_rubric,
@@ -371,6 +372,31 @@ class TestMutualExclusivity:
             "sandbox_user": "sandbox",
             "output_dir": "/logs/grader",
         }
+
+    def test_rubric_inline_only(self) -> None:
+        kw = self._base_kwargs()
+        del kw["rubric_path"]
+        cfg = GraderConfig(**kw, rubric=[RubricItem(criteria="c", weight=1.0)])
+        assert cfg.rubric is not None
+        assert cfg.rubric_path is None
+
+    def test_rubric_path_only(self) -> None:
+        cfg = GraderConfig(**self._base_kwargs())
+        assert cfg.rubric_path == "/rubric.json"
+        assert cfg.rubric is None
+
+    def test_rubric_both_raises(self) -> None:
+        with pytest.raises(ValidationError, match="rubric"):
+            GraderConfig(
+                **self._base_kwargs(),
+                rubric=[RubricItem(criteria="c", weight=1.0)],
+            )
+
+    def test_rubric_neither_raises(self) -> None:
+        kw = self._base_kwargs()
+        del kw["rubric_path"]
+        with pytest.raises(ValidationError, match="rubric"):
+            GraderConfig(**kw)
 
     def test_judge_guidance_inline_only(self) -> None:
         cfg = GraderConfig(**self._base_kwargs(), judge_guidance="inline text")

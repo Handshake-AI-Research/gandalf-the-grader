@@ -715,7 +715,8 @@ def main() -> None:
     if args.mode is not None:
         config.mode = args.mode
 
-    rubric = load_rubric(config.rubric_path)
+    # The model validator guarantees exactly one of rubric / rubric_path is set.
+    rubric = config.rubric if config.rubric is not None else load_rubric(config.rubric_path)  # type: ignore[arg-type]
     final_output = load_trajectory_final_output(config.trajectory_path)
     judge_guidance = resolve_judge_guidance(config)
     system_prompt_template = resolve_system_prompt(config)

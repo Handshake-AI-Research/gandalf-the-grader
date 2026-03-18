@@ -19,6 +19,18 @@ class MCPServer(BaseModel):
     args: list[str] = Field(default_factory=list)
 
 
+class RubricItem(BaseModel):
+    """A single rubric item with evaluation criteria and weight.
+
+    Weight can be negative to penalise undesired outcomes.  The sign of the
+    weight carries the semantics: positive means "reward when met", negative
+    means "penalise when met".
+    """
+
+    criteria: str
+    weight: float
+
+
 class GraderConfig(BaseModel):
     """Top-level grader configuration loaded from a TOML file.
 
@@ -35,7 +47,8 @@ class GraderConfig(BaseModel):
 
     model: str = "gemini/gemini-2.5-flash"
     instructions: str
-    rubric_path: str
+    rubric: list[RubricItem] | None = None
+    rubric_path: str | None = None
     workdir: str
     trajectory_path: str
     sandbox_user: str | None = None
@@ -52,6 +65,12 @@ class GraderConfig(BaseModel):
 
     @model_validator(mode="after")
     def _check_no_inline_and_path(self) -> "GraderConfig":
+        if self.rubric is not None and self.rubric_path is not None:
+            msg = "Cannot set both 'rubric' and 'rubric_path'"
+            raise ValueError(msg)
+        if self.rubric is None and self.rubric_path is None:
+            msg = "Must set either 'rubric' or 'rubric_path'"
+            raise ValueError(msg)
         if self.judge_guidance is not None and self.judge_guidance_path is not None:
             msg = "Cannot set both 'judge_guidance' and 'judge_guidance_path'"
             raise ValueError(msg)
@@ -59,18 +78,6 @@ class GraderConfig(BaseModel):
             msg = "Cannot set both 'system_prompt' and 'system_prompt_path'"
             raise ValueError(msg)
         return self
-
-
-class RubricItem(BaseModel):
-    """A single rubric item with evaluation criteria and weight.
-
-    Weight can be negative to penalise undesired outcomes.  The sign of the
-    weight carries the semantics: positive means "reward when met", negative
-    means "penalise when met".
-    """
-
-    criteria: str
-    weight: float
 
 
 class JudgeInput(BaseModel):
