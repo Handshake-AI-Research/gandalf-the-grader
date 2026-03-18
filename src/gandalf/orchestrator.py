@@ -12,8 +12,6 @@ Produces (in ``output_dir``):
   info.json    - Detailed per-criteria results + LLM usage
 """
 
-from __future__ import annotations
-
 import argparse
 import contextlib
 import json

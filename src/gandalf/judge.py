@@ -10,8 +10,6 @@ Supports two modes:
     with ``verdicts`` (array) and ``llm_usage`` (dict) keys.
 """
 
-from __future__ import annotations
-
 import argparse
 import contextlib
 import json
