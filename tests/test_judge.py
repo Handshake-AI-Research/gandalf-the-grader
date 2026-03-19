@@ -595,7 +595,7 @@ class TestBuildJudgePromptXMLTags:
 
 
 class TestBuildJudgePromptCustomTemplate:
-    """Verify system_prompt_template overrides the built-in prompt."""
+    """Verify judge_prompt_template overrides the built-in prompt."""
 
     def test_single_custom_template(self) -> None:
         template = "CUSTOM: {{ instructions }} | {{ criteria }} | {{ verdict_path }}"
@@ -604,7 +604,7 @@ class TestBuildJudgePromptCustomTemplate:
             final_output="done",
             criteria="check it",
             verdict_path="/tmp/v.json",
-            system_prompt_template=template,
+            judge_prompt_template=template,
         )
         assert prompt == "CUSTOM: do stuff | check it | /tmp/v.json"
 
@@ -616,7 +616,7 @@ class TestBuildJudgePromptCustomTemplate:
             final_output="y",
             criteria=criteria,
             verdict_path="/tmp/v.json",
-            system_prompt_template=template,
+            judge_prompt_template=template,
         )
         assert "BATCH:" in prompt
         assert "[0] c0" in prompt
@@ -630,7 +630,7 @@ class TestBuildJudgePromptCustomTemplate:
             criteria="c",
             verdict_path="/tmp/v.json",
             judge_guidance="be careful",
-            system_prompt_template=template,
+            judge_prompt_template=template,
         )
         assert prompt == "G:be careful"
 
@@ -641,7 +641,7 @@ class TestBuildJudgePromptCustomTemplate:
             final_output="y",
             criteria="c",
             verdict_path="/tmp/v.json",
-            system_prompt_template=template,
+            judge_prompt_template=template,
         )
         assert prompt == "ONLY THIS"
         assert "expert judge" not in prompt

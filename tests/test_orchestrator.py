@@ -28,7 +28,7 @@ from gandalf.orchestrator import (
     evaluate_criteria,
     main,
     resolve_judge_guidance,
-    resolve_system_prompt,
+    resolve_judge_prompt,
 )
 
 
@@ -126,84 +126,84 @@ class TestResolveJudgeGuidanceInline:
         assert resolve_judge_guidance(config) == "inline wins"
 
 
-class TestResolveSystemPrompt:
+class TestResolveJudgePrompt:
     def test_no_config_returns_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.delenv("GRADER_SYSTEM_PROMPT_PATH", raising=False)
+        monkeypatch.delenv("GRADER_JUDGE_PROMPT_PATH", raising=False)
         config = _make_config()
-        assert resolve_system_prompt(config) is None
+        assert resolve_judge_prompt(config) is None
 
     def test_inline_returns_content(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.delenv("GRADER_SYSTEM_PROMPT_PATH", raising=False)
-        config = _make_config(system_prompt="Hello {{ instructions }}")
-        assert resolve_system_prompt(config) == "Hello {{ instructions }}"
+        monkeypatch.delenv("GRADER_JUDGE_PROMPT_PATH", raising=False)
+        config = _make_config(judge_prompt="Hello {{ instructions }}")
+        assert resolve_judge_prompt(config) == "Hello {{ instructions }}"
 
     def test_reads_file_from_path(self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.delenv("GRADER_SYSTEM_PROMPT_PATH", raising=False)
+        monkeypatch.delenv("GRADER_JUDGE_PROMPT_PATH", raising=False)
         template_file = tmp_path / "prompt.j2"
         template_file.write_text("Custom {{ criteria }}")
-        config = _make_config(system_prompt_path=str(template_file))
-        assert resolve_system_prompt(config) == "Custom {{ criteria }}"
+        config = _make_config(judge_prompt_path=str(template_file))
+        assert resolve_judge_prompt(config) == "Custom {{ criteria }}"
 
     def test_reads_file_from_env_var(self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
         template_file = tmp_path / "prompt.j2"
         template_file.write_text("From env var.")
-        monkeypatch.setenv("GRADER_SYSTEM_PROMPT_PATH", str(template_file))
+        monkeypatch.setenv("GRADER_JUDGE_PROMPT_PATH", str(template_file))
         config = _make_config()
-        assert resolve_system_prompt(config) == "From env var."
+        assert resolve_judge_prompt(config) == "From env var."
 
     def test_path_takes_precedence_over_env(self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
         toml_file = tmp_path / "toml_prompt.j2"
         toml_file.write_text("From TOML.")
         env_file = tmp_path / "env_prompt.j2"
         env_file.write_text("From env.")
-        monkeypatch.setenv("GRADER_SYSTEM_PROMPT_PATH", str(env_file))
-        config = _make_config(system_prompt_path=str(toml_file))
-        assert resolve_system_prompt(config) == "From TOML."
+        monkeypatch.setenv("GRADER_JUDGE_PROMPT_PATH", str(env_file))
+        config = _make_config(judge_prompt_path=str(toml_file))
+        assert resolve_judge_prompt(config) == "From TOML."
 
     def test_inline_takes_precedence_over_env(self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
         env_file = tmp_path / "env_prompt.j2"
         env_file.write_text("From env.")
-        monkeypatch.setenv("GRADER_SYSTEM_PROMPT_PATH", str(env_file))
-        config = _make_config(system_prompt="inline wins")
-        assert resolve_system_prompt(config) == "inline wins"
+        monkeypatch.setenv("GRADER_JUDGE_PROMPT_PATH", str(env_file))
+        config = _make_config(judge_prompt="inline wins")
+        assert resolve_judge_prompt(config) == "inline wins"
 
     def test_missing_path_exits(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.delenv("GRADER_SYSTEM_PROMPT_PATH", raising=False)
-        config = _make_config(system_prompt_path="/nonexistent/prompt.j2")
+        monkeypatch.delenv("GRADER_JUDGE_PROMPT_PATH", raising=False)
+        config = _make_config(judge_prompt_path="/nonexistent/prompt.j2")
         with pytest.raises(SystemExit):
-            resolve_system_prompt(config)
+            resolve_judge_prompt(config)
 
     def test_missing_env_path_exits(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("GRADER_SYSTEM_PROMPT_PATH", "/nonexistent/prompt.j2")
+        monkeypatch.setenv("GRADER_JUDGE_PROMPT_PATH", "/nonexistent/prompt.j2")
         config = _make_config()
         with pytest.raises(SystemExit):
-            resolve_system_prompt(config)
+            resolve_judge_prompt(config)
 
     def test_error_message_mentions_path(
         self,
         capsys: pytest.CaptureFixture[str],
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        monkeypatch.delenv("GRADER_SYSTEM_PROMPT_PATH", raising=False)
-        config = _make_config(system_prompt_path="/missing/prompt.j2")
+        monkeypatch.delenv("GRADER_JUDGE_PROMPT_PATH", raising=False)
+        config = _make_config(judge_prompt_path="/missing/prompt.j2")
         with pytest.raises(SystemExit):
-            resolve_system_prompt(config)
+            resolve_judge_prompt(config)
         stderr = capsys.readouterr().err
         assert "/missing/prompt.j2" in stderr
-        assert "system_prompt_path" in stderr
+        assert "judge_prompt_path" in stderr
 
     def test_error_message_mentions_env_var(
         self,
         capsys: pytest.CaptureFixture[str],
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        monkeypatch.setenv("GRADER_SYSTEM_PROMPT_PATH", "/missing/env_prompt.j2")
+        monkeypatch.setenv("GRADER_JUDGE_PROMPT_PATH", "/missing/env_prompt.j2")
         config = _make_config()
         with pytest.raises(SystemExit):
-            resolve_system_prompt(config)
+            resolve_judge_prompt(config)
         stderr = capsys.readouterr().err
         assert "/missing/env_prompt.j2" in stderr
-        assert "GRADER_SYSTEM_PROMPT_PATH" in stderr
+        assert "GRADER_JUDGE_PROMPT_PATH" in stderr
 
 
 class TestJudgeEnvVars:

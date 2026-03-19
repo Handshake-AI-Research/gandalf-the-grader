@@ -31,16 +31,17 @@ _TEMPLATES_DIR = Path(__file__).parent / "templates"
 
 def _render_template(
     template_name: str,
-    system_prompt_template: str | None,
+    judge_prompt_template: str | None,
     **variables: Any,
 ) -> str:
     """Render a Jinja2 prompt template.
 
-    If *system_prompt_template* is provided (a raw Jinja2 template string),
+    The rendered result is sent to kick off a judge session.
+    If *judge_prompt_template* is provided (a raw Jinja2 template string),
     it is used instead of the built-in template identified by *template_name*.
     """
-    if system_prompt_template is not None:
-        template_str = system_prompt_template
+    if judge_prompt_template is not None:
+        template_str = judge_prompt_template
     else:
         template_str = (_TEMPLATES_DIR / template_name).read_text()
     return jinja2.Template(template_str).render(**variables)
@@ -52,12 +53,12 @@ def build_judge_prompt(
     criteria: str,
     verdict_path: str,
     judge_guidance: str = "",
-    system_prompt_template: str | None = None,
+    judge_prompt_template: str | None = None,
 ) -> str:
-    """Build the full prompt for the judge agent."""
+    """Build the user message sent to kick off a single-criterion judge session."""
     return _render_template(
         "judge_single.j2",
-        system_prompt_template,
+        judge_prompt_template,
         instructions=instructions,
         final_output=final_output,
         criteria=criteria,
@@ -72,12 +73,12 @@ def build_batch_judge_prompt(
     criteria: list[dict[str, Any]],
     verdict_path: str,
     judge_guidance: str = "",
-    system_prompt_template: str | None = None,
+    judge_prompt_template: str | None = None,
 ) -> str:
-    """Build the prompt for batch mode -- all criteria evaluated in one session.
+    """Build the user message sent to kick off a batch-mode judge session.
 
-    Mirrors build_judge_prompt but evaluates multiple criteria at once,
-    writing a JSON array of verdicts instead of a single object.
+    Evaluates all criteria in one session, writing a JSON array of verdicts
+    instead of a single object.
     """
     criteria_lines = [f"  [{c['index']}] {c['criteria']}" for c in criteria]
     criteria_block = "\n".join(criteria_lines)
@@ -85,7 +86,7 @@ def build_batch_judge_prompt(
 
     return _render_template(
         "judge_batch.j2",
-        system_prompt_template,
+        judge_prompt_template,
         instructions=instructions,
         final_output=final_output,
         criteria=criteria,
@@ -304,7 +305,7 @@ def run_judge(input_path: str, output_path: str) -> None:
         criteria=judge_input.criteria,
         verdict_path=verdict_path,
         judge_guidance=judge_input.judge_guidance,
-        system_prompt_template=judge_input.system_prompt_template,
+        judge_prompt_template=judge_input.judge_prompt_template,
     )
 
     mcp_servers = [
@@ -365,7 +366,7 @@ def run_judge_batch(input_path: str, output_path: str) -> None:
         criteria=criteria_dicts,
         verdict_path=verdict_path,
         judge_guidance=judge_input.judge_guidance,
-        system_prompt_template=judge_input.system_prompt_template,
+        judge_prompt_template=judge_input.judge_prompt_template,
     )
 
     mcp_servers = [

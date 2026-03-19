@@ -416,34 +416,34 @@ class TestMutualExclusivity:
                 judge_guidance_path="/some/file.md",
             )
 
-    def test_system_prompt_inline_only(self) -> None:
-        cfg = GraderConfig(**self._base_kwargs(), system_prompt="template text")
-        assert cfg.system_prompt == "template text"
-        assert cfg.system_prompt_path is None
+    def test_judge_prompt_inline_only(self) -> None:
+        cfg = GraderConfig(**self._base_kwargs(), judge_prompt="template text")
+        assert cfg.judge_prompt == "template text"
+        assert cfg.judge_prompt_path is None
 
-    def test_system_prompt_path_only(self) -> None:
-        cfg = GraderConfig(**self._base_kwargs(), system_prompt_path="/some/template.j2")
-        assert cfg.system_prompt_path == "/some/template.j2"
-        assert cfg.system_prompt is None
+    def test_judge_prompt_path_only(self) -> None:
+        cfg = GraderConfig(**self._base_kwargs(), judge_prompt_path="/some/template.j2")
+        assert cfg.judge_prompt_path == "/some/template.j2"
+        assert cfg.judge_prompt is None
 
-    def test_system_prompt_both_raises(self) -> None:
-        with pytest.raises(ValidationError, match="system_prompt"):
+    def test_judge_prompt_both_raises(self) -> None:
+        with pytest.raises(ValidationError, match="judge_prompt"):
             GraderConfig(
                 **self._base_kwargs(),
-                system_prompt="inline",
-                system_prompt_path="/some/template.j2",
+                judge_prompt="inline",
+                judge_prompt_path="/some/template.j2",
             )
 
     def test_neither_set_is_valid(self) -> None:
         cfg = GraderConfig(**self._base_kwargs())
         assert cfg.judge_guidance is None
         assert cfg.judge_guidance_path is None
-        assert cfg.system_prompt is None
-        assert cfg.system_prompt_path is None
+        assert cfg.judge_prompt is None
+        assert cfg.judge_prompt_path is None
 
 
-class TestSystemPromptTemplate:
-    """Verify system_prompt_template field on JudgeInput / BatchJudgeInput."""
+class TestJudgePromptTemplate:
+    """Verify judge_prompt_template field on JudgeInput / BatchJudgeInput."""
 
     def test_judge_input_defaults_none(self) -> None:
         ji = JudgeInput(
@@ -453,7 +453,7 @@ class TestSystemPromptTemplate:
             criteria="c",
             workdir="/w",
         )
-        assert ji.system_prompt_template is None
+        assert ji.judge_prompt_template is None
 
     def test_judge_input_roundtrip(self) -> None:
         ji = JudgeInput(
@@ -462,11 +462,11 @@ class TestSystemPromptTemplate:
             final_output="o",
             criteria="c",
             workdir="/w",
-            system_prompt_template="Hello {{ instructions }}",
+            judge_prompt_template="Hello {{ instructions }}",
         )
         raw = ji.model_dump_json()
         restored = JudgeInput.model_validate_json(raw)
-        assert restored.system_prompt_template == "Hello {{ instructions }}"
+        assert restored.judge_prompt_template == "Hello {{ instructions }}"
 
     def test_batch_judge_input_defaults_none(self) -> None:
         bji = BatchJudgeInput(
@@ -476,7 +476,7 @@ class TestSystemPromptTemplate:
             criteria=[],
             workdir="/w",
         )
-        assert bji.system_prompt_template is None
+        assert bji.judge_prompt_template is None
 
     def test_batch_judge_input_roundtrip(self) -> None:
         bji = BatchJudgeInput(
@@ -485,8 +485,8 @@ class TestSystemPromptTemplate:
             final_output="o",
             criteria=[],
             workdir="/w",
-            system_prompt_template="Batch {{ n_max }}",
+            judge_prompt_template="Batch {{ n_max }}",
         )
         raw = bji.model_dump_json()
         restored = BatchJudgeInput.model_validate_json(raw)
-        assert restored.system_prompt_template == "Batch {{ n_max }}"
+        assert restored.judge_prompt_template == "Batch {{ n_max }}"

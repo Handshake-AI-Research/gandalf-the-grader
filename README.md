@@ -82,8 +82,8 @@ gandalf-the-grader --config /tests/grader.toml
 | `mode` | No | `sequential` | Evaluation mode: `sequential` or `batch` |
 | `judge_guidance` | No | | Inline judge guidance text (mutually exclusive with `judge_guidance_path`) |
 | `judge_guidance_path` | No | | Path to a file with extra judge instructions (mutually exclusive with `judge_guidance`) |
-| `system_prompt` | No | | Inline Jinja2 template that completely overrides the built-in judge prompt (mutually exclusive with `system_prompt_path`) |
-| `system_prompt_path` | No | | Path to a Jinja2 template file that completely overrides the built-in judge prompt (mutually exclusive with `system_prompt`) |
+| `judge_prompt` | No | | Inline Jinja2 template that completely overrides the built-in judge task prompt (mutually exclusive with `judge_prompt_path`) |
+| `judge_prompt_path` | No | | Path to a Jinja2 template file that completely overrides the built-in judge task prompt (mutually exclusive with `judge_prompt`) |
 | `batch_timeout` | No | | Max total seconds for batch mode (caps `judge_timeout * N`) |
 | `judge_retries` | No | `1` | Number of retry attempts for criteria that error due to infrastructure failures |
 
@@ -97,9 +97,13 @@ command = "/usr/bin/mcp-server"
 args = ["--verbose"]
 ```
 
-### Custom System Prompt
+### Custom Judge Prompt
 
-By default, the grader uses a built-in prompt template for the judge agent. You can completely override it with a [Jinja2](https://jinja.palletsprojects.com/) template via `system_prompt` (inline) or `system_prompt_path` (file path).
+By default, the grader uses a built-in prompt template to kick off each judge session. `judge_prompt` / `judge_prompt_path` let you replace it entirely with a custom [Jinja2](https://jinja.palletsprojects.com/) template.
+
+> **Note:** This prompt is sent as the opening **user message** to the judge agent — it is not the LLM system prompt. The underlying agent framework (OpenHands) has its own immutable system message with coding and tool-use instructions that we never modify. Our prompt sits on top of that as the first user turn, setting up the grading task.
+
+For most use cases, `judge_guidance` / `judge_guidance_path` is all you need — it injects extra instructions into the built-in prompt without replacing it. Fully overriding the judge prompt is an uncommon escape hatch for situations where the built-in prompt structure itself is unsuitable.
 
 The template receives these variables:
 
@@ -166,7 +170,7 @@ For a complete container architecture with task runners and agent environments, 
 | `LLM_API_KEY` | API key for the LLM provider |
 | `LLM_BASE_URL` | Base URL for the LLM API (optional) |
 | `GRADER_JUDGE_GUIDANCE_PATH` | Fallback path to judge guidance file (if not set in TOML) |
-| `GRADER_SYSTEM_PROMPT_PATH` | Fallback path to custom system prompt template (if not set in TOML) |
+| `GRADER_JUDGE_PROMPT_PATH` | Fallback path to custom judge prompt template (if not set in TOML) |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | OTLP endpoint URL for trace export (optional) |
 | `OTEL_EXPORTER_OTLP_HEADERS` | OTLP auth headers, URL-encoded (optional) |
 | `OTEL_EXPORTER_OTLP_TRACES_PROTOCOL` | OTLP transport protocol, e.g. `http/protobuf` (optional) |
