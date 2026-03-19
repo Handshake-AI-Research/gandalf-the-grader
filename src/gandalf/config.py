@@ -57,8 +57,8 @@ class GraderConfig(BaseModel):
     judge_timeout: int = 300
     judge_guidance: str | None = None
     judge_guidance_path: str | None = None
-    system_prompt: str | None = None
-    system_prompt_path: str | None = None
+    judge_prompt: str | None = None
+    judge_prompt_path: str | None = None
     batch_timeout: int | None = None
     mode: Literal["sequential", "batch"] = "sequential"
     judge_retries: int = 1
@@ -74,8 +74,8 @@ class GraderConfig(BaseModel):
         if self.judge_guidance is not None and self.judge_guidance_path is not None:
             msg = "Cannot set both 'judge_guidance' and 'judge_guidance_path'"
             raise ValueError(msg)
-        if self.system_prompt is not None and self.system_prompt_path is not None:
-            msg = "Cannot set both 'system_prompt' and 'system_prompt_path'"
+        if self.judge_prompt is not None and self.judge_prompt_path is not None:
+            msg = "Cannot set both 'judge_prompt' and 'judge_prompt_path'"
             raise ValueError(msg)
         return self
 
@@ -90,7 +90,7 @@ class JudgeInput(BaseModel):
     workdir: str
     mcp_servers: list[MCPServer] = Field(default_factory=list)
     judge_guidance: str = ""
-    system_prompt_template: str | None = None
+    judge_prompt_template: str | None = None
 
 
 class BatchCriterion(BaseModel):
@@ -114,7 +114,7 @@ class BatchJudgeInput(BaseModel):
     workdir: str
     mcp_servers: list[MCPServer] = Field(default_factory=list)
     judge_guidance: str = ""
-    system_prompt_template: str | None = None
+    judge_prompt_template: str | None = None
 
 
 class Verdict(BaseModel):
