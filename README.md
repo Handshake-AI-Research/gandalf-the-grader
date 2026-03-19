@@ -3,7 +3,7 @@
 Agent-as-a-Judge grading framework for evaluating AI outputs against rubric criteria.
 Unlike simple LLM-as-a-Judge graders, this grader can grade outputs that are complex files (such as Excel or Powerpoint deliverables).
 
-![You shall not pass quote](assets/shallnotpass.png)
+![You shall not pass quote](https://raw.githubusercontent.com/Handshake-AI-Research/assets/refs/heads/main/gandalf-the-grader/shallnotpass.png)
 
 ## Overview
 
