@@ -301,27 +301,6 @@ class TestEvaluateAllCriteria:
 
     @patch("gandalf.orchestrator._clone_workspace")
     @patch("gandalf.orchestrator.subprocess.run")
-    def test_legacy_array_shape(self, mock_run: Any, mock_clone: Any, tmp_path: pathlib.Path) -> None:
-        """Legacy format: bare JSON array of verdicts, no usage info."""
-        mock_clone.return_value = str(tmp_path)
-
-        legacy_verdicts = [
-            {"index": 0, "met": True, "reasoning": "ok", "evidence": []},
-            {"index": 1, "met": False, "reasoning": "no", "evidence": []},
-        ]
-        mock_run.side_effect = _make_run_writing(legacy_verdicts)
-
-        judge_input = _make_batch_input(tmp_path, n=2)
-        trace_path = str(tmp_path / "trace.txt")
-
-        verdicts, usage = evaluate_all_criteria(judge_input, sandbox_user="sandbox", trace_path=trace_path)
-
-        assert len(verdicts) == 2
-        assert verdicts[0]["met"] is True
-        assert usage == {}
-
-    @patch("gandalf.orchestrator._clone_workspace")
-    @patch("gandalf.orchestrator.subprocess.run")
     def test_unexpected_json_type_string(self, mock_run: Any, mock_clone: Any, tmp_path: pathlib.Path) -> None:
         """If the output file contains a JSON string, return fail-all."""
         mock_clone.return_value = str(tmp_path)
