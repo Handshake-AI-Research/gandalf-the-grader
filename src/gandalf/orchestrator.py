@@ -177,28 +177,39 @@ def _clone_workspace(src: str) -> str:
     return clone_dir
 
 
-def evaluate_criteria(
-    judge_input: JudgeInput,
+class _JudgeSubprocessError(Exception):
+    """Raised when the judge subprocess fails for any reason."""
+
+
+def _run_judge_subprocess(
+    judge_input: JudgeInput | BatchJudgeInput,
     sandbox_user: str | None,
     trace_path: str,
-    timeout: int = 300,
-) -> dict[str, Any]:
-    """Run the inner judge for a single criteria.
+    timeout: int,
+) -> Any:
+    """Clone workspace, run the judge subprocess, and return parsed output JSON.
 
-    When *sandbox_user* is set the judge is executed via ``sudo -u``.
-    When it is ``None`` the judge runs as the ambient (current) user.
+    Handles workspace cloning, temp file creation, command construction,
+    subprocess execution, trace saving, and cleanup.
+
+    Raises ``_JudgeSubprocessError`` on any failure (clone, timeout,
+    non-zero exit, bad output).
     """
+    batch = isinstance(judge_input, BatchJudgeInput)
+
     try:
         clone_dir = _clone_workspace(judge_input.workdir)
-    except Exception as e:  # noqa: BLE001
-        return {"met": None, "reasoning": f"Failed to clone workspace: {e}"}
+    except Exception as e:
+        msg = f"Failed to clone workspace: {e}"
+        raise _JudgeSubprocessError(msg) from e
 
     cloned_input = judge_input.model_copy(update={"workdir": clone_dir})
 
+    prefix = "judge_batch_" if batch else "judge_"
     with tempfile.NamedTemporaryFile(
         mode="w",
         suffix=".json",
-        prefix="judge_input_",
+        prefix=f"{prefix}input_",
         dir=clone_dir,
         delete=False,
     ) as input_f:
@@ -210,7 +221,7 @@ def evaluate_criteria(
     with tempfile.NamedTemporaryFile(
         mode="w",
         suffix=".json",
-        prefix="judge_output_",
+        prefix=f"{prefix}output_",
         dir=clone_dir,
         delete=False,
     ) as output_f:
@@ -220,29 +231,21 @@ def evaluate_criteria(
     try:
         os.chmod(input_path, 0o644)
         env_vars = [f"HOME={clone_dir}", *_judge_env_vars()]
+
+        cmd = []
         if sandbox_user is not None:
-            cmd = [
-                "sudo",
-                "-u",
-                sandbox_user,
-                "env",
-                *env_vars,
-                "gandalf-the-grader-judge",
-                "--input",
-                input_path,
-                "--output",
-                output_path,
-            ]
-        else:
-            cmd = [
-                "env",
-                *env_vars,
-                "gandalf-the-grader-judge",
-                "--input",
-                input_path,
-                "--output",
-                output_path,
-            ]
+            cmd += ["sudo", "-u", sandbox_user]
+        cmd += [
+            "env",
+            *env_vars,
+            "gandalf-the-grader-judge",
+            "--input",
+            input_path,
+            "--output",
+            output_path,
+        ]
+        if batch:
+            cmd.append("--batch")
 
         result = subprocess.run(
             cmd,
@@ -256,25 +259,38 @@ def evaluate_criteria(
         _save_trace(trace_path, result.stdout, result.stderr, result.returncode)
 
         if result.returncode != 0:
-            return {
-                "met": None,
-                "reasoning": f"Judge process failed (exit {result.returncode}): {result.stderr[:500]}",
-            }
+            msg = f"Judge process failed (exit {result.returncode}): {result.stderr[:500]}"
+            raise _JudgeSubprocessError(msg)
 
         with open(output_path) as f:
-            result_data: dict[str, Any] = json.load(f)
-            return result_data
+            return json.load(f)
 
-    except subprocess.TimeoutExpired:
+    except subprocess.TimeoutExpired as e:
         _save_trace(trace_path, "", "Judge execution timed out.", -1)
-        return {"met": None, "reasoning": "Judge execution timed out."}
-    except (json.JSONDecodeError, FileNotFoundError) as e:
-        return {"met": None, "reasoning": f"Failed to read judge output: {e}"}
+        msg = "Judge execution timed out."
+        raise _JudgeSubprocessError(msg) from e
+    except (json.JSONDecodeError, FileNotFoundError, TypeError, AttributeError) as e:
+        msg = f"Failed to read judge output: {e}"
+        raise _JudgeSubprocessError(msg) from e
     finally:
         shutil.rmtree(clone_dir, ignore_errors=True)
-        for path in (input_path, output_path):
-            with contextlib.suppress(OSError):
-                os.unlink(path)
+
+
+def evaluate_criteria(
+    judge_input: JudgeInput,
+    sandbox_user: str | None,
+    trace_path: str,
+    timeout: int = 300,
+) -> dict[str, Any]:
+    """Run the inner judge for a single criteria.
+
+    When *sandbox_user* is set the judge is executed via ``sudo -u``.
+    When it is ``None`` the judge runs as the ambient (current) user.
+    """
+    try:
+        return _run_judge_subprocess(judge_input, sandbox_user, trace_path, timeout)
+    except _JudgeSubprocessError as e:
+        return {"met": None, "reasoning": str(e)}
 
 
 def _fail_all(n: int, reason: str) -> list[dict[str, Any]]:
@@ -305,104 +321,17 @@ def evaluate_all_criteria(
     n_criteria = len(judge_input.criteria)
 
     try:
-        clone_dir = _clone_workspace(judge_input.workdir)
-    except Exception as e:  # noqa: BLE001
-        return _fail_all(n_criteria, f"Failed to clone workspace: {e}"), {}
+        data = _run_judge_subprocess(judge_input, sandbox_user, trace_path, timeout)
+    except _JudgeSubprocessError as e:
+        return _fail_all(n_criteria, str(e)), {}
 
-    cloned_input = judge_input.model_copy(update={"workdir": clone_dir})
+    if not isinstance(data, dict):
+        reason = f"Unexpected JSON type from judge: {type(data).__name__}"
+        return _fail_all(n_criteria, reason), {}
 
-    with tempfile.NamedTemporaryFile(
-        mode="w",
-        suffix=".json",
-        prefix="judge_batch_input_",
-        dir=clone_dir,
-        delete=False,
-    ) as input_f:
-        input_f.write(cloned_input.model_dump_json())
-        input_path = input_f.name
-
-    # Pre-create the output file so sandbox_user can write to it without
-    # needing general write access to /tmp (which may not be world-writable).
-    with tempfile.NamedTemporaryFile(
-        mode="w",
-        suffix=".json",
-        prefix="judge_batch_output_",
-        dir=clone_dir,
-        delete=False,
-    ) as output_f:
-        output_path = output_f.name
-    os.chmod(output_path, 0o666)  # noqa: S103
-
-    try:
-        os.chmod(input_path, 0o644)
-
-        env_vars = [f"HOME={clone_dir}", *_judge_env_vars()]
-        if sandbox_user is not None:
-            cmd = [
-                "sudo",
-                "-u",
-                sandbox_user,
-                "env",
-                *env_vars,
-                "gandalf-the-grader-judge",
-                "--input",
-                input_path,
-                "--output",
-                output_path,
-                "--batch",
-            ]
-        else:
-            cmd = [
-                "env",
-                *env_vars,
-                "gandalf-the-grader-judge",
-                "--input",
-                input_path,
-                "--output",
-                output_path,
-                "--batch",
-            ]
-
-        result = subprocess.run(
-            cmd,
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            cwd=clone_dir,
-        )
-
-        _save_trace(trace_path, result.stdout, result.stderr, result.returncode)
-
-        if result.returncode != 0:
-            reason = f"Judge process failed (exit {result.returncode}): {result.stderr[:500]}"
-            return _fail_all(n_criteria, reason), {}
-
-        with open(output_path) as f:
-            data = json.load(f)
-
-            if isinstance(data, dict):
-                verdicts = data.get("verdicts", [])
-                llm_usage = data.get("llm_usage", {})
-                return verdicts, llm_usage
-
-            if isinstance(data, list):
-                # Legacy format: bare JSON array of verdicts, no usage info.
-                return data, {}
-
-            reason = f"Unexpected JSON type from judge: {type(data).__name__}"
-            return _fail_all(n_criteria, reason), {}
-
-    except subprocess.TimeoutExpired:
-        _save_trace(trace_path, "", "Batch judge execution timed out.", -1)
-        return _fail_all(n_criteria, "Judge execution timed out."), {}
-    except (json.JSONDecodeError, FileNotFoundError, TypeError, AttributeError) as e:
-        return _fail_all(n_criteria, f"Failed to read judge output: {e}"), {}
-    finally:
-        shutil.rmtree(clone_dir, ignore_errors=True)
-        for path in (input_path, output_path):
-            with contextlib.suppress(OSError):
-                os.unlink(path)
+    verdicts = data.get("verdicts", [])
+    llm_usage = data.get("llm_usage", {})
+    return verdicts, llm_usage
 
 
 def _save_trace(trace_path: str, stdout: str, stderr: str, returncode: int) -> None:
