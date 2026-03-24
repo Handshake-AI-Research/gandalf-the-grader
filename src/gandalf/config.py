@@ -60,7 +60,7 @@ class GraderConfig(BaseModel):
     judge_prompt: str | None = None
     judge_prompt_path: str | None = None
     batch_timeout: int | None = None
-    mode: Literal["sequential", "batch"] = "sequential"
+    mode: Literal["sequential", "batch"] = "batch"
     judge_retries: int = 1
 
     @model_validator(mode="after")
