@@ -15,7 +15,9 @@ You are an expert judge evaluating whether an AI agent successfully completed a 
 </agent_final_output>
 
 <evaluation_criteria>
-{{ criteria_block }}
+{%- for c in criteria %}
+  [{{ c.index }}] {{ c.criteria }}
+{%- endfor %}
 </evaluation_criteria>
 
 Your verdict for each criterion is binary: the described condition either occurred (met) or did not occur (not met).

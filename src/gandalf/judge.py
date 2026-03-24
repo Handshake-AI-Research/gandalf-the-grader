@@ -81,8 +81,6 @@ def build_batch_judge_prompt(
     Evaluates all criteria in one session, writing a JSON array of verdicts
     instead of a single object.
     """
-    criteria_lines = [f"  [{c.index}] {c.criteria}" for c in criteria]
-    criteria_block = "\n".join(criteria_lines)
     n_max = len(criteria) - 1
 
     return _render_template(
@@ -91,7 +89,6 @@ def build_batch_judge_prompt(
         instructions=instructions,
         final_output=final_output,
         criteria=criteria,
-        criteria_block=criteria_block,
         verdict_path=verdict_path,
         judge_guidance=judge_guidance,
         n_max=n_max,

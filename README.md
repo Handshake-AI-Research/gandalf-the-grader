@@ -70,22 +70,22 @@ gandalf-the-grader --config /tests/grader.toml
 
 | Field | Required | Default | Description |
 |---|---|---|---|
-| `model` | No | `gemini/gemini-2.5-flash` | LLM model for the judge agent |
-| `sandbox_user` | No | | Username for running the inner judge (via sudo). When omitted the judge runs as the current user. |
 | `instructions` | Yes | | Task instructions given to the original agent |
-| `rubric` | Yes* | | Inline rubric as a TOML array of tables (mutually exclusive with `rubric_path`) |
-| `rubric_path` | Yes* | | Path to rubric JSON file (mutually exclusive with `rubric`) |
-| `workdir` | Yes | | Agent workspace directory |
-| `trajectory_path` | Yes | | Path to ATIF trajectory JSON |
-| `output_dir` | Yes | | Directory for output files |
-| `judge_timeout` | No | `300` | Max seconds per judge invocation |
-| `mode` | No | `sequential` | Evaluation mode: `sequential` or `batch` |
+| `rubric` | Yes\* | | Inline rubric as a TOML array of tables (mutually exclusive with `rubric_path`) |
+| `rubric_path` | Yes\* | | Path to rubric JSON file (mutually exclusive with `rubric`) |
 | `judge_guidance` | No | | Inline judge guidance text (mutually exclusive with `judge_guidance_path`) |
 | `judge_guidance_path` | No | | Path to a file with extra judge instructions (mutually exclusive with `judge_guidance`) |
-| `judge_prompt` | No | | Inline Jinja2 template that completely overrides the built-in judge task prompt (mutually exclusive with `judge_prompt_path`) |
-| `judge_prompt_path` | No | | Path to a Jinja2 template file that completely overrides the built-in judge task prompt (mutually exclusive with `judge_prompt`) |
+| `workdir` | Yes | | Agent workspace directory |
+| `trajectory_path` | Yes | | Path to ATIF trajectory JSON |
+| `output_dir` | Yes | | Directory for grader output files |
+| `model` | No | `gemini/gemini-2.5-flash` | LLM model for the judge agent |
+| `mode` | No | `batch` | Evaluation mode: `batch` or `sequential` |
+| `judge_timeout` | No | `300` | Max seconds per judge invocation |
 | `batch_timeout` | No | | Max total seconds for batch mode (caps `judge_timeout * N`) |
 | `judge_retries` | No | `1` | Number of retry attempts for criteria that error due to infrastructure failures |
+| `sandbox_user` | No | | Username for running the inner judge (via sudo). When omitted the judge runs as the current user. |
+| `judge_prompt` | No | | Inline Jinja2 template that completely overrides the built-in judge task prompt (mutually exclusive with `judge_prompt_path`) |
+| `judge_prompt_path` | No | | Path to a Jinja2 template file that completely overrides the built-in judge task prompt (mutually exclusive with `judge_prompt`) |
 
 MCP servers can be configured as TOML array of tables:
 
@@ -112,7 +112,6 @@ The template receives these variables:
 | `instructions` | `str` | Task instructions given to the original agent |
 | `final_output` | `str` | Agent's final message from the trajectory |
 | `criteria` | `str` or `list[BatchCriterion]` | Single criterion string (sequential mode), or list of objects with `.index` (int) and `.criteria` (str) attributes (batch mode) |
-| `criteria_block` | `str` | Pre-formatted criteria list (batch mode only) |
 | `verdict_path` | `str` | File path the judge must write its verdict to |
 | `judge_guidance` | `str` | Additional guidance text (may be empty) |
 | `n_max` | `int` | Max criterion index, i.e. `len(criteria) - 1` (batch mode only) |

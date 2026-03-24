@@ -571,7 +571,7 @@ class TestBuildJudgePromptXMLTags:
             verdict_path="/tmp/v.json",
         )
         assert "<task_instructions>" in prompt
-        assert "<evaluation_criteria>" in prompt
+        assert "<evaluation_criteria>\n  [0] c0\n  [1] c1\n</evaluation_criteria>" in prompt
         assert "<judge_instructions>" in prompt
         assert "## " not in prompt
 
@@ -612,7 +612,7 @@ class TestBuildJudgePromptCustomTemplate:
         assert prompt == "CUSTOM: do stuff | check it | /tmp/v.json"
 
     def test_batch_custom_template(self) -> None:
-        template = "BATCH: {{ criteria_block }} | n_max={{ n_max }}"
+        template = "BATCH: {% for c in criteria %}[{{ c.index }}] {{ c.criteria }} {% endfor %}| n_max={{ n_max }}"
         criteria = [BatchCriterion(index=0, criteria="c0"), BatchCriterion(index=1, criteria="c1")]
         prompt = build_batch_judge_prompt(
             instructions="x",
@@ -623,6 +623,7 @@ class TestBuildJudgePromptCustomTemplate:
         )
         assert "BATCH:" in prompt
         assert "[0] c0" in prompt
+        assert "[1] c1" in prompt
         assert "n_max=1" in prompt
 
     def test_batch_custom_template_dot_access(self) -> None:
