@@ -117,6 +117,15 @@ class BatchJudgeInput(BaseModel):
     judge_prompt_template: str | None = None
 
 
+class LLMUsage(BaseModel):
+    """Aggregate LLM token and cost metrics from judge sessions."""
+
+    cost_usd: float = 0
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    cache_read_tokens: int = 0
+
+
 class Verdict(BaseModel):
     """Verdict returned by the inner judge."""
 
@@ -143,7 +152,7 @@ class EvaluationInfo(BaseModel):
     minimum_score: float = 0.0
     maximum_score: float = 0.0
     criteria_results: list[CriteriaResult]
-    llm_usage: dict[str, float | int | str] = Field(default_factory=dict)
+    llm_usage: LLMUsage = Field(default_factory=LLMUsage)
     errored_criteria_count: int = 0
     evaluated_criteria_pct: float = 100.0
 

@@ -9,6 +9,7 @@ from unittest.mock import patch
 
 import pytest
 
+from gandalf.config import BatchCriterion, LLMUsage
 from gandalf.judge import (
     _make_verdict_path,
     _read_batch_verdict,
@@ -170,7 +171,7 @@ class TestMakeVerdictPath:
 
         with (
             patch("gandalf.judge._make_verdict_path", side_effect=_fake_make_verdict_path),
-            patch("gandalf.judge._run_agent_session", return_value={}),
+            patch("gandalf.judge._run_agent_session", return_value=LLMUsage()),
         ):
             run_judge(input_path, output_path)
 
@@ -252,28 +253,28 @@ class TestReadBatchVerdict:
         )
         results = _read_batch_verdict(str(p), 2)
         assert len(results) == 2
-        assert results[0]["met"] is True
-        assert results[1]["met"] is False
+        assert results[0].met is True
+        assert results[1].met is False
 
     def test_missing_index_gets_default_fail(self, tmp_path: pathlib.Path) -> None:
         p = tmp_path / "verdict.json"
         p.write_text(json.dumps([{"index": 0, "met": True, "reasoning": "ok"}]))
         results = _read_batch_verdict(str(p), 2)
-        assert results[0]["met"] is True
-        assert results[1]["met"] is None
-        assert "did not return" in results[1]["reasoning"].lower()
+        assert results[0].met is True
+        assert results[1].met is None
+        assert "did not return" in results[1].reasoning.lower()
 
     def test_non_integer_index_skipped(self, tmp_path: pathlib.Path) -> None:
         p = tmp_path / "verdict.json"
         p.write_text(json.dumps([{"index": "zero", "met": True, "reasoning": "ok"}]))
         results = _read_batch_verdict(str(p), 1)
-        assert results[0]["met"] is None
+        assert results[0].met is None
 
     def test_out_of_range_index_skipped(self, tmp_path: pathlib.Path) -> None:
         p = tmp_path / "verdict.json"
         p.write_text(json.dumps([{"index": 5, "met": True, "reasoning": "ok"}]))
         results = _read_batch_verdict(str(p), 2)
-        assert all(r["met"] is None for r in results)
+        assert all(r.met is None for r in results)
 
     def test_duplicate_index_last_wins(self, tmp_path: pathlib.Path) -> None:
         p = tmp_path / "verdict.json"
@@ -286,40 +287,40 @@ class TestReadBatchVerdict:
             )
         )
         results = _read_batch_verdict(str(p), 1)
-        assert results[0]["met"] is True
-        assert results[0]["reasoning"] == "second"
+        assert results[0].met is True
+        assert results[0].reasoning == "second"
 
     def test_empty_file(self, tmp_path: pathlib.Path) -> None:
         p = tmp_path / "verdict.json"
         p.write_text("")
         results = _read_batch_verdict(str(p), 2)
         assert len(results) == 2
-        assert all(r["met"] is None for r in results)
+        assert all(r.met is None for r in results)
 
     def test_missing_file(self) -> None:
         results = _read_batch_verdict("/nonexistent/verdict.json", 2)
         assert len(results) == 2
-        assert all(r["met"] is None for r in results)
+        assert all(r.met is None for r in results)
 
     def test_invalid_json(self, tmp_path: pathlib.Path) -> None:
         p = tmp_path / "verdict.json"
         p.write_text("not json")
         results = _read_batch_verdict(str(p), 1)
-        assert results[0]["met"] is None
+        assert results[0].met is None
 
     def test_non_array_json(self, tmp_path: pathlib.Path) -> None:
         p = tmp_path / "verdict.json"
         p.write_text(json.dumps({"not": "an array"}))
         results = _read_batch_verdict(str(p), 1)
-        assert results[0]["met"] is None
+        assert results[0].met is None
 
 
-MOCK_USAGE = {
-    "cost_usd": 0.05,
-    "prompt_tokens": 1000,
-    "completion_tokens": 500,
-    "cache_read_tokens": 200,
-}
+MOCK_USAGE = LLMUsage(
+    cost_usd=0.05,
+    prompt_tokens=1000,
+    completion_tokens=500,
+    cache_read_tokens=200,
+)
 
 
 def _make_judge_input_json(tmp_path: pathlib.Path, criteria: str = "check something") -> str:
@@ -369,7 +370,7 @@ class TestRunJudge:
             run_judge(input_path, output_path)
 
         result = json.loads((tmp_path / "output.json").read_text())
-        assert result["met"] is True
+        assert result["verdict"]["met"] is True
         assert result["llm_usage"]["cost_usd"] == 0.05
 
     @patch("gandalf.judge._run_agent_session", return_value=MOCK_USAGE)
@@ -385,7 +386,7 @@ class TestRunJudge:
             run_judge(input_path, output_path)
 
         result = json.loads((tmp_path / "output.json").read_text())
-        assert result["met"] is None
+        assert result["verdict"]["met"] is None
         assert result["llm_usage"]["cost_usd"] == 0.05
         assert result["llm_usage"]["prompt_tokens"] == 1000
 
@@ -405,9 +406,10 @@ class TestRunJudge:
             run_judge(input_path, output_path)
 
         result = json.loads((tmp_path / "output.json").read_text())
-        assert result["met"] is None
-        assert result["llm_usage"] == {}
-        assert "LLM exploded" in result["reasoning"]
+        verdict = result["verdict"]
+        assert verdict["met"] is None
+        assert result["llm_usage"] == LLMUsage().model_dump()
+        assert "LLM exploded" in verdict["reasoning"]
 
     @patch("gandalf.judge._run_agent_session", return_value=MOCK_USAGE)
     @patch(
@@ -431,10 +433,11 @@ class TestRunJudge:
             run_judge(input_path, output_path)
 
         result = json.loads((tmp_path / "output.json").read_text())
-        assert result["met"] is None
+        verdict = result["verdict"]
+        assert verdict["met"] is None
         assert result["llm_usage"]["cost_usd"] == 0.05
         assert result["llm_usage"]["prompt_tokens"] == 1000
-        assert "Unexpected parsing error" in result["reasoning"]
+        assert "Unexpected parsing error" in verdict["reasoning"]
 
 
 class TestRunJudgeBatch:
@@ -464,8 +467,8 @@ class TestRunJudgeBatch:
         assert data["llm_usage"]["cost_usd"] == 0.05
 
     @patch("gandalf.judge._run_agent_session", return_value=MOCK_USAGE)
-    def test_no_per_verdict_usage_keys(self, mock_session: Any, tmp_path: pathlib.Path) -> None:  # noqa: ARG002
-        """Verdicts should NOT contain llm_usage — it's a sibling field."""
+    def test_session_usage_is_top_level(self, mock_session: Any, tmp_path: pathlib.Path) -> None:  # noqa: ARG002
+        """Session-level llm_usage should be a sibling of verdicts, not duplicated per-verdict."""
         input_path = _make_batch_judge_input_json(tmp_path, n=1)
         output_path = str(tmp_path / "output.json")
 
@@ -478,8 +481,8 @@ class TestRunJudgeBatch:
             run_judge_batch(input_path, output_path)
 
         data = json.loads((tmp_path / "output.json").read_text())
-        for v in data["verdicts"]:
-            assert "llm_usage" not in v
+        assert data["llm_usage"]["cost_usd"] == 0.05
+        assert data["verdicts"][0]["met"] is True
 
     @patch("gandalf.judge._run_agent_session", return_value=MOCK_USAGE)
     def test_preserves_usage_when_verdict_missing(self, mock_session: Any, tmp_path: pathlib.Path) -> None:  # noqa: ARG002
@@ -511,7 +514,7 @@ class TestRunJudgeBatch:
             run_judge_batch(input_path, output_path)
 
         data = json.loads((tmp_path / "output.json").read_text())
-        assert data["llm_usage"] == {}
+        assert data["llm_usage"] == LLMUsage().model_dump()
         assert all(v["met"] is None for v in data["verdicts"])
 
     @patch("gandalf.judge._run_agent_session", return_value=MOCK_USAGE)
@@ -560,7 +563,7 @@ class TestBuildJudgePromptXMLTags:
         assert "## " not in prompt
 
     def test_batch_uses_xml_tags(self) -> None:
-        criteria = [{"index": 0, "criteria": "c0"}, {"index": 1, "criteria": "c1"}]
+        criteria = [BatchCriterion(index=0, criteria="c0"), BatchCriterion(index=1, criteria="c1")]
         prompt = build_batch_judge_prompt(
             instructions="x",
             final_output="y",
@@ -610,7 +613,7 @@ class TestBuildJudgePromptCustomTemplate:
 
     def test_batch_custom_template(self) -> None:
         template = "BATCH: {{ criteria_block }} | n_max={{ n_max }}"
-        criteria = [{"index": 0, "criteria": "c0"}, {"index": 1, "criteria": "c1"}]
+        criteria = [BatchCriterion(index=0, criteria="c0"), BatchCriterion(index=1, criteria="c1")]
         prompt = build_batch_judge_prompt(
             instructions="x",
             final_output="y",
@@ -621,6 +624,19 @@ class TestBuildJudgePromptCustomTemplate:
         assert "BATCH:" in prompt
         assert "[0] c0" in prompt
         assert "n_max=1" in prompt
+
+    def test_batch_custom_template_dot_access(self) -> None:
+        template = "{% for c in criteria %}{{ c.index }}:{{ c.criteria }} {% endfor %}"
+        criteria = [BatchCriterion(index=0, criteria="c0"), BatchCriterion(index=1, criteria="c1")]
+        prompt = build_batch_judge_prompt(
+            instructions="x",
+            final_output="y",
+            criteria=criteria,
+            verdict_path="/tmp/v.json",
+            judge_prompt_template=template,
+        )
+        assert "0:c0" in prompt
+        assert "1:c1" in prompt
 
     def test_custom_template_receives_judge_guidance(self) -> None:
         template = "{% if judge_guidance %}G:{{ judge_guidance }}{% endif %}"
@@ -695,6 +711,7 @@ class TestRunJudgeLLM:
         run_judge(input_path, output_path)
 
         result = json.loads(pathlib.Path(output_path).read_text())
-        assert result["met"] is True
-        assert result["reasoning"]
-        assert isinstance(result["evidence"], list)
+        verdict = result["verdict"]
+        assert verdict["met"] is True
+        assert verdict["reasoning"]
+        assert isinstance(verdict["evidence"], list)

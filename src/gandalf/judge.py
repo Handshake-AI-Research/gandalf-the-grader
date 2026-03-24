@@ -23,8 +23,9 @@ import jinja2
 from openhands.sdk import LLM, Agent, Conversation, Tool
 from openhands.tools.file_editor import FileEditorTool
 from openhands.tools.terminal import TerminalTool
+from pydantic import TypeAdapter
 
-from gandalf.config import BatchJudgeInput, JudgeInput, Verdict
+from gandalf.config import BatchCriterion, BatchJudgeInput, JudgeInput, LLMUsage, MCPServer, Verdict
 
 _TEMPLATES_DIR = Path(__file__).parent / "templates"
 
@@ -70,7 +71,7 @@ def build_judge_prompt(
 def build_batch_judge_prompt(
     instructions: str,
     final_output: str,
-    criteria: list[dict[str, Any]],
+    criteria: list[BatchCriterion],
     verdict_path: str,
     judge_guidance: str = "",
     judge_prompt_template: str | None = None,
@@ -80,7 +81,7 @@ def build_batch_judge_prompt(
     Evaluates all criteria in one session, writing a JSON array of verdicts
     instead of a single object.
     """
-    criteria_lines = [f"  [{c['index']}] {c['criteria']}" for c in criteria]
+    criteria_lines = [f"  [{c.index}] {c.criteria}" for c in criteria]
     criteria_block = "\n".join(criteria_lines)
     n_max = len(criteria) - 1
 
@@ -124,15 +125,15 @@ def _read_verdict(verdict_path: str) -> Verdict:
         return Verdict(met=None, reasoning=f"Judge agent wrote invalid JSON: {e}")
 
 
-def _fail_all_verdicts(n: int, reason: str) -> list[dict[str, Any]]:
-    """Return *n* fail verdict dicts sharing the same reason."""
-    return [{"index": i, "met": None, "reasoning": reason, "evidence": []} for i in range(n)]
+def _fail_all_verdicts(n: int, reason: str) -> list[Verdict]:
+    """Return *n* fail verdicts sharing the same reason."""
+    return [Verdict(met=None, reasoning=reason) for _ in range(n)]
 
 
-def _read_batch_verdict(verdict_path: str, n_criteria: int) -> list[dict[str, Any]]:
+def _read_batch_verdict(verdict_path: str, n_criteria: int) -> list[Verdict]:
     """Read and validate the batch verdict file written by the judge agent.
 
-    Returns a list of verdict dicts, one per criterion index.  Missing
+    Returns a list of Verdicts, one per criterion index.  Missing
     indices get a default fail verdict.
     """
     try:
@@ -151,7 +152,7 @@ def _read_batch_verdict(verdict_path: str, n_criteria: int) -> list[dict[str, An
                 f"Expected JSON array, got {type(verdicts_raw).__name__}",
             )
 
-        by_index: dict[int, dict[str, Any]] = {}
+        by_index: dict[int, Verdict] = {}
         for v in verdicts_raw:
             idx = v.get("index")
             if idx is None:
@@ -162,24 +163,22 @@ def _read_batch_verdict(verdict_path: str, n_criteria: int) -> list[dict[str, An
                 continue
             if 0 <= idx < n_criteria:
                 raw_met = v.get("met")
-                by_index[idx] = {
-                    "met": bool(raw_met) if raw_met is not None else None,
-                    "reasoning": str(v.get("reasoning", "No reasoning provided.")),
-                    "evidence": list(v.get("evidence", [])),
-                }
+                by_index[idx] = Verdict(
+                    met=bool(raw_met) if raw_met is not None else None,
+                    reasoning=str(v.get("reasoning", "No reasoning provided.")),
+                    evidence=list(v.get("evidence", [])),
+                )
 
-        results = []
+        results: list[Verdict] = []
         for i in range(n_criteria):
             if i in by_index:
-                results.append({"index": i, **by_index[i]})
+                results.append(by_index[i])
             else:
                 results.append(
-                    {
-                        "index": i,
-                        "met": None,
-                        "reasoning": f"Judge did not return a verdict for criterion {i}.",
-                        "evidence": [],
-                    }
+                    Verdict(
+                        met=None,
+                        reasoning=f"Judge did not return a verdict for criterion {i}.",
+                    )
                 )
 
     except FileNotFoundError:
@@ -218,14 +217,14 @@ def _make_verdict_path(prefix: str = "verdict_", directory: str | None = None) -
 
 def _run_agent_session(
     model: str,
-    mcp_servers: list[dict[str, Any]],
+    mcp_servers: list[MCPServer],
     workdir: str,
     prompt: str,
-) -> dict[str, Any]:
+) -> LLMUsage:
     """Create an OpenHands agent and run a single conversation.
 
     The agent writes its output to a file (path embedded in *prompt*).
-    Returns a dict of LLM usage metrics (may be empty if extraction fails).
+    Returns LLM usage metrics (empty defaults if extraction fails).
     """
     # Pin HOME to the judge workspace before instantiating the OpenHands SDK.
     # The SDK writes state to ~/.openhands/ (profiles, agents, etc.) on init.
@@ -254,37 +253,30 @@ def _run_agent_session(
         Tool(name=FileEditorTool.name),
     ]
 
-    mcp_config: dict[str, Any] | None = None
     if mcp_servers:
-        mcp_config = {"mcpServers": {}}
-        for mcp in mcp_servers:
-            server_name = mcp.get("name", "mcp-server")
-            server_cfg = {"command": mcp["command"]}
-            if mcp.get("args"):
-                server_cfg["args"] = mcp["args"]
-            mcp_config["mcpServers"][server_name] = server_cfg
-
-    agent_kwargs = {"llm": llm, "tools": tools}
-    if mcp_config is not None:
-        agent_kwargs["mcp_config"] = mcp_config
-    agent = Agent(**agent_kwargs)  # type: ignore[arg-type]
+        mcp_config: dict[str, Any] = {
+            "mcpServers": {
+                srv.name: {"command": srv.command, **({"args": srv.args} if srv.args else {})} for srv in mcp_servers
+            }
+        }
+        agent = Agent(llm=llm, tools=tools, mcp_config=mcp_config)
+    else:
+        agent = Agent(llm=llm, tools=tools)
 
     conversation = Conversation(agent=agent, workspace=workdir)
     conversation.send_message(prompt)  # type: ignore[attr-defined]
     conversation.run()  # type: ignore[attr-defined]
 
-    llm_usage: dict[str, Any] = {}
     try:
         token_usage = llm.metrics.accumulated_token_usage
-        llm_usage = {
-            "cost_usd": llm.metrics.accumulated_cost,
-            "prompt_tokens": token_usage.prompt_tokens if token_usage else 0,
-            "completion_tokens": token_usage.completion_tokens if token_usage else 0,
-            "cache_read_tokens": token_usage.cache_read_tokens if token_usage else 0,
-        }
-    except Exception:  # noqa: BLE001, S110
-        pass
-    return llm_usage
+        return LLMUsage(
+            cost_usd=llm.metrics.accumulated_cost,
+            prompt_tokens=token_usage.prompt_tokens if token_usage else 0,
+            completion_tokens=token_usage.completion_tokens if token_usage else 0,
+            cache_read_tokens=token_usage.cache_read_tokens if token_usage else 0,
+        )
+    except Exception:  # noqa: BLE001
+        return LLMUsage()
 
 
 # ---------------------------------------------------------------------------
@@ -308,36 +300,17 @@ def run_judge(input_path: str, output_path: str) -> None:
         judge_prompt_template=judge_input.judge_prompt_template,
     )
 
-    mcp_servers = [
-        {
-            "name": srv.name,
-            "command": srv.command,
-            "args": srv.args,
-        }
-        for srv in judge_input.mcp_servers
-    ]
-
-    llm_usage: dict[str, Any] = {}
+    llm_usage = LLMUsage()
     try:
-        llm_usage = _run_agent_session(judge_input.model, mcp_servers, judge_input.workdir, prompt)
+        llm_usage = _run_agent_session(judge_input.model, judge_input.mcp_servers, judge_input.workdir, prompt)
         verdict = _read_verdict(verdict_path)
-        output = {
-            "met": verdict.met,
-            "reasoning": verdict.reasoning,
-            "evidence": verdict.evidence,
-            "llm_usage": llm_usage,
-        }
     except Exception as e:  # noqa: BLE001
-        output = {
-            "met": None,
-            "reasoning": f"Judge execution error: {e}",
-            "evidence": [],
-            "llm_usage": llm_usage,
-        }
+        verdict = Verdict(met=None, reasoning=f"Judge execution error: {e}")
     finally:
         with contextlib.suppress(OSError):
             os.unlink(verdict_path)
 
+    output = {"verdict": verdict.model_dump(), "llm_usage": llm_usage.model_dump()}
     with open(output_path, "w") as f:
         json.dump(output, f)
 
@@ -355,32 +328,22 @@ def run_judge_batch(input_path: str, output_path: str) -> None:
     with open(input_path) as f:
         judge_input = BatchJudgeInput.model_validate_json(f.read())
 
-    criteria_dicts = [c.model_dump() for c in judge_input.criteria]
-    n_criteria = len(criteria_dicts)
+    n_criteria = len(judge_input.criteria)
 
     verdict_path = _make_verdict_path(prefix="verdict_batch_", directory=judge_input.workdir)
 
     prompt = build_batch_judge_prompt(
         instructions=judge_input.instructions,
         final_output=judge_input.final_output,
-        criteria=criteria_dicts,
+        criteria=judge_input.criteria,
         verdict_path=verdict_path,
         judge_guidance=judge_input.judge_guidance,
         judge_prompt_template=judge_input.judge_prompt_template,
     )
 
-    mcp_servers = [
-        {
-            "name": srv.name,
-            "command": srv.command,
-            "args": srv.args,
-        }
-        for srv in judge_input.mcp_servers
-    ]
-
-    llm_usage: dict[str, Any] = {}
+    llm_usage = LLMUsage()
     try:
-        llm_usage = _run_agent_session(judge_input.model, mcp_servers, judge_input.workdir, prompt)
+        llm_usage = _run_agent_session(judge_input.model, judge_input.mcp_servers, judge_input.workdir, prompt)
         verdicts = _read_batch_verdict(verdict_path, n_criteria)
     except Exception as e:  # noqa: BLE001
         verdicts = _fail_all_verdicts(
@@ -391,7 +354,10 @@ def run_judge_batch(input_path: str, output_path: str) -> None:
         with contextlib.suppress(OSError):
             os.unlink(verdict_path)
 
-    output = {"verdicts": verdicts, "llm_usage": llm_usage}
+    output = {
+        "verdicts": TypeAdapter(list[Verdict]).dump_python(verdicts),
+        "llm_usage": llm_usage.model_dump(),
+    }
     with open(output_path, "w") as f:
         json.dump(output, f, indent=2)
 
