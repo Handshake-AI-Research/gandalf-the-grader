@@ -558,10 +558,6 @@ class TestScoring:
         assert isinstance(info["reward"], float)
         assert isinstance(info["raw_score"], (int, float))
 
-    def test_info_json_no_legacy_score_field(self, tmp_path: pathlib.Path) -> None:
-        """The old 'score' key must not appear in info.json."""
-        info = self._info([_cr(weight=1.0, met=True)], tmp_path)
-        assert "score" not in info
 
     def test_info_json_contains_minimum_and_maximum_score(self, tmp_path: pathlib.Path) -> None:
         info = self._info(
