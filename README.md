@@ -111,12 +111,11 @@ The template receives these variables:
 |---|---|---|
 | `instructions` | `str` | Task instructions given to the original agent |
 | `final_output` | `str` | Agent's final message from the trajectory |
-| `criteria` | `str` or `list[BatchCriterion]` | Single criterion string (sequential mode), or list of objects with `.index` (int) and `.criteria` (str) attributes (batch mode) |
+| `criteria` | `str` or `list[str]` | Single criterion string (sequential mode), or list of criterion strings (batch mode) |
 | `verdict_path` | `str` | File path the judge must write its verdict to |
 | `judge_guidance` | `str` | Additional guidance text (may be empty) |
-| `n_max` | `int` | Max criterion index, i.e. `len(criteria) - 1` (batch mode only) |
 
-The same template is used for both sequential and batch modes. Use `{% if criteria is string %}` to distinguish if needed. In batch mode, access fields with dot notation (e.g., `{{ c.index }}`, `{{ c.criteria }}`).
+The same template is used for both sequential and batch modes. Use `{% if criteria is string %}` to distinguish if needed. In batch mode, use `loop.index0` for the criterion index (e.g., `{% for c in criteria %}[{{ loop.index0 }}] {{ c }}{% endfor %}`).
 
 ### Rubric JSON
 

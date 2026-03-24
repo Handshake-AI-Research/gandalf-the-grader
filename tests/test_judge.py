@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 import pytest
 
-from gandalf.config import BatchCriterion, LLMUsage
+from gandalf.config import LLMUsage
 from gandalf.judge import (
     _make_verdict_path,
     _read_batch_verdict,
@@ -343,7 +343,7 @@ def _make_batch_judge_input_json(tmp_path: pathlib.Path, n: int = 2) -> str:
         "model": "test-model",
         "instructions": "do a thing",
         "final_output": "done",
-        "criteria": [{"index": i, "criteria": f"criterion {i}"} for i in range(n)],
+        "criteria": [f"criterion {i}" for i in range(n)],
         "workdir": str(tmp_path),
     }
     p = tmp_path / "batch_input.json"
@@ -563,7 +563,7 @@ class TestBuildJudgePromptXMLTags:
         assert "## " not in prompt
 
     def test_batch_uses_xml_tags(self) -> None:
-        criteria = [BatchCriterion(index=0, criteria="c0"), BatchCriterion(index=1, criteria="c1")]
+        criteria = ["c0", "c1"]
         prompt = build_batch_judge_prompt(
             instructions="x",
             final_output="y",
@@ -573,6 +573,7 @@ class TestBuildJudgePromptXMLTags:
         assert "<task_instructions>" in prompt
         assert "<evaluation_criteria>\n  [0] c0\n  [1] c1\n</evaluation_criteria>" in prompt
         assert "<judge_instructions>" in prompt
+        assert "0 through 1" in prompt
         assert "## " not in prompt
 
     def test_single_guidance_uses_xml_tag(self) -> None:
@@ -612,8 +613,8 @@ class TestBuildJudgePromptCustomTemplate:
         assert prompt == "CUSTOM: do stuff | check it | /tmp/v.json"
 
     def test_batch_custom_template(self) -> None:
-        template = "BATCH: {% for c in criteria %}[{{ c.index }}] {{ c.criteria }} {% endfor %}| n_max={{ n_max }}"
-        criteria = [BatchCriterion(index=0, criteria="c0"), BatchCriterion(index=1, criteria="c1")]
+        template = "BATCH: {% for c in criteria %}[{{ loop.index0 }}] {{ c }} {% endfor %}"
+        criteria = ["c0", "c1"]
         prompt = build_batch_judge_prompt(
             instructions="x",
             final_output="y",
@@ -624,11 +625,10 @@ class TestBuildJudgePromptCustomTemplate:
         assert "BATCH:" in prompt
         assert "[0] c0" in prompt
         assert "[1] c1" in prompt
-        assert "n_max=1" in prompt
 
-    def test_batch_custom_template_dot_access(self) -> None:
-        template = "{% for c in criteria %}{{ c.index }}:{{ c.criteria }} {% endfor %}"
-        criteria = [BatchCriterion(index=0, criteria="c0"), BatchCriterion(index=1, criteria="c1")]
+    def test_batch_custom_template_loop_index(self) -> None:
+        template = "{% for c in criteria %}{{ loop.index0 }}:{{ c }} {% endfor %}"
+        criteria = ["c0", "c1"]
         prompt = build_batch_judge_prompt(
             instructions="x",
             final_output="y",
