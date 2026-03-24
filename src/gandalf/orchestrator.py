@@ -654,7 +654,11 @@ def main() -> None:
         config.mode = args.mode
 
     # The model validator guarantees exactly one of rubric / rubric_path is set.
-    rubric = config.rubric if config.rubric is not None else load_rubric(config.rubric_path)  # type: ignore[arg-type]
+    if config.rubric is not None:
+        rubric = config.rubric
+    else:
+        assert config.rubric_path is not None  # noqa: S101  # guaranteed by model validator
+        rubric = load_rubric(config.rubric_path)
     final_output = load_trajectory_final_output(config.trajectory_path)
     judge_guidance = resolve_judge_guidance(config)
     judge_prompt_template = resolve_judge_prompt(config)
