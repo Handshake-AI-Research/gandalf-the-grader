@@ -17,7 +17,9 @@ from gandalf.config import (
     CriteriaResult,
     GraderConfig,
     JudgeInput,
+    LLMUsage,
     RubricItem,
+    Verdict,
 )
 from gandalf.orchestrator import (
     _JUDGE_ENV_ALLOWLIST,
@@ -296,57 +298,9 @@ class TestEvaluateAllCriteria:
         verdicts, usage = evaluate_all_criteria(judge_input, sandbox_user="sandbox", trace_path=trace_path)
 
         assert len(verdicts) == 2
-        assert verdicts[0]["met"] is True
-        assert verdicts[1]["met"] is False
-        assert usage["cost_usd"] == 0.1
-
-    @patch("gandalf.orchestrator._clone_workspace")
-    @patch("gandalf.orchestrator.subprocess.run")
-    def test_unexpected_json_type_string(self, mock_run: Any, mock_clone: Any, tmp_path: pathlib.Path) -> None:
-        """If the output file contains a JSON string, return fail-all."""
-        mock_clone.return_value = str(tmp_path)
-        mock_run.side_effect = _make_run_writing("just a string")
-
-        judge_input = _make_batch_input(tmp_path, n=2)
-        trace_path = str(tmp_path / "trace.txt")
-
-        verdicts, usage = evaluate_all_criteria(judge_input, sandbox_user="sandbox", trace_path=trace_path)
-
-        assert len(verdicts) == 2
-        assert all(v["met"] is None for v in verdicts)
-        assert "Unexpected JSON type" in verdicts[0]["reasoning"]
-        assert usage == {}
-
-    @patch("gandalf.orchestrator._clone_workspace")
-    @patch("gandalf.orchestrator.subprocess.run")
-    def test_unexpected_json_type_number(self, mock_run: Any, mock_clone: Any, tmp_path: pathlib.Path) -> None:
-        """If the output file contains a JSON number, return fail-all."""
-        mock_clone.return_value = str(tmp_path)
-        mock_run.side_effect = _make_run_writing(42)
-
-        judge_input = _make_batch_input(tmp_path, n=1)
-        trace_path = str(tmp_path / "trace.txt")
-
-        verdicts, usage = evaluate_all_criteria(judge_input, sandbox_user="sandbox", trace_path=trace_path)
-
-        assert len(verdicts) == 1
-        assert verdicts[0]["met"] is None
-        assert usage == {}
-
-    @patch("gandalf.orchestrator._clone_workspace")
-    @patch("gandalf.orchestrator.subprocess.run")
-    def test_dict_without_expected_keys(self, mock_run: Any, mock_clone: Any, tmp_path: pathlib.Path) -> None:
-        """Dict output missing 'verdicts' key: defaults to empty verdicts list."""
-        mock_clone.return_value = str(tmp_path)
-        mock_run.side_effect = _make_run_writing({"unexpected": "shape"})
-
-        judge_input = _make_batch_input(tmp_path, n=2)
-        trace_path = str(tmp_path / "trace.txt")
-
-        verdicts, usage = evaluate_all_criteria(judge_input, sandbox_user="sandbox", trace_path=trace_path)
-
-        assert verdicts == []
-        assert usage == {}
+        assert verdicts[0].met is True
+        assert verdicts[1].met is False
+        assert usage.cost_usd == 0.1
 
     @patch("gandalf.orchestrator._clone_workspace")
     @patch("gandalf.orchestrator.subprocess.run")
@@ -361,9 +315,9 @@ class TestEvaluateAllCriteria:
         verdicts, usage = evaluate_all_criteria(judge_input, sandbox_user="sandbox", trace_path=trace_path)
 
         assert len(verdicts) == 2
-        assert all(v["met"] is None for v in verdicts)
-        assert "exit 1" in verdicts[0]["reasoning"]
-        assert usage == {}
+        assert all(v.met is None for v in verdicts)
+        assert "exit 1" in verdicts[0].reasoning
+        assert usage == LLMUsage()
 
     @patch("gandalf.orchestrator._clone_workspace")
     @patch("gandalf.orchestrator.subprocess.run")
@@ -378,9 +332,9 @@ class TestEvaluateAllCriteria:
         verdicts, usage = evaluate_all_criteria(judge_input, sandbox_user="sandbox", trace_path=trace_path)
 
         assert len(verdicts) == 2
-        assert all(v["met"] is None for v in verdicts)
-        assert "timed out" in verdicts[0]["reasoning"].lower()
-        assert usage == {}
+        assert all(v.met is None for v in verdicts)
+        assert "timed out" in verdicts[0].reasoning.lower()
+        assert usage == LLMUsage()
 
     @patch("gandalf.orchestrator._clone_workspace")
     @patch("gandalf.orchestrator.subprocess.run")
@@ -403,8 +357,8 @@ class TestEvaluateAllCriteria:
         verdicts, usage = evaluate_all_criteria(judge_input, sandbox_user="sandbox", trace_path=trace_path)
 
         assert len(verdicts) == 1
-        assert verdicts[0]["met"] is None
-        assert usage == {}
+        assert verdicts[0].met is None
+        assert usage == LLMUsage()
 
     @patch("gandalf.orchestrator._clone_workspace")
     @patch("gandalf.orchestrator.subprocess.run")
@@ -420,8 +374,8 @@ class TestEvaluateAllCriteria:
         verdicts, usage = evaluate_all_criteria(judge_input, sandbox_user="sandbox", trace_path=trace_path)
 
         assert len(verdicts) == 2
-        assert all(v["met"] is None for v in verdicts)
-        assert usage == {}
+        assert all(v.met is None for v in verdicts)
+        assert usage == LLMUsage()
 
 
 @pytest.fixture
@@ -454,7 +408,7 @@ if args.batch:
     ]
     result = {"verdicts": verdicts, "llm_usage": {"cost_usd": 0.01}}
 else:
-    result = {"met": True, "reasoning": "ok", "evidence": []}
+    result = {"verdict": {"met": True, "reasoning": "ok", "evidence": []}, "llm_usage": {"cost_usd": 0.01}}
 
 with open(args.output, "w") as f:
     json.dump(result, f)
@@ -483,10 +437,10 @@ class TestSandboxUserNone:
         )
         trace_path = str(tmp_path / "trace.txt")
 
-        result = evaluate_criteria(judge_input, sandbox_user=None, trace_path=trace_path)
+        verdict, _usage = evaluate_criteria(judge_input, sandbox_user=None, trace_path=trace_path)
 
-        assert result["met"] is True
-        assert result["reasoning"] == "ok"
+        assert verdict.met is True
+        assert verdict.reasoning == "ok"
 
     @pytest.mark.usefixtures("_fake_judge")
     def test_evaluate_all_criteria_no_sudo(self, tmp_path: pathlib.Path) -> None:
@@ -501,8 +455,8 @@ class TestSandboxUserNone:
         verdicts, usage = evaluate_all_criteria(judge_input, sandbox_user=None, trace_path=trace_path)
 
         assert len(verdicts) == 2
-        assert all(v["met"] is True for v in verdicts)
-        assert usage["cost_usd"] == 0.01
+        assert all(v.met is True for v in verdicts)
+        assert usage.cost_usd == 0.01
 
 
 def _cr(*, weight: float, met: bool | None) -> CriteriaResult:
@@ -526,7 +480,7 @@ class TestScoring:
         """Run _write_info and return parsed info.json."""
         config = _make_config(output_dir=str(tmp_path))
         errored = sum(1 for r in results if r.met is None)
-        _write_info(config, results, {}, errored)
+        _write_info(config, results, LLMUsage(), errored)
         with open(tmp_path / "info.json") as f:
             result: dict[str, Any] = json.load(f)
             return result
@@ -640,7 +594,19 @@ class TestOutputFilePermissions:
             captured_cmd["output_path"] = output_path
             captured_cmd["existed_before_run"] = pathlib.Path(output_path).exists()
             # Simulate sandbox_user writing to the pre-created file
-            pathlib.Path(output_path).write_text(json.dumps({"verdicts": [], "llm_usage": {}}))
+            pathlib.Path(output_path).write_text(
+                json.dumps(
+                    {
+                        "verdicts": [{"met": True, "reasoning": "ok", "evidence": []}],
+                        "llm_usage": {
+                            "cost_usd": 0,
+                            "prompt_tokens": 0,
+                            "completion_tokens": 0,
+                            "cache_read_tokens": 0,
+                        },
+                    }
+                )
+            )
             return subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
 
         mock_run.side_effect = _capture
@@ -671,7 +637,19 @@ class TestOutputFilePermissions:
             captured["exists"] = pathlib.Path(output_path).exists()
             if captured["exists"]:
                 captured["mode"] = os.stat(output_path).st_mode
-            pathlib.Path(output_path).write_text(json.dumps({"verdicts": [], "llm_usage": {}}))
+            pathlib.Path(output_path).write_text(
+                json.dumps(
+                    {
+                        "verdicts": [{"met": True, "reasoning": "ok", "evidence": []}],
+                        "llm_usage": {
+                            "cost_usd": 0,
+                            "prompt_tokens": 0,
+                            "completion_tokens": 0,
+                            "cache_read_tokens": 0,
+                        },
+                    }
+                )
+            )
             return subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
 
         mock_run.side_effect = _capture_and_check_permissions
@@ -728,10 +706,10 @@ class TestRetryLogic:
 
         # First call: c1 passes, c2 errors. Retry: c2 passes.
         mock_eval.side_effect = [
-            {"met": True, "reasoning": "ok", "evidence": ["e1"]},
-            {"met": None, "reasoning": "timeout"},
+            (Verdict(met=True, reasoning="ok", evidence=["e1"]), LLMUsage()),
+            (Verdict(met=None, reasoning="timeout"), LLMUsage()),
             # retry for c2
-            {"met": True, "reasoning": "ok on retry", "evidence": ["e2"]},
+            (Verdict(met=True, reasoning="ok on retry", evidence=["e2"]), LLMUsage()),
         ]
 
         with patch("sys.argv", ["prog", "--config", "dummy.toml"]):
@@ -781,17 +759,17 @@ class TestRetryLogic:
         ]
 
         initial_verdicts = [
-            {"index": 0, "met": True, "reasoning": "ok", "evidence": []},
-            {"index": 1, "met": None, "reasoning": "timeout", "evidence": []},
-            {"index": 2, "met": None, "reasoning": "crash", "evidence": []},
+            Verdict(met=True, reasoning="ok"),
+            Verdict(met=None, reasoning="timeout"),
+            Verdict(met=None, reasoning="crash"),
         ]
         retry_verdicts = [
-            {"index": 0, "met": True, "reasoning": "ok retry", "evidence": []},
-            {"index": 1, "met": True, "reasoning": "ok retry 2", "evidence": []},
+            Verdict(met=True, reasoning="ok retry"),
+            Verdict(met=True, reasoning="ok retry 2"),
         ]
         mock_eval_all.side_effect = [
-            (initial_verdicts, {"cost_usd": 0.1}),
-            (retry_verdicts, {"cost_usd": 0.05}),
+            (initial_verdicts, LLMUsage(cost_usd=0.1)),
+            (retry_verdicts, LLMUsage(cost_usd=0.05)),
         ]
 
         with patch("sys.argv", ["prog", "--config", "dummy.toml"]):
@@ -834,7 +812,7 @@ class TestRetryLogic:
             mode="individual",
         )
         mock_rubric.return_value = [RubricItem(criteria="c1", weight=1.0)]
-        mock_eval.return_value = {"met": None, "reasoning": "timeout"}
+        mock_eval.return_value = (Verdict(met=None, reasoning="timeout"), LLMUsage())
 
         with patch("sys.argv", ["prog", "--config", "dummy.toml"]):
             with pytest.raises(SystemExit) as exc_info:
@@ -875,7 +853,7 @@ class TestRetryLogic:
             mode="individual",
         )
         mock_rubric.return_value = [RubricItem(criteria="c1", weight=1.0)]
-        mock_eval.return_value = {"met": None, "reasoning": "always fails"}
+        mock_eval.return_value = (Verdict(met=None, reasoning="always fails"), LLMUsage())
 
         with patch("sys.argv", ["prog", "--config", "dummy.toml"]):
             with pytest.raises(SystemExit) as exc_info:
@@ -922,9 +900,9 @@ class TestRetryLogic:
         ]
 
         mock_eval.side_effect = [
-            {"met": True, "reasoning": "ok", "evidence": []},
-            {"met": None, "reasoning": "timeout"},
-            {"met": False, "reasoning": "genuinely failed", "evidence": []},
+            (Verdict(met=True, reasoning="ok"), LLMUsage()),
+            (Verdict(met=None, reasoning="timeout"), LLMUsage()),
+            (Verdict(met=False, reasoning="genuinely failed"), LLMUsage()),
         ]
 
         with patch("sys.argv", ["prog", "--config", "dummy.toml"]):
@@ -973,8 +951,8 @@ class TestRetryLogic:
 
         # Both criteria met: raw = 3 + (-1) = 2, reward = 2/3 ≈ 0.6667
         mock_eval.side_effect = [
-            {"met": True, "reasoning": "ok", "evidence": []},
-            {"met": True, "reasoning": "hardcoded detected", "evidence": []},
+            (Verdict(met=True, reasoning="ok"), LLMUsage()),
+            (Verdict(met=True, reasoning="hardcoded detected"), LLMUsage()),
         ]
 
         with patch("sys.argv", ["prog", "--config", "dummy.toml"]):

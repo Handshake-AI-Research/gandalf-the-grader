@@ -22,6 +22,8 @@ import sys
 import tempfile
 from typing import Any
 
+from pydantic import TypeAdapter
+
 from gandalf.config import (
     BatchCriterion,
     BatchJudgeInput,
@@ -29,7 +31,9 @@ from gandalf.config import (
     EvaluationInfo,
     GraderConfig,
     JudgeInput,
+    LLMUsage,
     RubricItem,
+    Verdict,
     load_config,
     load_rubric,
 )
@@ -269,7 +273,7 @@ def _run_judge_subprocess(
         _save_trace(trace_path, "", "Judge execution timed out.", -1)
         msg = "Judge execution timed out."
         raise _JudgeSubprocessError(msg) from e
-    except (json.JSONDecodeError, FileNotFoundError, TypeError, AttributeError) as e:
+    except (json.JSONDecodeError, FileNotFoundError) as e:
         msg = f"Failed to read judge output: {e}"
         raise _JudgeSubprocessError(msg) from e
     finally:
@@ -281,21 +285,25 @@ def evaluate_criteria(
     sandbox_user: str | None,
     trace_path: str,
     timeout: int = 300,
-) -> dict[str, Any]:
+) -> tuple[Verdict, LLMUsage]:
     """Run the inner judge for a single criteria.
 
     When *sandbox_user* is set the judge is executed via ``sudo -u``.
     When it is ``None`` the judge runs as the ambient (current) user.
     """
     try:
-        return _run_judge_subprocess(judge_input, sandbox_user, trace_path, timeout)
+        data = _run_judge_subprocess(judge_input, sandbox_user, trace_path, timeout)
     except _JudgeSubprocessError as e:
-        return {"met": None, "reasoning": str(e)}
+        return Verdict(met=None, reasoning=str(e)), LLMUsage()
+
+    verdict = Verdict.model_validate(data["verdict"])
+    usage = LLMUsage.model_validate(data["llm_usage"])
+    return verdict, usage
 
 
-def _fail_all(n: int, reason: str) -> list[dict[str, Any]]:
+def _fail_all(n: int, reason: str) -> list[Verdict]:
     """Return *n* fail verdicts that all share the same reason."""
-    return [{"index": i, "met": None, "reasoning": reason, "evidence": []} for i in range(n)]
+    return [Verdict(met=None, reasoning=reason) for _ in range(n)]
 
 
 def evaluate_all_criteria(
@@ -303,7 +311,7 @@ def evaluate_all_criteria(
     sandbox_user: str | None,
     trace_path: str,
     timeout: int = 300,
-) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+) -> tuple[list[Verdict], LLMUsage]:
     """Run the inner judge in batch mode -- all criteria in one agent session.
 
     Args:
@@ -314,23 +322,19 @@ def evaluate_all_criteria(
         timeout: Max seconds to wait for the judge to complete.
 
     Returns:
-        (verdicts, llm_usage) where verdicts is a list of dicts each with
-        ``index``, ``met``, ``reasoning``, ``evidence``, and llm_usage
-        is the aggregate token/cost dict for the single batch session.
+        (verdicts, llm_usage) where verdicts is a list of Verdict models
+        positionally aligned with the input criteria, and llm_usage is the
+        aggregate token/cost metrics for the batch session.
     """
     n_criteria = len(judge_input.criteria)
 
     try:
         data = _run_judge_subprocess(judge_input, sandbox_user, trace_path, timeout)
     except _JudgeSubprocessError as e:
-        return _fail_all(n_criteria, str(e)), {}
+        return _fail_all(n_criteria, str(e)), LLMUsage()
 
-    if not isinstance(data, dict):
-        reason = f"Unexpected JSON type from judge: {type(data).__name__}"
-        return _fail_all(n_criteria, reason), {}
-
-    verdicts = data.get("verdicts", [])
-    llm_usage = data.get("llm_usage", {})
+    verdicts = TypeAdapter(list[Verdict]).validate_python(data["verdicts"])
+    llm_usage = LLMUsage.model_validate(data["llm_usage"])
     return verdicts, llm_usage
 
 
@@ -344,20 +348,30 @@ def _save_trace(trace_path: str, stdout: str, stderr: str, returncode: int) -> N
         f.write(stderr)
 
 
+def _merge_usage(a: LLMUsage, b: LLMUsage) -> LLMUsage:
+    """Sum two LLMUsage instances field-by-field."""
+    return LLMUsage(
+        cost_usd=a.cost_usd + b.cost_usd,
+        prompt_tokens=a.prompt_tokens + b.prompt_tokens,
+        completion_tokens=a.completion_tokens + b.completion_tokens,
+        cache_read_tokens=a.cache_read_tokens + b.cache_read_tokens,
+    )
+
+
 def _run_sequential(
     config: GraderConfig,
     rubric: list[RubricItem],
     final_output: str,
     judge_guidance: str,
     judge_prompt_template: str | None,
-) -> tuple[list[CriteriaResult], dict[str, Any]]:
+) -> tuple[list[CriteriaResult], LLMUsage]:
     """Evaluate each criterion in its own agent session.
 
     Returns (results, llm_usage) where llm_usage is the aggregated
     token/cost totals across all individual judge sessions.
     """
     results: list[CriteriaResult] = []
-    total_usage: dict[str, float | int] = {}
+    total_usage = LLMUsage()
     for i, item in enumerate(rubric):
         print(f"[{i + 1}/{len(rubric)}] Evaluating: {item.criteria[:80]}...")  # noqa: T201
 
@@ -373,23 +387,21 @@ def _run_sequential(
         )
 
         trace_path = os.path.join(config.output_dir, f"judge_trace_{i}.txt")
-        verdict = evaluate_criteria(
+        verdict, usage = evaluate_criteria(
             judge_input,
             sandbox_user=config.sandbox_user,
             trace_path=trace_path,
             timeout=config.judge_timeout,
         )
 
-        usage = verdict.get("llm_usage", {})
-        for key in ("cost_usd", "prompt_tokens", "completion_tokens", "cache_read_tokens"):
-            total_usage[key] = total_usage.get(key, 0) + usage.get(key, 0)
+        total_usage = _merge_usage(total_usage, usage)
 
         result = CriteriaResult(
             criteria=item.criteria,
             weight=item.weight,
-            met=verdict.get("met"),
-            reasoning=verdict.get("reasoning", "No reasoning provided."),
-            evidence=verdict.get("evidence", []),
+            met=verdict.met,
+            reasoning=verdict.reasoning,
+            evidence=verdict.evidence,
         )
         results.append(result)
 
@@ -405,7 +417,7 @@ def _run_batch(
     final_output: str,
     judge_guidance: str,
     judge_prompt_template: str | None,
-) -> tuple[list[CriteriaResult], dict[str, Any]]:
+) -> tuple[list[CriteriaResult], LLMUsage]:
     """Evaluate all criteria in a single agent session.
 
     Returns (results, llm_usage) where llm_usage is the token/cost
@@ -441,13 +453,13 @@ def _run_batch(
 
     results: list[CriteriaResult] = []
     for i, item in enumerate(rubric):
-        v = verdicts[i] if i < len(verdicts) else {}
+        v = verdicts[i] if i < len(verdicts) else Verdict(met=None, reasoning="No reasoning provided.")
         result = CriteriaResult(
             criteria=item.criteria,
             weight=item.weight,
-            met=v.get("met"),
-            reasoning=v.get("reasoning", "No reasoning provided."),
-            evidence=v.get("evidence", []),
+            met=v.met,
+            reasoning=v.reasoning,
+            evidence=v.evidence,
         )
         results.append(result)
 
@@ -466,13 +478,16 @@ def _retry_sequential(
     config: GraderConfig,
     rubric: list[RubricItem],
     results: list[CriteriaResult],
-    llm_usage: dict[str, Any],
+    llm_usage: LLMUsage,
     final_output: str,
     judge_guidance: str,
     judge_prompt_template: str | None,
     errored_indices: list[int],
-) -> None:
-    """Re-run each errored criterion individually and merge results in-place."""
+) -> LLMUsage:
+    """Re-run each errored criterion individually and merge results in-place.
+
+    Returns the updated cumulative LLMUsage.
+    """
     for idx in errored_indices:
         item = rubric[idx]
         print(f"  [retry {idx}] Evaluating: {item.criteria[:80]}...")  # noqa: T201
@@ -489,40 +504,43 @@ def _retry_sequential(
         )
 
         trace_path = os.path.join(config.output_dir, f"judge_trace_{idx}_retry.txt")
-        verdict = evaluate_criteria(
+        verdict, usage = evaluate_criteria(
             judge_input,
             sandbox_user=config.sandbox_user,
             trace_path=trace_path,
             timeout=config.judge_timeout,
         )
 
-        usage = verdict.get("llm_usage", {})
-        for key in ("cost_usd", "prompt_tokens", "completion_tokens", "cache_read_tokens"):
-            llm_usage[key] = llm_usage.get(key, 0) + usage.get(key, 0)
+        llm_usage = _merge_usage(llm_usage, usage)
 
         results[idx] = CriteriaResult(
             criteria=item.criteria,
             weight=item.weight,
-            met=verdict.get("met"),
-            reasoning=verdict.get("reasoning", "No reasoning provided."),
-            evidence=verdict.get("evidence", []),
+            met=verdict.met,
+            reasoning=verdict.reasoning,
+            evidence=verdict.evidence,
         )
 
         status = "MET" if results[idx].met is True else ("ERROR" if results[idx].met is None else "UNMET")
         print(f"    -> {status}: {results[idx].reasoning[:120]}")  # noqa: T201
+
+    return llm_usage
 
 
 def _retry_batch(
     config: GraderConfig,
     rubric: list[RubricItem],
     results: list[CriteriaResult],
-    llm_usage: dict[str, Any],
+    llm_usage: LLMUsage,
     final_output: str,
     judge_guidance: str,
     judge_prompt_template: str | None,
     errored_indices: list[int],
-) -> None:
-    """Re-run errored criteria as a batch and merge results in-place."""
+) -> LLMUsage:
+    """Re-run errored criteria as a batch and merge results in-place.
+
+    Returns the updated cumulative LLMUsage.
+    """
     retry_criteria = [
         BatchCriterion(index=new_idx, criteria=rubric[orig_idx].criteria)
         for new_idx, orig_idx in enumerate(errored_indices)
@@ -554,28 +572,29 @@ def _retry_batch(
         timeout=batch_timeout,
     )
 
-    for key in ("cost_usd", "prompt_tokens", "completion_tokens", "cache_read_tokens"):
-        llm_usage[key] = llm_usage.get(key, 0) + retry_usage.get(key, 0)
+    llm_usage = _merge_usage(llm_usage, retry_usage)
 
     for new_idx, orig_idx in enumerate(errored_indices):
-        v = verdicts[new_idx] if new_idx < len(verdicts) else {}
+        v = verdicts[new_idx] if new_idx < len(verdicts) else Verdict(met=None, reasoning="No reasoning provided.")
         results[orig_idx] = CriteriaResult(
             criteria=rubric[orig_idx].criteria,
             weight=rubric[orig_idx].weight,
-            met=v.get("met"),
-            reasoning=v.get("reasoning", "No reasoning provided."),
-            evidence=v.get("evidence", []),
+            met=v.met,
+            reasoning=v.reasoning,
+            evidence=v.evidence,
         )
 
         met = results[orig_idx].met
         status = "MET" if met is True else ("ERROR" if met is None else "UNMET")
         print(f"    [{orig_idx}] {status}: {results[orig_idx].reasoning[:120]}")  # noqa: T201
 
+    return llm_usage
+
 
 def _write_info(
     config: GraderConfig,
     results: list[CriteriaResult],
-    llm_usage: dict[str, Any],
+    llm_usage: LLMUsage,
     errored_criteria_count: int,
 ) -> tuple[float, float]:
     """Compute reward and raw score and write info.json. Returns (reward, raw_score).
@@ -608,13 +627,7 @@ def _write_info(
         minimum_score=minimum_score,
         maximum_score=maximum_score,
         criteria_results=results,
-        llm_usage={
-            "model": config.model,
-            "total_cost_usd": llm_usage.get("cost_usd", 0),
-            "total_prompt_tokens": llm_usage.get("prompt_tokens", 0),
-            "total_completion_tokens": llm_usage.get("completion_tokens", 0),
-            "total_cache_read_tokens": llm_usage.get("cache_read_tokens", 0),
-        },
+        llm_usage=llm_usage,
         errored_criteria_count=errored_criteria_count,
         evaluated_criteria_pct=evaluated_pct,
     )
@@ -668,11 +681,11 @@ def main() -> None:
             break
         print(f"\n[retry {attempt + 1}/{config.judge_retries}] Retrying {len(errored)} errored criteria...")  # noqa: T201
         if config.mode == "batch":
-            _retry_batch(
+            llm_usage = _retry_batch(
                 config, rubric, results, llm_usage, final_output, judge_guidance, judge_prompt_template, errored
             )
         else:
-            _retry_sequential(
+            llm_usage = _retry_sequential(
                 config, rubric, results, llm_usage, final_output, judge_guidance, judge_prompt_template, errored
             )
 
@@ -680,10 +693,6 @@ def main() -> None:
     final_errored = _get_errored_indices(results)
     errored_count = len(final_errored)
     reward, raw_score = _write_info(config, results, llm_usage, errored_count)
-
-    total_cost = llm_usage.get("cost_usd", 0)
-    total_prompt = llm_usage.get("prompt_tokens", 0)
-    total_completion = llm_usage.get("completion_tokens", 0)
 
     # 5. If any criteria still errored: do NOT write reward.json, exit 1
     if final_errored:
@@ -700,11 +709,11 @@ def main() -> None:
         json.dump({"reward": reward}, f, indent=2)
 
     print(f"\nReward: {reward} (raw: {raw_score})")  # noqa: T201
-    if total_cost > 0:
+    if llm_usage.cost_usd > 0:
         print(  # noqa: T201
-            f"Grader LLM cost: ${total_cost:.4f} "
+            f"Grader LLM cost: ${llm_usage.cost_usd:.4f} "
             f"({len(rubric)} criteria, "
-            f"{total_prompt} prompt + {total_completion} completion tokens)"
+            f"{llm_usage.prompt_tokens} prompt + {llm_usage.completion_tokens} completion tokens)"
         )
     print(f"Mode: {config.mode}")  # noqa: T201
     if initial_errored > 0:
