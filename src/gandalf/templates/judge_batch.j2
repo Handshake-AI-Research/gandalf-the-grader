@@ -16,7 +16,7 @@ You are an expert judge evaluating whether an AI agent successfully completed a 
 
 <evaluation_criteria>
 {%- for c in criteria %}
-  [{{ c.index }}] {{ c.criteria }}
+  [{{ loop.index0 }}] {{ c }}
 {%- endfor %}
 </evaluation_criteria>
 
@@ -59,6 +59,6 @@ Example:
 ]
 ```
 
-You MUST include a verdict for every criterion index (0 through {{ n_max }}).
+You MUST include a verdict for every criterion index (0 through {{ criteria|length - 1 }}).
 Write ONLY valid JSON to that file, with no additional text.
 </judge_instructions>

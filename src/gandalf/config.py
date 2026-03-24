@@ -93,24 +93,17 @@ class JudgeInput(BaseModel):
     judge_prompt_template: str | None = None
 
 
-class BatchCriterion(BaseModel):
-    """A single criterion entry within a batch judge input.
-
-    The judge sees only the index and criteria text — weights are intentionally
-    omitted so the judge evaluates each criterion on its own merits.
-    """
-
-    index: int
-    criteria: str
-
-
 class BatchJudgeInput(BaseModel):
-    """Input passed to the inner judge for batch (all-criteria) evaluation."""
+    """Input passed to the inner judge for batch (all-criteria) evaluation.
+
+    Weights are intentionally omitted from criteria so the judge evaluates
+    each criterion on its own merits.  Indices are derived from position.
+    """
 
     model: str
     instructions: str
     final_output: str
-    criteria: list[BatchCriterion]
+    criteria: list[str]
     workdir: str
     mcp_servers: list[MCPServer] = Field(default_factory=list)
     judge_guidance: str = ""

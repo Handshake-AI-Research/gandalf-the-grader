@@ -12,7 +12,6 @@ from unittest.mock import patch
 import pytest
 
 from gandalf.config import (
-    BatchCriterion,
     BatchJudgeInput,
     CriteriaResult,
     GraderConfig,
@@ -251,7 +250,7 @@ def _make_batch_input(tmp_path: pathlib.Path, n: int = 2) -> BatchJudgeInput:
         model="test-model",
         instructions="do a thing",
         final_output="done",
-        criteria=[BatchCriterion(index=i, criteria=f"criterion {i}") for i in range(n)],
+        criteria=[f"criterion {i}" for i in range(n)],
         workdir=str(tmp_path),
     )
 
@@ -403,8 +402,8 @@ inp = json.load(open(args.input))
 
 if args.batch:
     verdicts = [
-        {"index": c["index"], "met": True, "reasoning": "ok", "evidence": []}
-        for c in inp["criteria"]
+        {"index": i, "met": True, "reasoning": "ok", "evidence": []}
+        for i in range(len(inp["criteria"]))
     ]
     result = {"verdicts": verdicts, "llm_usage": {"cost_usd": 0.01}}
 else:
@@ -558,7 +557,6 @@ class TestScoring:
         assert "raw_score" in info
         assert isinstance(info["reward"], float)
         assert isinstance(info["raw_score"], (int, float))
-
 
     def test_info_json_contains_minimum_and_maximum_score(self, tmp_path: pathlib.Path) -> None:
         info = self._info(

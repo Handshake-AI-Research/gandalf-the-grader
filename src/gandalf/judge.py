@@ -25,7 +25,7 @@ from openhands.tools.file_editor import FileEditorTool
 from openhands.tools.terminal import TerminalTool
 from pydantic import TypeAdapter
 
-from gandalf.config import BatchCriterion, BatchJudgeInput, JudgeInput, LLMUsage, MCPServer, Verdict
+from gandalf.config import BatchJudgeInput, JudgeInput, LLMUsage, MCPServer, Verdict
 
 _TEMPLATES_DIR = Path(__file__).parent / "templates"
 
@@ -71,7 +71,7 @@ def build_judge_prompt(
 def build_batch_judge_prompt(
     instructions: str,
     final_output: str,
-    criteria: list[BatchCriterion],
+    criteria: list[str],
     verdict_path: str,
     judge_guidance: str = "",
     judge_prompt_template: str | None = None,
@@ -81,8 +81,6 @@ def build_batch_judge_prompt(
     Evaluates all criteria in one session, writing a JSON array of verdicts
     instead of a single object.
     """
-    n_max = len(criteria) - 1
-
     return _render_template(
         "judge_batch.j2",
         judge_prompt_template,
@@ -91,7 +89,6 @@ def build_batch_judge_prompt(
         criteria=criteria,
         verdict_path=verdict_path,
         judge_guidance=judge_guidance,
-        n_max=n_max,
     )
 
 
