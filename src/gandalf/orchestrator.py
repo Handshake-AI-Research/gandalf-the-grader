@@ -650,8 +650,7 @@ def main() -> None:
 
     config = load_config(args.config)
 
-    if args.mode is not None:
-        config.mode = args.mode
+    mode = args.mode if args.mode is not None else config.mode
 
     # The model validator guarantees exactly one of rubric / rubric_path is set.
     if config.rubric is not None:
@@ -666,7 +665,7 @@ def main() -> None:
     os.makedirs(config.output_dir, exist_ok=True)
 
     # 1. Initial evaluation
-    if config.mode == "batch":
+    if mode == "batch":
         results, llm_usage = _run_batch(config, rubric, final_output, judge_guidance, judge_prompt_template)
     else:
         results, llm_usage = _run_sequential(config, rubric, final_output, judge_guidance, judge_prompt_template)
@@ -680,7 +679,7 @@ def main() -> None:
         if not errored:
             break
         print(f"\n[retry {attempt + 1}/{config.judge_retries}] Retrying {len(errored)} errored criteria...")  # noqa: T201
-        if config.mode == "batch":
+        if mode == "batch":
             llm_usage = _retry_batch(
                 config, rubric, results, llm_usage, final_output, judge_guidance, judge_prompt_template, errored
             )
@@ -715,7 +714,7 @@ def main() -> None:
             f"({len(rubric)} criteria, "
             f"{llm_usage.prompt_tokens} prompt + {llm_usage.completion_tokens} completion tokens)"
         )
-    print(f"Mode: {config.mode}")  # noqa: T201
+    print(f"Mode: {mode}")  # noqa: T201
     if initial_errored > 0:
         print(f"Retried: {initial_errored} criteria recovered after retry")  # noqa: T201
     print(f"Results written to {config.output_dir}/")  # noqa: T201
