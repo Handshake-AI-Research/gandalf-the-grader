@@ -137,7 +137,7 @@ def _clone_workspace(src: str) -> str:
     covers per-file errors — directory listing errors (e.g. a 0o700 dir owned
     by the agent) cannot be caught there.
     """
-    clone_dir = tempfile.mkdtemp(prefix="judge_workspace_", dir="/tmp")
+    clone_dir = tempfile.mkdtemp(prefix="judge_workspace_")
     # Root dir is created by mkdtemp at 0o700; open it up immediately so
     # sandbox_user can traverse and write to it.
     os.chmod(clone_dir, 0o777)  # noqa: S103
