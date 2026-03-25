@@ -240,7 +240,7 @@ class TestJudgeEnvVars:
             monkeypatch.setenv(key, f"val-{key}")
         result = _judge_env_vars()
         keys = {item.split("=", 1)[0] for item in result}
-        assert keys == set(_JUDGE_ENV_ALLOWLIST)
+        assert keys == _JUDGE_ENV_ALLOWLIST
 
 
 def _make_batch_input(tmp_path: pathlib.Path, n: int = 2) -> BatchJudgeInput:
