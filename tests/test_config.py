@@ -9,7 +9,7 @@ from pydantic import ValidationError
 
 from gandalf.config import (
     BatchJudgeInput,
-    CriteriaResult,
+    CriterionResult,
     EvaluationInfo,
     GraderConfig,
     JudgeInput,
@@ -88,7 +88,7 @@ class TestLoadRubric:
     def test_parses_items(self) -> None:
         rubric = load_rubric(os.path.join(FIXTURES, "sample_rubric.json"))
         assert len(rubric) == 3
-        assert rubric[0].criteria == "The file index.html exists in the workspace"
+        assert rubric[0].criterion == "The file index.html exists in the workspace"
         assert rubric[0].weight == 1.0
         assert rubric[1].weight == 2.0
 
@@ -160,7 +160,7 @@ class TestPydanticModels:
             model="test-model",
             instructions="test",
             final_output="agent said done",
-            criteria="check something",
+            criterion="check something",
             workdir="/workspace",
         )
         assert ji.final_output == "agent said done"
@@ -170,7 +170,7 @@ class TestPydanticModels:
             model="test-model",
             instructions="test",
             final_output="done",
-            criteria="check",
+            criterion="check",
             workdir="/workspace",
         )
         assert ji.judge_guidance == ""
@@ -180,7 +180,7 @@ class TestPydanticModels:
             model="test-model",
             instructions="test",
             final_output="done",
-            criteria="check",
+            criterion="check",
             workdir="/workspace",
             judge_guidance="Use openpyxl for .xlsx files.",
         )
@@ -208,26 +208,26 @@ class TestPydanticModels:
         restored = Verdict.model_validate_json(raw)
         assert restored.met is None
 
-    def test_criteria_result(self) -> None:
-        r = CriteriaResult(
-            criteria="test",
+    def test_criterion_result(self) -> None:
+        r = CriterionResult(
+            criterion="test",
             weight=1.0,
             met=True,
             reasoning="ok",
         )
         assert r.evidence == []
 
-    def test_criteria_result_negative_weight(self) -> None:
-        r = CriteriaResult(
-            criteria="used hardcoded values",
+    def test_criterion_result_negative_weight(self) -> None:
+        r = CriterionResult(
+            criterion="used hardcoded values",
             weight=-1.0,
             met=True,
             reasoning="found hardcoded values",
         )
         assert r.weight == -1.0
 
-    def test_criteria_result_met_none(self) -> None:
-        r = CriteriaResult(criteria="test", weight=1.0, met=None, reasoning="error")
+    def test_criterion_result_met_none(self) -> None:
+        r = CriterionResult(criterion="test", weight=1.0, met=None, reasoning="error")
         assert r.met is None
         data = r.model_dump()
         assert data["met"] is None
@@ -238,17 +238,17 @@ class TestPydanticModels:
             raw_score=3.0,
             minimum_score=-1.0,
             maximum_score=6.0,
-            criteria_results=[
-                CriteriaResult(criteria="c1", weight=3.0, met=True, reasoning="ok"),
-                CriteriaResult(criteria="c2", weight=3.0, met=False, reasoning="fail"),
-                CriteriaResult(criteria="c3", weight=-1.0, met=False, reasoning="avoided"),
+            criterion_results=[
+                CriterionResult(criterion="c1", weight=3.0, met=True, reasoning="ok"),
+                CriterionResult(criterion="c2", weight=3.0, met=False, reasoning="fail"),
+                CriterionResult(criterion="c3", weight=-1.0, met=False, reasoning="avoided"),
             ],
         )
         assert info.reward == 0.5
         assert info.raw_score == 3.0
         assert info.minimum_score == -1.0
         assert info.maximum_score == 6.0
-        assert len(info.criteria_results) == 3
+        assert len(info.criterion_results) == 3
 
     def test_grader_config_sandbox_user_defaults_none(self) -> None:
         cfg = GraderConfig(
@@ -311,25 +311,25 @@ output_dir = "/logs/grader"
         info = EvaluationInfo(
             reward=0.5,
             raw_score=1.0,
-            criteria_results=[
-                CriteriaResult(criteria="c1", weight=1.0, met=True, reasoning="ok"),
-                CriteriaResult(criteria="c2", weight=1.0, met=None, reasoning="error"),
+            criterion_results=[
+                CriterionResult(criterion="c1", weight=1.0, met=True, reasoning="ok"),
+                CriterionResult(criterion="c2", weight=1.0, met=None, reasoning="error"),
             ],
-            errored_criteria_count=1,
+            errored_criterion_count=1,
             evaluated_criteria_pct=50.0,
         )
-        assert info.errored_criteria_count == 1
+        assert info.errored_criterion_count == 1
         assert info.evaluated_criteria_pct == 50.0
 
     def test_evaluation_info_errored_fields_default(self) -> None:
         info = EvaluationInfo(
             reward=1.0,
             raw_score=1.0,
-            criteria_results=[
-                CriteriaResult(criteria="c1", weight=1.0, met=True, reasoning="ok"),
+            criterion_results=[
+                CriterionResult(criterion="c1", weight=1.0, met=True, reasoning="ok"),
             ],
         )
-        assert info.errored_criteria_count == 0
+        assert info.errored_criterion_count == 0
         assert info.evaluated_criteria_pct == 100.0
 
     def test_judge_input_model_copy(self) -> None:
@@ -337,7 +337,7 @@ output_dir = "/logs/grader"
             model="test-model",
             instructions="test",
             final_output="agent said done",
-            criteria="check something",
+            criterion="check something",
             workdir="/workspace",
         )
         cloned = ji.model_copy(update={"workdir": "/new-workspace"})
@@ -349,7 +349,7 @@ output_dir = "/logs/grader"
             model="test-model",
             instructions="test",
             final_output="agent said done",
-            criteria="check something",
+            criterion="check something",
             workdir="/workspace",
             mcp_servers=[MCPServer(name="srv", command="/bin/srv")],
         )
@@ -376,7 +376,7 @@ class TestMutualExclusivity:
     def test_rubric_inline_only(self) -> None:
         kw = self._base_kwargs()
         del kw["rubric_path"]
-        cfg = GraderConfig(**kw, rubric=[RubricItem(criteria="c", weight=1.0)])
+        cfg = GraderConfig(**kw, rubric=[RubricItem(criterion="c", weight=1.0)])
         assert cfg.rubric is not None
         assert cfg.rubric_path is None
 
@@ -389,7 +389,7 @@ class TestMutualExclusivity:
         with pytest.raises(ValidationError, match="rubric"):
             GraderConfig(
                 **self._base_kwargs(),
-                rubric=[RubricItem(criteria="c", weight=1.0)],
+                rubric=[RubricItem(criterion="c", weight=1.0)],
             )
 
     def test_rubric_neither_raises(self) -> None:
@@ -450,7 +450,7 @@ class TestJudgePrompt:
             model="m",
             instructions="i",
             final_output="o",
-            criteria="c",
+            criterion="c",
             workdir="/w",
         )
         assert ji.judge_prompt is None
@@ -460,7 +460,7 @@ class TestJudgePrompt:
             model="m",
             instructions="i",
             final_output="o",
-            criteria="c",
+            criterion="c",
             workdir="/w",
             judge_prompt="Hello {{ instructions }}",
         )

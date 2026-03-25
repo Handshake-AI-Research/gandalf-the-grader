@@ -26,7 +26,7 @@ class TestBuildJudgePrompt:
         prompt = build_judge_prompt(
             instructions="Build a web app",
             final_output="Done!",
-            criteria="The file index.html exists",
+            criterion="The file index.html exists",
             verdict_path="/tmp/verdict.json",
         )
         assert "Build a web app" in prompt
@@ -38,7 +38,7 @@ class TestBuildJudgePrompt:
         prompt = build_judge_prompt(
             instructions="x",
             final_output="z",
-            criteria="c",
+            criterion="c",
             verdict_path="/tmp/v.json",
         )
         assert "Agent's Prompt" not in prompt
@@ -47,7 +47,7 @@ class TestBuildJudgePrompt:
         prompt = build_judge_prompt(
             instructions="x",
             final_output="z",
-            criteria="c",
+            criterion="c",
             verdict_path="/tmp/v.json",
         )
         assert '"evidence"' in prompt
@@ -56,7 +56,7 @@ class TestBuildJudgePrompt:
         prompt = build_judge_prompt(
             instructions="x",
             final_output="z",
-            criteria="c",
+            criterion="c",
             verdict_path="/tmp/v.json",
         )
         assert '"met"' in prompt
@@ -67,7 +67,7 @@ class TestBuildJudgePrompt:
         prompt = build_judge_prompt(
             instructions="x",
             final_output="z",
-            criteria="c",
+            criterion="c",
             verdict_path="/tmp/v.json",
             judge_guidance=guidance,
         )
@@ -77,14 +77,14 @@ class TestBuildJudgePrompt:
         prompt_empty = build_judge_prompt(
             instructions="x",
             final_output="z",
-            criteria="c",
+            criterion="c",
             verdict_path="/tmp/v.json",
             judge_guidance="",
         )
         prompt_default = build_judge_prompt(
             instructions="x",
             final_output="z",
-            criteria="c",
+            criterion="c",
             verdict_path="/tmp/v.json",
         )
         assert prompt_empty == prompt_default
@@ -94,7 +94,7 @@ class TestBuildJudgePrompt:
         prompt = build_judge_prompt(
             instructions="INSTRUCTIONS_MARKER",
             final_output="z",
-            criteria="c",
+            criterion="c",
             verdict_path="/tmp/v.json",
             judge_guidance=guidance,
         )
@@ -104,7 +104,7 @@ class TestBuildJudgePrompt:
         prompt = build_judge_prompt(
             instructions="INSTR",
             final_output="OUTPUT",
-            criteria="CRIT",
+            criterion="CRIT",
             verdict_path="/tmp/v.json",
             judge_guidance="GUIDANCE",
         )
@@ -153,7 +153,7 @@ class TestMakeVerdictPath:
             "model": "test-model",
             "instructions": "do a thing",
             "final_output": "done",
-            "criteria": "check something",
+            "criterion": "check something",
             "workdir": str(tmp_path),
         }
         input_path = str(tmp_path / "input.json")
@@ -323,13 +323,13 @@ MOCK_USAGE = LLMUsage(
 )
 
 
-def _make_judge_input_json(tmp_path: pathlib.Path, criteria: str = "check something") -> str:
+def _make_judge_input_json(tmp_path: pathlib.Path, criterion: str = "check something") -> str:
     """Write a minimal JudgeInput JSON file and return its path."""
     data = {
         "model": "test-model",
         "instructions": "do a thing",
         "final_output": "done",
-        "criteria": criteria,
+        "criterion": criterion,
         "workdir": str(tmp_path),
     }
     p = tmp_path / "input.json"
@@ -552,13 +552,13 @@ class TestBuildJudgePromptXMLTags:
         prompt = build_judge_prompt(
             instructions="x",
             final_output="y",
-            criteria="c",
+            criterion="c",
             verdict_path="/tmp/v.json",
         )
         assert "<task_instructions>" in prompt
         assert "</task_instructions>" in prompt
         assert "<agent_final_output>" in prompt
-        assert "<evaluation_criteria>" in prompt
+        assert "<evaluation_criterion>" in prompt
         assert "<judge_instructions>" in prompt
         assert "## " not in prompt
 
@@ -580,7 +580,7 @@ class TestBuildJudgePromptXMLTags:
         prompt = build_judge_prompt(
             instructions="x",
             final_output="y",
-            criteria="c",
+            criterion="c",
             verdict_path="/tmp/v.json",
             judge_guidance="GUIDANCE_TEXT",
         )
@@ -592,7 +592,7 @@ class TestBuildJudgePromptXMLTags:
         prompt = build_judge_prompt(
             instructions="x",
             final_output="y",
-            criteria="c",
+            criterion="c",
             verdict_path="/tmp/v.json",
         )
         assert "<judge_guidance>" not in prompt
@@ -602,11 +602,11 @@ class TestBuildJudgePromptCustomTemplate:
     """Verify judge_prompt overrides the built-in prompt."""
 
     def test_single_custom_template(self) -> None:
-        template = "CUSTOM: {{ instructions }} | {{ criteria }} | {{ verdict_path }}"
+        template = "CUSTOM: {{ instructions }} | {{ criterion }} | {{ verdict_path }}"
         prompt = build_judge_prompt(
             instructions="do stuff",
             final_output="done",
-            criteria="check it",
+            criterion="check it",
             verdict_path="/tmp/v.json",
             judge_prompt=template,
         )
@@ -644,7 +644,7 @@ class TestBuildJudgePromptCustomTemplate:
         prompt = build_judge_prompt(
             instructions="x",
             final_output="y",
-            criteria="c",
+            criterion="c",
             verdict_path="/tmp/v.json",
             judge_guidance="be careful",
             judge_prompt=template,
@@ -656,7 +656,7 @@ class TestBuildJudgePromptCustomTemplate:
         prompt = build_judge_prompt(
             instructions="x",
             final_output="y",
-            criteria="c",
+            criterion="c",
             verdict_path="/tmp/v.json",
             judge_prompt=template,
         )
@@ -702,7 +702,7 @@ class TestRunJudgeLLM:
             "model": model,
             "instructions": "Create a file called hello.txt containing 'hello world'.",
             "final_output": "Done, I created hello.txt.",
-            "criteria": "The file hello.txt exists in the workspace and contains 'hello world'.",
+            "criterion": "The file hello.txt exists in the workspace and contains 'hello world'.",
             "workdir": str(workspace),
         }
         input_path = str(tmp_path / "input.json")

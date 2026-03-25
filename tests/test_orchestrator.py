@@ -13,7 +13,7 @@ import pytest
 
 from gandalf.config import (
     BatchJudgeInput,
-    CriteriaResult,
+    CriterionResult,
     GraderConfig,
     JudgeInput,
     LLMUsage,
@@ -26,7 +26,7 @@ from gandalf.orchestrator import (
     _judge_env_vars,
     _write_info,
     evaluate_all_criteria,
-    evaluate_criteria,
+    evaluate_criterion,
     main,
     resolve_judge_guidance,
     resolve_judge_prompt,
@@ -141,9 +141,9 @@ class TestResolveJudgePrompt:
     def test_reads_file_from_path(self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("GRADER_JUDGE_PROMPT_PATH", raising=False)
         template_file = tmp_path / "prompt.j2"
-        template_file.write_text("Custom {{ criteria }}")
+        template_file.write_text("Custom {{ criterion }}")
         config = _make_config(judge_prompt_path=str(template_file))
-        assert resolve_judge_prompt(config) == "Custom {{ criteria }}"
+        assert resolve_judge_prompt(config) == "Custom {{ criterion }}"
 
     def test_reads_file_from_env_var(self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
         template_file = tmp_path / "prompt.j2"
@@ -421,7 +421,7 @@ class TestSandboxUserNone:
     """When sandbox_user is None the judge runs as the ambient user (no sudo)."""
 
     @pytest.mark.usefixtures("_fake_judge")
-    def test_evaluate_criteria_no_sudo(self, tmp_path: pathlib.Path) -> None:
+    def test_evaluate_criterion_no_sudo(self, tmp_path: pathlib.Path) -> None:
         workdir = tmp_path / "workspace"
         workdir.mkdir()
         (workdir / "hello.txt").write_text("hi")
@@ -430,12 +430,12 @@ class TestSandboxUserNone:
             model="test-model",
             instructions="test",
             final_output="done",
-            criteria="check something",
+            criterion="check something",
             workdir=str(workdir),
         )
         trace_path = str(tmp_path / "trace.txt")
 
-        verdict, _usage = evaluate_criteria(judge_input, sandbox_user=None, trace_path=trace_path)
+        verdict, _usage = evaluate_criterion(judge_input, sandbox_user=None, trace_path=trace_path)
 
         assert verdict.met is True
         assert verdict.reasoning == "ok"
@@ -457,10 +457,10 @@ class TestSandboxUserNone:
         assert usage.cost_usd == 0.01
 
 
-def _cr(*, weight: float, met: bool | None) -> CriteriaResult:
-    """Helper to build a CriteriaResult for scoring tests."""
-    return CriteriaResult(
-        criteria="test",
+def _cr(*, weight: float, met: bool | None) -> CriterionResult:
+    """Helper to build a CriterionResult for scoring tests."""
+    return CriterionResult(
+        criterion="test",
         weight=weight,
         met=met,
         reasoning="test",
@@ -474,7 +474,7 @@ class TestScoring:
     scoring pipeline is verified in one place per scenario.
     """
 
-    def _info(self, results: list[CriteriaResult], tmp_path: pathlib.Path) -> dict[str, Any]:
+    def _info(self, results: list[CriterionResult], tmp_path: pathlib.Path) -> dict[str, Any]:
         """Run _write_info and return parsed info.json."""
         config = _make_config(output_dir=str(tmp_path))
         errored = sum(1 for r in results if r.met is None)
@@ -667,7 +667,7 @@ class TestRetryLogic:
     @patch("gandalf.orchestrator.load_trajectory_final_output", return_value="done")
     @patch("gandalf.orchestrator.load_rubric")
     @patch("gandalf.orchestrator.load_config")
-    @patch("gandalf.orchestrator.evaluate_criteria")
+    @patch("gandalf.orchestrator.evaluate_criterion")
     def test_sequential_retry_resolves_errored_criterion(
         self,
         mock_eval: Any,
@@ -693,8 +693,8 @@ class TestRetryLogic:
             mode="sequential",
         )
         mock_rubric.return_value = [
-            RubricItem(criteria="c1", weight=1.0),
-            RubricItem(criteria="c2", weight=1.0),
+            RubricItem(criterion="c1", weight=1.0),
+            RubricItem(criterion="c2", weight=1.0),
         ]
 
         # First call: c1 passes, c2 errors. Retry: c2 passes.
@@ -709,9 +709,9 @@ class TestRetryLogic:
             main()
 
         info = json.loads((tmp_path / "output" / "info.json").read_text())
-        assert info["criteria_results"][0]["met"] is True
-        assert info["criteria_results"][1]["met"] is True
-        assert info["errored_criteria_count"] == 0
+        assert info["criterion_results"][0]["met"] is True
+        assert info["criterion_results"][1]["met"] is True
+        assert info["errored_criterion_count"] == 0
 
         reward = json.loads((tmp_path / "output" / "reward.json").read_text())
         assert reward["reward"] == 1.0  # all met: 2.0 / 2.0 = 1.0
@@ -746,9 +746,9 @@ class TestRetryLogic:
             mode="batch",
         )
         mock_rubric.return_value = [
-            RubricItem(criteria="c1", weight=1.0),
-            RubricItem(criteria="c2", weight=1.0),
-            RubricItem(criteria="c3", weight=1.0),
+            RubricItem(criterion="c1", weight=1.0),
+            RubricItem(criterion="c2", weight=1.0),
+            RubricItem(criterion="c3", weight=1.0),
         ]
 
         initial_verdicts = [
@@ -769,8 +769,8 @@ class TestRetryLogic:
             main()
 
         info = json.loads((tmp_path / "output" / "info.json").read_text())
-        assert all(r["met"] is True for r in info["criteria_results"])
-        assert info["errored_criteria_count"] == 0
+        assert all(r["met"] is True for r in info["criterion_results"])
+        assert info["errored_criterion_count"] == 0
 
         reward = json.loads((tmp_path / "output" / "reward.json").read_text())
         assert reward["reward"] == 1.0  # all met: 3.0 / 3.0 = 1.0
@@ -779,7 +779,7 @@ class TestRetryLogic:
     @patch("gandalf.orchestrator.load_trajectory_final_output", return_value="done")
     @patch("gandalf.orchestrator.load_rubric")
     @patch("gandalf.orchestrator.load_config")
-    @patch("gandalf.orchestrator.evaluate_criteria")
+    @patch("gandalf.orchestrator.evaluate_criterion")
     def test_judge_retries_zero_disables_retry(
         self,
         mock_eval: Any,
@@ -804,7 +804,7 @@ class TestRetryLogic:
             judge_retries=0,
             mode="sequential",
         )
-        mock_rubric.return_value = [RubricItem(criteria="c1", weight=1.0)]
+        mock_rubric.return_value = [RubricItem(criterion="c1", weight=1.0)]
         mock_eval.return_value = (Verdict(met=None, reasoning="timeout"), LLMUsage())
 
         with patch("sys.argv", ["prog", "--config", "dummy.toml"]):
@@ -820,7 +820,7 @@ class TestRetryLogic:
     @patch("gandalf.orchestrator.load_trajectory_final_output", return_value="done")
     @patch("gandalf.orchestrator.load_rubric")
     @patch("gandalf.orchestrator.load_config")
-    @patch("gandalf.orchestrator.evaluate_criteria")
+    @patch("gandalf.orchestrator.evaluate_criterion")
     def test_hard_fail_writes_info_not_reward(
         self,
         mock_eval: Any,
@@ -845,7 +845,7 @@ class TestRetryLogic:
             judge_retries=1,
             mode="sequential",
         )
-        mock_rubric.return_value = [RubricItem(criteria="c1", weight=1.0)]
+        mock_rubric.return_value = [RubricItem(criterion="c1", weight=1.0)]
         mock_eval.return_value = (Verdict(met=None, reasoning="always fails"), LLMUsage())
 
         with patch("sys.argv", ["prog", "--config", "dummy.toml"]):
@@ -854,15 +854,15 @@ class TestRetryLogic:
             assert exc_info.value.code == 1
 
         info = json.loads((tmp_path / "output" / "info.json").read_text())
-        assert info["criteria_results"][0]["met"] is None
-        assert info["errored_criteria_count"] == 1
+        assert info["criterion_results"][0]["met"] is None
+        assert info["errored_criterion_count"] == 1
         assert not (tmp_path / "output" / "reward.json").exists()
 
     @patch("gandalf.orchestrator.resolve_judge_guidance", return_value="")
     @patch("gandalf.orchestrator.load_trajectory_final_output", return_value="done")
     @patch("gandalf.orchestrator.load_rubric")
     @patch("gandalf.orchestrator.load_config")
-    @patch("gandalf.orchestrator.evaluate_criteria")
+    @patch("gandalf.orchestrator.evaluate_criterion")
     def test_all_resolved_after_retry(
         self,
         mock_eval: Any,
@@ -888,8 +888,8 @@ class TestRetryLogic:
             mode="sequential",
         )
         mock_rubric.return_value = [
-            RubricItem(criteria="c1", weight=1.0),
-            RubricItem(criteria="c2", weight=1.0),
+            RubricItem(criterion="c1", weight=1.0),
+            RubricItem(criterion="c2", weight=1.0),
         ]
 
         mock_eval.side_effect = [
@@ -905,13 +905,13 @@ class TestRetryLogic:
         assert reward["reward"] == 0.5  # c1 met, c2 not: 1.0 / 2.0 = 0.5
 
         info = json.loads((tmp_path / "output" / "info.json").read_text())
-        assert info["errored_criteria_count"] == 0
+        assert info["errored_criterion_count"] == 0
 
     @patch("gandalf.orchestrator.resolve_judge_guidance", return_value="")
     @patch("gandalf.orchestrator.load_trajectory_final_output", return_value="done")
     @patch("gandalf.orchestrator.load_rubric")
     @patch("gandalf.orchestrator.load_config")
-    @patch("gandalf.orchestrator.evaluate_criteria")
+    @patch("gandalf.orchestrator.evaluate_criterion")
     def test_reward_json_with_negative_weights(
         self,
         mock_eval: Any,
@@ -938,8 +938,8 @@ class TestRetryLogic:
             mode="sequential",
         )
         mock_rubric.return_value = [
-            RubricItem(criteria="correct output", weight=3.0),
-            RubricItem(criteria="used hardcoded values", weight=-1.0),
+            RubricItem(criterion="correct output", weight=3.0),
+            RubricItem(criterion="used hardcoded values", weight=-1.0),
         ]
 
         # Both criteria met: raw = 3 + (-1) = 2, reward = 2/3 ≈ 0.6667

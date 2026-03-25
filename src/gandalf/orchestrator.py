@@ -9,7 +9,7 @@ Supports two evaluation modes (configured via ``mode`` in the TOML config):
 
 Produces (in ``output_dir``):
   reward.json  - Reward file ([0,1] reward)
-  info.json    - Detailed per-criteria results + LLM usage
+  info.json    - Detailed per-criterion results + LLM usage
 """
 
 import argparse
@@ -27,7 +27,7 @@ from pydantic import TypeAdapter
 from gandalf.common import fail_verdicts
 from gandalf.config import (
     BatchJudgeInput,
-    CriteriaResult,
+    CriterionResult,
     EvaluationInfo,
     GraderConfig,
     JudgeInput,
@@ -280,13 +280,13 @@ def _run_judge_subprocess(
         shutil.rmtree(clone_dir, ignore_errors=True)
 
 
-def evaluate_criteria(
+def evaluate_criterion(
     judge_input: JudgeInput,
     sandbox_user: str | None,
     trace_path: str,
     timeout: int = 300,
 ) -> tuple[Verdict, LLMUsage]:
-    """Run the inner judge for a single criteria.
+    """Run the inner judge for a single criterion.
 
     When *sandbox_user* is set the judge is executed via ``sudo -u``.
     When it is ``None`` the judge runs as the ambient (current) user.
@@ -360,22 +360,22 @@ def _run_sequential(
     final_output: str,
     judge_guidance: str,
     judge_prompt: str | None,
-) -> tuple[list[CriteriaResult], LLMUsage]:
+) -> tuple[list[CriterionResult], LLMUsage]:
     """Evaluate each criterion in its own agent session.
 
     Returns (results, llm_usage) where llm_usage is the aggregated
     token/cost totals across all individual judge sessions.
     """
-    results: list[CriteriaResult] = []
+    results: list[CriterionResult] = []
     total_usage = LLMUsage()
     for i, item in enumerate(rubric):
-        print(f"[{i + 1}/{len(rubric)}] Evaluating: {item.criteria[:80]}...")  # noqa: T201
+        print(f"[{i + 1}/{len(rubric)}] Evaluating: {item.criterion[:80]}...")  # noqa: T201
 
         judge_input = JudgeInput(
             model=config.model,
             instructions=config.instructions,
             final_output=final_output,
-            criteria=item.criteria,
+            criterion=item.criterion,
             workdir=config.workdir,
             mcp_servers=config.mcp_servers,
             judge_guidance=judge_guidance,
@@ -383,7 +383,7 @@ def _run_sequential(
         )
 
         trace_path = os.path.join(config.output_dir, f"judge_trace_{i}.txt")
-        verdict, usage = evaluate_criteria(
+        verdict, usage = evaluate_criterion(
             judge_input,
             sandbox_user=config.sandbox_user,
             trace_path=trace_path,
@@ -392,8 +392,8 @@ def _run_sequential(
 
         total_usage = _merge_usage(total_usage, usage)
 
-        result = CriteriaResult(
-            criteria=item.criteria,
+        result = CriterionResult(
+            criterion=item.criterion,
             weight=item.weight,
             met=verdict.met,
             reasoning=verdict.reasoning,
@@ -413,15 +413,15 @@ def _run_batch(
     final_output: str,
     judge_guidance: str,
     judge_prompt: str | None,
-) -> tuple[list[CriteriaResult], LLMUsage]:
+) -> tuple[list[CriterionResult], LLMUsage]:
     """Evaluate all criteria in a single agent session.
 
     Returns (results, llm_usage) where llm_usage is the token/cost
     totals from the single batch agent session.
     """
-    criteria_list = [item.criteria for item in rubric]
+    criteria = [item.criterion for item in rubric]
 
-    n_criteria = len(criteria_list)
+    n_criteria = len(criteria)
     batch_timeout = config.judge_timeout * n_criteria
     if config.batch_timeout is not None:
         batch_timeout = min(batch_timeout, config.batch_timeout)
@@ -432,7 +432,7 @@ def _run_batch(
         model=config.model,
         instructions=config.instructions,
         final_output=final_output,
-        criteria=criteria_list,
+        criteria=criteria,
         workdir=config.workdir,
         mcp_servers=config.mcp_servers,
         judge_guidance=judge_guidance,
@@ -447,11 +447,11 @@ def _run_batch(
         timeout=batch_timeout,
     )
 
-    results: list[CriteriaResult] = []
+    results: list[CriterionResult] = []
     for i, item in enumerate(rubric):
         v = verdicts[i] if i < len(verdicts) else Verdict(met=None, reasoning="No reasoning provided.")
-        result = CriteriaResult(
-            criteria=item.criteria,
+        result = CriterionResult(
+            criterion=item.criterion,
             weight=item.weight,
             met=v.met,
             reasoning=v.reasoning,
@@ -465,7 +465,7 @@ def _run_batch(
     return results, llm_usage
 
 
-def _get_errored_indices(results: list[CriteriaResult]) -> list[int]:
+def _get_errored_indices(results: list[CriterionResult]) -> list[int]:
     """Return indices of criteria where met is None (infrastructure error)."""
     return [i for i, r in enumerate(results) if r.met is None]
 
@@ -473,7 +473,7 @@ def _get_errored_indices(results: list[CriteriaResult]) -> list[int]:
 def _retry_sequential(
     config: GraderConfig,
     rubric: list[RubricItem],
-    results: list[CriteriaResult],
+    results: list[CriterionResult],
     llm_usage: LLMUsage,
     final_output: str,
     judge_guidance: str,
@@ -486,13 +486,13 @@ def _retry_sequential(
     """
     for idx in errored_indices:
         item = rubric[idx]
-        print(f"  [retry {idx}] Evaluating: {item.criteria[:80]}...")  # noqa: T201
+        print(f"  [retry {idx}] Evaluating: {item.criterion[:80]}...")  # noqa: T201
 
         judge_input = JudgeInput(
             model=config.model,
             instructions=config.instructions,
             final_output=final_output,
-            criteria=item.criteria,
+            criterion=item.criterion,
             workdir=config.workdir,
             mcp_servers=config.mcp_servers,
             judge_guidance=judge_guidance,
@@ -500,7 +500,7 @@ def _retry_sequential(
         )
 
         trace_path = os.path.join(config.output_dir, f"judge_trace_{idx}_retry.txt")
-        verdict, usage = evaluate_criteria(
+        verdict, usage = evaluate_criterion(
             judge_input,
             sandbox_user=config.sandbox_user,
             trace_path=trace_path,
@@ -509,8 +509,8 @@ def _retry_sequential(
 
         llm_usage = _merge_usage(llm_usage, usage)
 
-        results[idx] = CriteriaResult(
-            criteria=item.criteria,
+        results[idx] = CriterionResult(
+            criterion=item.criterion,
             weight=item.weight,
             met=verdict.met,
             reasoning=verdict.reasoning,
@@ -526,7 +526,7 @@ def _retry_sequential(
 def _retry_batch(
     config: GraderConfig,
     rubric: list[RubricItem],
-    results: list[CriteriaResult],
+    results: list[CriterionResult],
     llm_usage: LLMUsage,
     final_output: str,
     judge_guidance: str,
@@ -537,7 +537,7 @@ def _retry_batch(
 
     Returns the updated cumulative LLMUsage.
     """
-    retry_criteria = [rubric[orig_idx].criteria for orig_idx in errored_indices]
+    retry_criteria = [rubric[orig_idx].criterion for orig_idx in errored_indices]
 
     n_retry = len(retry_criteria)
     batch_timeout = config.judge_timeout * n_retry
@@ -569,8 +569,8 @@ def _retry_batch(
 
     for new_idx, orig_idx in enumerate(errored_indices):
         v = verdicts[new_idx] if new_idx < len(verdicts) else Verdict(met=None, reasoning="No reasoning provided.")
-        results[orig_idx] = CriteriaResult(
-            criteria=rubric[orig_idx].criteria,
+        results[orig_idx] = CriterionResult(
+            criterion=rubric[orig_idx].criterion,
             weight=rubric[orig_idx].weight,
             met=v.met,
             reasoning=v.reasoning,
@@ -586,9 +586,9 @@ def _retry_batch(
 
 def _write_info(
     config: GraderConfig,
-    results: list[CriteriaResult],
+    results: list[CriterionResult],
     llm_usage: LLMUsage,
-    errored_criteria_count: int,
+    errored_criterion_count: int,
 ) -> tuple[float, float]:
     """Compute reward and raw score and write info.json. Returns (reward, raw_score).
 
@@ -611,7 +611,7 @@ def _write_info(
     )
 
     n_total = len(results)
-    n_evaluated = n_total - errored_criteria_count
+    n_evaluated = n_total - errored_criterion_count
     evaluated_pct = round((n_evaluated / n_total * 100.0) if n_total > 0 else 100.0, 2)
 
     info = EvaluationInfo(
@@ -619,9 +619,9 @@ def _write_info(
         raw_score=raw_score,
         minimum_score=minimum_score,
         maximum_score=maximum_score,
-        criteria_results=results,
+        criterion_results=results,
         llm_usage=llm_usage,
-        errored_criteria_count=errored_criteria_count,
+        errored_criterion_count=errored_criterion_count,
         evaluated_criteria_pct=evaluated_pct,
     )
     with open(os.path.join(config.output_dir, "info.json"), "w") as f:

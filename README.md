@@ -53,8 +53,8 @@ Create a rubric (`rubric.json`):
 
 ```json
 [
-  {"criteria": "The file index.html exists in the workspace", "weight": 1.0},
-  {"criteria": "The page displays 'Hello World'", "weight": 2.0}
+  {"criterion": "The file index.html exists in the workspace", "weight": 1.0},
+  {"criterion": "The page displays 'Hello World'", "weight": 2.0}
 ]
 ```
 
@@ -107,25 +107,26 @@ For most use cases, `judge_guidance` / `judge_guidance_path` is all you need —
 
 The template receives these variables:
 
-| Variable | Type | Description |
-|---|---|---|
-| `instructions` | `str` | Task instructions given to the original agent |
-| `final_output` | `str` | Agent's final message from the trajectory |
-| `criteria` | `str` or `list[str]` | Single criterion string (sequential mode), or list of criterion strings (batch mode) |
-| `verdict_path` | `str` | File path the judge must write its verdict to |
-| `judge_guidance` | `str` | Additional guidance text (may be empty) |
+| Variable | Type | Mode | Description |
+|---|---|---|---|
+| `instructions` | `str` | both | Task instructions given to the original agent |
+| `final_output` | `str` | both | Agent's final message from the trajectory |
+| `criterion` | `str` | sequential | The single criterion string to evaluate |
+| `criteria` | `list[str]` | batch | List of all criterion strings to evaluate |
+| `verdict_path` | `str` | both | File path the judge must write its verdict to |
+| `judge_guidance` | `str` | both | Additional guidance text (may be empty) |
 
-The same template is used for both sequential and batch modes. Use `{% if criteria is string %}` to distinguish if needed. In batch mode, use `loop.index0` for the criterion index (e.g., `{% for c in criteria %}[{{ loop.index0 }}] {{ c }}{% endfor %}`).
+Sequential and batch modes use separate built-in templates. In a custom template, use `{% if criterion is defined %}` vs `{% if criteria is defined %}` if you need to distinguish modes. In batch mode, use `loop.index0` for the criterion index (e.g., `{% for c in criteria %}[{{ loop.index0 }}] {{ c }}{% endfor %}`).
 
 ### Rubric JSON
 
-A JSON array of objects with `criteria` (string) and `weight` (float). Weights can be negative to penalise undesired outcomes:
+A JSON array of objects with `criterion` (string) and `weight` (float). Weights can be negative to penalise undesired outcomes:
 
 ```json
 [
-  {"criteria": "The output file exists", "weight": 2.0},
-  {"criteria": "The output contains correct totals", "weight": 3.0},
-  {"criteria": "The agent used hardcoded values instead of computing", "weight": -1.0}
+  {"criterion": "The output file exists", "weight": 2.0},
+  {"criterion": "The output contains correct totals", "weight": 3.0},
+  {"criterion": "The agent used hardcoded values instead of computing", "weight": -1.0}
 ]
 ```
 
@@ -194,7 +195,7 @@ export OTEL_EXPORTER_OTLP_TRACES_PROTOCOL=http/protobuf
 The grader writes to `output_dir`:
 
 - `reward.json` — Reward file: `{"reward": 0.75}` (always in [0, 1])
-- `info.json` — Per-criteria results with `met`/not-met, reasoning, evidence, LLM usage, plus `reward`, `raw_score`, `minimum_score`, and `maximum_score`
+- `info.json` — Per-criterion results with `met`/not-met, reasoning, evidence, LLM usage, plus `reward`, `raw_score`, `minimum_score`, and `maximum_score`
 - `judge_trace_<i>.txt` — stdout/stderr capture for each judge invocation
 
 The `reward` in `reward.json` is `clip(0, 1, raw_score / sum_of_positive_weights)`, always in [0, 1]. `info.json` additionally includes `raw_score` (the raw sum of weights for met criteria, which can be negative) and `minimum_score`/`maximum_score` bounds for reference.

@@ -20,14 +20,14 @@ class MCPServer(BaseModel):
 
 
 class RubricItem(BaseModel):
-    """A single rubric item with evaluation criteria and weight.
+    """A single rubric item with an evaluation criterion and weight.
 
     Weight can be negative to penalise undesired outcomes.  The sign of the
     weight carries the semantics: positive means "reward when met", negative
     means "penalise when met".
     """
 
-    criteria: str
+    criterion: str
     weight: float
 
 
@@ -41,7 +41,7 @@ class GraderConfig(BaseModel):
         a JSON array of verdicts in one go.
 
     judge_timeout is the per-criterion budget in seconds, regardless of mode.
-    In batch mode the effective timeout is ``judge_timeout * N_criteria``,
+    In batch mode the effective timeout is ``judge_timeout * n_criteria``,
     optionally capped by batch_timeout.
     """
 
@@ -81,12 +81,12 @@ class GraderConfig(BaseModel):
 
 
 class JudgeInput(BaseModel):
-    """Input passed to the inner judge for a single criteria evaluation."""
+    """Input passed to the inner judge for a single criterion evaluation."""
 
     model: str
     instructions: str
     final_output: str
-    criteria: str
+    criterion: str
     workdir: str
     mcp_servers: list[MCPServer] = Field(default_factory=list)
     judge_guidance: str = ""
@@ -127,10 +127,10 @@ class Verdict(BaseModel):
     evidence: list[str] = Field(default_factory=list)
 
 
-class CriteriaResult(BaseModel):
-    """Result for a single criteria evaluation."""
+class CriterionResult(BaseModel):
+    """Result for a single criterion evaluation."""
 
-    criteria: str
+    criterion: str
     weight: float
     met: bool | None
     reasoning: str
@@ -138,15 +138,15 @@ class CriteriaResult(BaseModel):
 
 
 class EvaluationInfo(BaseModel):
-    """Full evaluation output with reward/raw score, per-criteria results, and LLM usage."""
+    """Full evaluation output with reward/raw score, per-criterion results, and LLM usage."""
 
     reward: float
     raw_score: float
     minimum_score: float = 0.0
     maximum_score: float = 0.0
-    criteria_results: list[CriteriaResult]
+    criterion_results: list[CriterionResult]
     llm_usage: LLMUsage = Field(default_factory=LLMUsage)
-    errored_criteria_count: int = 0
+    errored_criterion_count: int = 0
     evaluated_criteria_pct: float = 100.0
 
 

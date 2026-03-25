@@ -52,7 +52,7 @@ def _render_template(
 def build_judge_prompt(
     instructions: str,
     final_output: str,
-    criteria: str,
+    criterion: str,
     verdict_path: str,
     judge_guidance: str = "",
     judge_prompt: str | None = None,
@@ -63,7 +63,7 @@ def build_judge_prompt(
         judge_prompt,
         instructions=instructions,
         final_output=final_output,
-        criteria=criteria,
+        criterion=criterion,
         verdict_path=verdict_path,
         judge_guidance=judge_guidance,
     )
@@ -275,7 +275,7 @@ def _run_agent_session(
 
 
 def run_judge(input_path: str, output_path: str) -> None:
-    """Run the agent-as-judge for a single rubric criteria."""
+    """Run the agent-as-judge for a single rubric criterion."""
     with open(input_path) as f:
         judge_input = JudgeInput.model_validate_json(f.read())
 
@@ -284,7 +284,7 @@ def run_judge(input_path: str, output_path: str) -> None:
     prompt = build_judge_prompt(
         instructions=judge_input.instructions,
         final_output=judge_input.final_output,
-        criteria=judge_input.criteria,
+        criterion=judge_input.criterion,
         verdict_path=verdict_path,
         judge_guidance=judge_input.judge_guidance,
         judge_prompt=judge_input.judge_prompt,
@@ -309,7 +309,7 @@ def run_judge_batch(input_path: str, output_path: str) -> None:
     """Run the agent-as-judge for all rubric criteria in a single session.
 
     The input JSON must contain a ``criteria`` key whose value is a list of
-    dicts, each with ``index`` and ``criteria`` fields.
+    criterion strings.
 
     The output file will contain a JSON object with ``verdicts`` (array of
     verdict objects, one per criterion index) and ``llm_usage`` (aggregate
@@ -353,7 +353,7 @@ def run_judge_batch(input_path: str, output_path: str) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Judge rubric criteria")
+    parser = argparse.ArgumentParser(description="Judge rubric criterion")
     parser.add_argument("--input", required=True, help="Path to judge input JSON")
     parser.add_argument("--output", required=True, help="Path to write judge output JSON")
     parser.add_argument(
