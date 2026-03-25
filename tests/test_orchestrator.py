@@ -23,9 +23,8 @@ from gandalf.orchestrator import (
     _JUDGE_ENV_ALLOWLIST,
     _clone_workspace,
     _judge_env_vars,
+    _run_judge,
     _write_info,
-    evaluate_all_criteria,
-    evaluate_criterion,
     main,
     resolve_judge_guidance,
     resolve_judge_prompt,
@@ -268,7 +267,7 @@ class TestEvaluateAllCriteria:
         judge_input = make_batch_input(tmp_path, n=2)
         trace_path = str(tmp_path / "trace.txt")
 
-        verdicts, usage = evaluate_all_criteria(judge_input, sandbox_user="sandbox", trace_path=trace_path)
+        verdicts, usage = _run_judge(judge_input, sandbox_user="sandbox", trace_path=trace_path)
 
         assert len(verdicts) == 2
         assert verdicts[0].met is True
@@ -285,7 +284,7 @@ class TestEvaluateAllCriteria:
         judge_input = make_batch_input(tmp_path, n=2)
         trace_path = str(tmp_path / "trace.txt")
 
-        verdicts, usage = evaluate_all_criteria(judge_input, sandbox_user="sandbox", trace_path=trace_path)
+        verdicts, usage = _run_judge(judge_input, sandbox_user="sandbox", trace_path=trace_path)
 
         assert len(verdicts) == 2
         assert all(v.met is None for v in verdicts)
@@ -302,7 +301,7 @@ class TestEvaluateAllCriteria:
         judge_input = make_batch_input(tmp_path, n=2)
         trace_path = str(tmp_path / "trace.txt")
 
-        verdicts, usage = evaluate_all_criteria(judge_input, sandbox_user="sandbox", trace_path=trace_path)
+        verdicts, usage = _run_judge(judge_input, sandbox_user="sandbox", trace_path=trace_path)
 
         assert len(verdicts) == 2
         assert all(v.met is None for v in verdicts)
@@ -327,7 +326,7 @@ class TestEvaluateAllCriteria:
         judge_input = make_batch_input(tmp_path, n=1)
         trace_path = str(tmp_path / "trace.txt")
 
-        verdicts, usage = evaluate_all_criteria(judge_input, sandbox_user="sandbox", trace_path=trace_path)
+        verdicts, usage = _run_judge(judge_input, sandbox_user="sandbox", trace_path=trace_path)
 
         assert len(verdicts) == 1
         assert verdicts[0].met is None
@@ -344,7 +343,7 @@ class TestEvaluateAllCriteria:
         judge_input = make_batch_input(tmp_path, n=2)
         trace_path = str(tmp_path / "trace.txt")
 
-        verdicts, usage = evaluate_all_criteria(judge_input, sandbox_user="sandbox", trace_path=trace_path)
+        verdicts, usage = _run_judge(judge_input, sandbox_user="sandbox", trace_path=trace_path)
 
         assert len(verdicts) == 2
         assert all(v.met is None for v in verdicts)
@@ -410,10 +409,10 @@ class TestSandboxUserNone:
         )
         trace_path = str(tmp_path / "trace.txt")
 
-        verdict, _usage = evaluate_criterion(judge_input, sandbox_user=None, trace_path=trace_path)
+        verdicts, _usage = _run_judge(judge_input, sandbox_user=None, trace_path=trace_path)
 
-        assert verdict.met is True
-        assert verdict.reasoning == "ok"
+        assert verdicts[0].met is True
+        assert verdicts[0].reasoning == "ok"
 
     @pytest.mark.usefixtures("_fake_judge")
     def test_evaluate_all_criteria_no_sudo(self, tmp_path: pathlib.Path) -> None:
@@ -425,7 +424,7 @@ class TestSandboxUserNone:
         judge_input = judge_input.model_copy(update={"workdir": str(workdir)})
         trace_path = str(tmp_path / "trace.txt")
 
-        verdicts, usage = evaluate_all_criteria(judge_input, sandbox_user=None, trace_path=trace_path)
+        verdicts, usage = _run_judge(judge_input, sandbox_user=None, trace_path=trace_path)
 
         assert len(verdicts) == 2
         assert all(v.met is True for v in verdicts)
@@ -568,7 +567,7 @@ class TestOutputFilePermissions:
         mock_run.side_effect = _capture
         judge_input = make_batch_input(tmp_path, n=1)
 
-        evaluate_all_criteria(judge_input, sandbox_user="sandbox", trace_path=str(tmp_path / "trace.txt"))
+        _run_judge(judge_input, sandbox_user="sandbox", trace_path=str(tmp_path / "trace.txt"))
 
         assert "output_path" in captured_cmd, "subprocess was not called"
         assert captured_cmd.get("existed_before_run"), (
@@ -610,7 +609,7 @@ class TestOutputFilePermissions:
 
         mock_run.side_effect = _capture_and_check_permissions
         judge_input = make_batch_input(tmp_path, n=1)
-        evaluate_all_criteria(judge_input, sandbox_user="sandbox", trace_path=str(tmp_path / "trace.txt"))
+        _run_judge(judge_input, sandbox_user="sandbox", trace_path=str(tmp_path / "trace.txt"))
 
         assert captured.get("exists"), (
             "Output file was NOT pre-created before subprocess.run — "
@@ -630,7 +629,7 @@ class TestRetryLogic:
     @patch("gandalf.orchestrator.load_trajectory_final_output", return_value="done")
     @patch("gandalf.orchestrator.load_rubric")
     @patch("gandalf.orchestrator.load_config")
-    @patch("gandalf.orchestrator.evaluate_criterion")
+    @patch("gandalf.orchestrator._run_judge")
     def test_sequential_retry_resolves_errored_criterion(
         self,
         mock_eval: Any,
@@ -662,10 +661,10 @@ class TestRetryLogic:
 
         # First call: c1 passes, c2 errors. Retry: c2 passes.
         mock_eval.side_effect = [
-            (Verdict(met=True, reasoning="ok", evidence=["e1"]), LLMUsage()),
-            (Verdict(met=None, reasoning="timeout"), LLMUsage()),
+            ([Verdict(met=True, reasoning="ok", evidence=["e1"])], LLMUsage()),
+            ([Verdict(met=None, reasoning="timeout")], LLMUsage()),
             # retry for c2
-            (Verdict(met=True, reasoning="ok on retry", evidence=["e2"]), LLMUsage()),
+            ([Verdict(met=True, reasoning="ok on retry", evidence=["e2"])], LLMUsage()),
         ]
 
         with patch("sys.argv", ["prog", "--config", "dummy.toml"]):
@@ -683,7 +682,7 @@ class TestRetryLogic:
     @patch("gandalf.orchestrator.load_trajectory_final_output", return_value="done")
     @patch("gandalf.orchestrator.load_rubric")
     @patch("gandalf.orchestrator.load_config")
-    @patch("gandalf.orchestrator.evaluate_all_criteria")
+    @patch("gandalf.orchestrator._run_judge")
     def test_batch_retry_resolves_errored_criteria(
         self,
         mock_eval_all: Any,
@@ -742,7 +741,7 @@ class TestRetryLogic:
     @patch("gandalf.orchestrator.load_trajectory_final_output", return_value="done")
     @patch("gandalf.orchestrator.load_rubric")
     @patch("gandalf.orchestrator.load_config")
-    @patch("gandalf.orchestrator.evaluate_criterion")
+    @patch("gandalf.orchestrator._run_judge")
     def test_judge_retries_zero_disables_retry(
         self,
         mock_eval: Any,
@@ -768,7 +767,7 @@ class TestRetryLogic:
             mode="sequential",
         )
         mock_rubric.return_value = [RubricItem(criterion="c1", weight=1.0)]
-        mock_eval.return_value = (Verdict(met=None, reasoning="timeout"), LLMUsage())
+        mock_eval.return_value = ([Verdict(met=None, reasoning="timeout")], LLMUsage())
 
         with patch("sys.argv", ["prog", "--config", "dummy.toml"]):
             with pytest.raises(SystemExit) as exc_info:
@@ -783,7 +782,7 @@ class TestRetryLogic:
     @patch("gandalf.orchestrator.load_trajectory_final_output", return_value="done")
     @patch("gandalf.orchestrator.load_rubric")
     @patch("gandalf.orchestrator.load_config")
-    @patch("gandalf.orchestrator.evaluate_criterion")
+    @patch("gandalf.orchestrator._run_judge")
     def test_hard_fail_writes_info_not_reward(
         self,
         mock_eval: Any,
@@ -809,7 +808,7 @@ class TestRetryLogic:
             mode="sequential",
         )
         mock_rubric.return_value = [RubricItem(criterion="c1", weight=1.0)]
-        mock_eval.return_value = (Verdict(met=None, reasoning="always fails"), LLMUsage())
+        mock_eval.return_value = ([Verdict(met=None, reasoning="always fails")], LLMUsage())
 
         with patch("sys.argv", ["prog", "--config", "dummy.toml"]):
             with pytest.raises(SystemExit) as exc_info:
@@ -825,7 +824,7 @@ class TestRetryLogic:
     @patch("gandalf.orchestrator.load_trajectory_final_output", return_value="done")
     @patch("gandalf.orchestrator.load_rubric")
     @patch("gandalf.orchestrator.load_config")
-    @patch("gandalf.orchestrator.evaluate_criterion")
+    @patch("gandalf.orchestrator._run_judge")
     def test_all_resolved_after_retry(
         self,
         mock_eval: Any,
@@ -856,9 +855,9 @@ class TestRetryLogic:
         ]
 
         mock_eval.side_effect = [
-            (Verdict(met=True, reasoning="ok"), LLMUsage()),
-            (Verdict(met=None, reasoning="timeout"), LLMUsage()),
-            (Verdict(met=False, reasoning="genuinely failed"), LLMUsage()),
+            ([Verdict(met=True, reasoning="ok")], LLMUsage()),
+            ([Verdict(met=None, reasoning="timeout")], LLMUsage()),
+            ([Verdict(met=False, reasoning="genuinely failed")], LLMUsage()),
         ]
 
         with patch("sys.argv", ["prog", "--config", "dummy.toml"]):
@@ -874,7 +873,7 @@ class TestRetryLogic:
     @patch("gandalf.orchestrator.load_trajectory_final_output", return_value="done")
     @patch("gandalf.orchestrator.load_rubric")
     @patch("gandalf.orchestrator.load_config")
-    @patch("gandalf.orchestrator.evaluate_criterion")
+    @patch("gandalf.orchestrator._run_judge")
     def test_reward_json_with_negative_weights(
         self,
         mock_eval: Any,
@@ -907,8 +906,8 @@ class TestRetryLogic:
 
         # Both criteria met: raw = 3 + (-1) = 2, reward = 2/3 ≈ 0.6667
         mock_eval.side_effect = [
-            (Verdict(met=True, reasoning="ok"), LLMUsage()),
-            (Verdict(met=True, reasoning="hardcoded detected"), LLMUsage()),
+            ([Verdict(met=True, reasoning="ok")], LLMUsage()),
+            ([Verdict(met=True, reasoning="hardcoded detected")], LLMUsage()),
         ]
 
         with patch("sys.argv", ["prog", "--config", "dummy.toml"]):
@@ -1163,7 +1162,7 @@ class TestBatchRetryNegativeWeights:
     @patch("gandalf.orchestrator.load_trajectory_final_output", return_value="done")
     @patch("gandalf.orchestrator.load_rubric")
     @patch("gandalf.orchestrator.load_config")
-    @patch("gandalf.orchestrator.evaluate_all_criteria")
+    @patch("gandalf.orchestrator._run_judge")
     def test_batch_retry_with_negative_weights(
         self,
         mock_eval_all: Any,
@@ -1232,7 +1231,7 @@ class TestRetryJudgePromptPassthrough:
     @patch("gandalf.orchestrator.load_trajectory_final_output", return_value="done")
     @patch("gandalf.orchestrator.load_rubric")
     @patch("gandalf.orchestrator.load_config")
-    @patch("gandalf.orchestrator.evaluate_criterion")
+    @patch("gandalf.orchestrator._run_judge")
     def test_sequential_retry_passes_judge_prompt(
         self,
         mock_eval: Any,
@@ -1262,8 +1261,8 @@ class TestRetryJudgePromptPassthrough:
 
         # First call errors, retry succeeds
         mock_eval.side_effect = [
-            (Verdict(met=None, reasoning="timeout"), LLMUsage()),
-            (Verdict(met=True, reasoning="ok"), LLMUsage()),
+            ([Verdict(met=None, reasoning="timeout")], LLMUsage()),
+            ([Verdict(met=True, reasoning="ok")], LLMUsage()),
         ]
 
         with patch("sys.argv", ["prog", "--config", "dummy.toml"]):
@@ -1280,7 +1279,7 @@ class TestRetryJudgePromptPassthrough:
     @patch("gandalf.orchestrator.load_trajectory_final_output", return_value="done")
     @patch("gandalf.orchestrator.load_rubric")
     @patch("gandalf.orchestrator.load_config")
-    @patch("gandalf.orchestrator.evaluate_all_criteria")
+    @patch("gandalf.orchestrator._run_judge")
     def test_batch_retry_passes_judge_prompt(
         self,
         mock_eval_all: Any,
