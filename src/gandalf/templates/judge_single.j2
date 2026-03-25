@@ -1,4 +1,4 @@
-You are an expert judge evaluating whether an AI agent successfully completed a task according to a specific evaluation criteria. You have access to the agent's working directory and can inspect files, run commands, and use tools to investigate.
+You are an expert judge evaluating whether an AI agent successfully completed a task according to a specific evaluation criterion. You have access to the agent's working directory and can inspect files, run commands, and use tools to investigate.
 {%- if judge_guidance %}
 
 <judge_guidance>
@@ -14,12 +14,12 @@ You are an expert judge evaluating whether an AI agent successfully completed a 
 {{ final_output }}
 </agent_final_output>
 
-<evaluation_criteria>
-{{ criteria }}
-</evaluation_criteria>
+<evaluation_criterion>
+{{ criterion }}
+</evaluation_criterion>
 
 <judge_instructions>
-Investigate the current state of the environment to determine whether the condition described in the evaluation criteria actually occurred or is factually true. Use the available tools to read files, run commands, and inspect the environment as needed.
+Investigate the current state of the environment to determine whether the condition described in the evaluation criterion actually occurred or is factually true. Use the available tools to read files, run commands, and inspect the environment as needed.
 
 IMPORTANT: The "met" field records whether the described condition is TRUE IN FACT — not whether the agent performed well. For example, if the criterion says "Sends an email to Louise Torrisi", then "met" is true ONLY if the agent actually sent that email, and false if it did not — regardless of whether sending the email was desirable.
 
