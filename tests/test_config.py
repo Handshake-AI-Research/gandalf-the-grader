@@ -442,8 +442,8 @@ class TestMutualExclusivity:
         assert cfg.judge_prompt_path is None
 
 
-class TestJudgePromptTemplate:
-    """Verify judge_prompt_template field on JudgeInput / BatchJudgeInput."""
+class TestJudgePrompt:
+    """Verify judge_prompt field on JudgeInput / BatchJudgeInput."""
 
     def test_judge_input_defaults_none(self) -> None:
         ji = JudgeInput(
@@ -453,7 +453,7 @@ class TestJudgePromptTemplate:
             criteria="c",
             workdir="/w",
         )
-        assert ji.judge_prompt_template is None
+        assert ji.judge_prompt is None
 
     def test_judge_input_roundtrip(self) -> None:
         ji = JudgeInput(
@@ -462,11 +462,11 @@ class TestJudgePromptTemplate:
             final_output="o",
             criteria="c",
             workdir="/w",
-            judge_prompt_template="Hello {{ instructions }}",
+            judge_prompt="Hello {{ instructions }}",
         )
         raw = ji.model_dump_json()
         restored = JudgeInput.model_validate_json(raw)
-        assert restored.judge_prompt_template == "Hello {{ instructions }}"
+        assert restored.judge_prompt == "Hello {{ instructions }}"
 
     def test_batch_judge_input_defaults_none(self) -> None:
         bji = BatchJudgeInput(
@@ -476,7 +476,7 @@ class TestJudgePromptTemplate:
             criteria=[],
             workdir="/w",
         )
-        assert bji.judge_prompt_template is None
+        assert bji.judge_prompt is None
 
     def test_batch_judge_input_roundtrip(self) -> None:
         bji = BatchJudgeInput(
@@ -485,8 +485,8 @@ class TestJudgePromptTemplate:
             final_output="o",
             criteria=[],
             workdir="/w",
-            judge_prompt_template="Batch {{ n_max }}",
+            judge_prompt="Batch {{ n_max }}",
         )
         raw = bji.model_dump_json()
         restored = BatchJudgeInput.model_validate_json(raw)
-        assert restored.judge_prompt_template == "Batch {{ n_max }}"
+        assert restored.judge_prompt == "Batch {{ n_max }}"

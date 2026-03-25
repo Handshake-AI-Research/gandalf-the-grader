@@ -362,7 +362,7 @@ def _run_sequential(
     rubric: list[RubricItem],
     final_output: str,
     judge_guidance: str,
-    judge_prompt_template: str | None,
+    judge_prompt: str | None,
 ) -> tuple[list[CriteriaResult], LLMUsage]:
     """Evaluate each criterion in its own agent session.
 
@@ -382,7 +382,7 @@ def _run_sequential(
             workdir=config.workdir,
             mcp_servers=config.mcp_servers,
             judge_guidance=judge_guidance,
-            judge_prompt_template=judge_prompt_template,
+            judge_prompt=judge_prompt,
         )
 
         trace_path = os.path.join(config.output_dir, f"judge_trace_{i}.txt")
@@ -415,7 +415,7 @@ def _run_batch(
     rubric: list[RubricItem],
     final_output: str,
     judge_guidance: str,
-    judge_prompt_template: str | None,
+    judge_prompt: str | None,
 ) -> tuple[list[CriteriaResult], LLMUsage]:
     """Evaluate all criteria in a single agent session.
 
@@ -439,7 +439,7 @@ def _run_batch(
         workdir=config.workdir,
         mcp_servers=config.mcp_servers,
         judge_guidance=judge_guidance,
-        judge_prompt_template=judge_prompt_template,
+        judge_prompt=judge_prompt,
     )
 
     trace_path = os.path.join(config.output_dir, "judge_trace_batch.txt")
@@ -480,7 +480,7 @@ def _retry_sequential(
     llm_usage: LLMUsage,
     final_output: str,
     judge_guidance: str,
-    judge_prompt_template: str | None,
+    judge_prompt: str | None,
     errored_indices: list[int],
 ) -> LLMUsage:
     """Re-run each errored criterion individually and merge results in-place.
@@ -499,7 +499,7 @@ def _retry_sequential(
             workdir=config.workdir,
             mcp_servers=config.mcp_servers,
             judge_guidance=judge_guidance,
-            judge_prompt_template=judge_prompt_template,
+            judge_prompt=judge_prompt,
         )
 
         trace_path = os.path.join(config.output_dir, f"judge_trace_{idx}_retry.txt")
@@ -533,7 +533,7 @@ def _retry_batch(
     llm_usage: LLMUsage,
     final_output: str,
     judge_guidance: str,
-    judge_prompt_template: str | None,
+    judge_prompt: str | None,
     errored_indices: list[int],
 ) -> LLMUsage:
     """Re-run errored criteria as a batch and merge results in-place.
@@ -557,7 +557,7 @@ def _retry_batch(
         workdir=config.workdir,
         mcp_servers=config.mcp_servers,
         judge_guidance=judge_guidance,
-        judge_prompt_template=judge_prompt_template,
+        judge_prompt=judge_prompt,
     )
 
     trace_path = os.path.join(config.output_dir, "judge_trace_batch_retry.txt")
@@ -660,15 +660,15 @@ def main() -> None:
         rubric = load_rubric(config.rubric_path)
     final_output = load_trajectory_final_output(config.trajectory_path)
     judge_guidance = resolve_judge_guidance(config)
-    judge_prompt_template = resolve_judge_prompt(config)
+    judge_prompt = resolve_judge_prompt(config)
 
     os.makedirs(config.output_dir, exist_ok=True)
 
     # 1. Initial evaluation
     if mode == "batch":
-        results, llm_usage = _run_batch(config, rubric, final_output, judge_guidance, judge_prompt_template)
+        results, llm_usage = _run_batch(config, rubric, final_output, judge_guidance, judge_prompt)
     else:
-        results, llm_usage = _run_sequential(config, rubric, final_output, judge_guidance, judge_prompt_template)
+        results, llm_usage = _run_sequential(config, rubric, final_output, judge_guidance, judge_prompt)
 
     # 2. Record initial error count for observability
     initial_errored = len(_get_errored_indices(results))
@@ -681,11 +681,11 @@ def main() -> None:
         print(f"\n[retry {attempt + 1}/{config.judge_retries}] Retrying {len(errored)} errored criteria...")  # noqa: T201
         if mode == "batch":
             llm_usage = _retry_batch(
-                config, rubric, results, llm_usage, final_output, judge_guidance, judge_prompt_template, errored
+                config, rubric, results, llm_usage, final_output, judge_guidance, judge_prompt, errored
             )
         else:
             llm_usage = _retry_sequential(
-                config, rubric, results, llm_usage, final_output, judge_guidance, judge_prompt_template, errored
+                config, rubric, results, llm_usage, final_output, judge_guidance, judge_prompt, errored
             )
 
     # 4. ALWAYS write info.json (even on hard fail)

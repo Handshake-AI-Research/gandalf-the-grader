@@ -90,7 +90,7 @@ class JudgeInput(BaseModel):
     workdir: str
     mcp_servers: list[MCPServer] = Field(default_factory=list)
     judge_guidance: str = ""
-    judge_prompt_template: str | None = None
+    judge_prompt: str | None = None
 
 
 class BatchJudgeInput(BaseModel):
@@ -107,7 +107,7 @@ class BatchJudgeInput(BaseModel):
     workdir: str
     mcp_servers: list[MCPServer] = Field(default_factory=list)
     judge_guidance: str = ""
-    judge_prompt_template: str | None = None
+    judge_prompt: str | None = None
 
 
 class LLMUsage(BaseModel):
