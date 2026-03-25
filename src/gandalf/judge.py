@@ -25,6 +25,7 @@ from openhands.tools.file_editor import FileEditorTool
 from openhands.tools.terminal import TerminalTool
 from pydantic import TypeAdapter
 
+from gandalf.common import fail_verdicts
 from gandalf.config import BatchJudgeInput, JudgeInput, LLMUsage, MCPServer, Verdict
 
 _TEMPLATES_DIR = Path(__file__).parent / "templates"
@@ -119,11 +120,6 @@ def _read_verdict(verdict_path: str) -> Verdict:
         return Verdict(met=None, reasoning=f"Judge agent wrote invalid JSON: {e}")
 
 
-def _fail_all_verdicts(n: int, reason: str) -> list[Verdict]:
-    """Return *n* fail verdicts sharing the same reason."""
-    return [Verdict(met=None, reasoning=reason) for _ in range(n)]
-
-
 def _read_batch_verdict(verdict_path: str, n_criteria: int) -> list[Verdict]:
     """Read and validate the batch verdict file written by the judge agent.
 
@@ -134,14 +130,14 @@ def _read_batch_verdict(verdict_path: str, n_criteria: int) -> list[Verdict]:
         with open(verdict_path) as f:
             content = f.read().strip()
         if not content:
-            return _fail_all_verdicts(
+            return fail_verdicts(
                 n_criteria,
                 "Judge agent wrote an empty verdict file.",
             )
 
         verdicts_raw = json.loads(content)
         if not isinstance(verdicts_raw, list):
-            return _fail_all_verdicts(
+            return fail_verdicts(
                 n_criteria,
                 f"Expected JSON array, got {type(verdicts_raw).__name__}",
             )
@@ -176,12 +172,12 @@ def _read_batch_verdict(verdict_path: str, n_criteria: int) -> list[Verdict]:
                 )
 
     except FileNotFoundError:
-        return _fail_all_verdicts(
+        return fail_verdicts(
             n_criteria,
             "Judge agent did not write a verdict file.",
         )
     except json.JSONDecodeError as e:
-        return _fail_all_verdicts(
+        return fail_verdicts(
             n_criteria,
             f"Judge agent wrote invalid JSON: {e}",
         )
@@ -340,7 +336,7 @@ def run_judge_batch(input_path: str, output_path: str) -> None:
         llm_usage = _run_agent_session(judge_input.model, judge_input.mcp_servers, judge_input.workdir, prompt)
         verdicts = _read_batch_verdict(verdict_path, n_criteria)
     except Exception as e:  # noqa: BLE001
-        verdicts = _fail_all_verdicts(
+        verdicts = fail_verdicts(
             n_criteria,
             f"Judge execution error: {e}",
         )
