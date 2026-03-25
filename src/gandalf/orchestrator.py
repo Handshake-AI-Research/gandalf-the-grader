@@ -42,20 +42,22 @@ from gandalf.trajectory import load_trajectory_final_output
 # Environment variables forwarded to the inner judge subprocess (via sudo).
 # Only these are passed — everything else is stripped to avoid leaking secrets
 # or host-specific state into the sandbox.
-_JUDGE_ENV_ALLOWLIST = frozenset({
-    "PATH",
-    "LLM_API_KEY",
-    "LLM_BASE_URL",
-    "PYTHONPATH",
-    "UV_TOOL_DIR",
-    "UV_TOOL_BIN_DIR",
-    "UV_PYTHON_INSTALL_DIR",
-    # OpenTelemetry — forwarded so the inner judge can export traces
-    # to any OTEL-compatible backend (e.g. Langfuse, Jaeger, Honeycomb).
-    "OTEL_EXPORTER_OTLP_ENDPOINT",
-    "OTEL_EXPORTER_OTLP_HEADERS",
-    "OTEL_EXPORTER_OTLP_TRACES_PROTOCOL",
-})
+_JUDGE_ENV_ALLOWLIST = frozenset(
+    {
+        "PATH",
+        "LLM_API_KEY",
+        "LLM_BASE_URL",
+        "PYTHONPATH",
+        "UV_TOOL_DIR",
+        "UV_TOOL_BIN_DIR",
+        "UV_PYTHON_INSTALL_DIR",
+        # OpenTelemetry — forwarded so the inner judge can export traces
+        # to any OTEL-compatible backend (e.g. Langfuse, Jaeger, Honeycomb).
+        "OTEL_EXPORTER_OTLP_ENDPOINT",
+        "OTEL_EXPORTER_OTLP_HEADERS",
+        "OTEL_EXPORTER_OTLP_TRACES_PROTOCOL",
+    }
+)
 
 
 def _judge_env_vars() -> list[str]:
@@ -299,7 +301,6 @@ def evaluate_criterion(
     verdict = Verdict.model_validate(data["verdict"])
     usage = LLMUsage.model_validate(data["llm_usage"])
     return verdict, usage
-
 
 
 def evaluate_all_criteria(

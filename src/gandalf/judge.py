@@ -42,10 +42,7 @@ def _render_template(
     If *judge_prompt* is provided (a raw Jinja2 template string),
     it is used instead of the built-in template identified by *template_name*.
     """
-    if judge_prompt is not None:
-        template_str = judge_prompt
-    else:
-        template_str = (_TEMPLATES_DIR / template_name).read_text()
+    template_str = judge_prompt if judge_prompt is not None else (_TEMPLATES_DIR / template_name).read_text()
     return jinja2.Template(template_str).render(**variables)
 
 

@@ -11,10 +11,7 @@ from unittest.mock import patch
 
 import pytest
 
-from tests.conftest import cr, make_batch_input, make_config
-
 from gandalf.config import (
-    BatchJudgeInput,
     CriterionResult,
     GraderConfig,
     JudgeInput,
@@ -33,6 +30,7 @@ from gandalf.orchestrator import (
     resolve_judge_guidance,
     resolve_judge_prompt,
 )
+from tests.conftest import cr, make_batch_input, make_config
 
 
 class TestResolveJudgeGuidance:
@@ -229,7 +227,6 @@ class TestJudgeEnvVars:
         result = _judge_env_vars()
         keys = {item.split("=", 1)[0] for item in result}
         assert keys == _JUDGE_ENV_ALLOWLIST
-
 
 
 def _run_ok(output_path: str, content: Any) -> subprocess.CompletedProcess[str]:
@@ -526,9 +523,7 @@ class TestScoring:
         assert isinstance(info["raw_score"], (int, float))
 
     def test_info_json_contains_minimum_and_maximum_score(self, tmp_path: pathlib.Path) -> None:
-        info = self._info(
-            [cr(weight=10.0, met=True), cr(weight=5.0, met=False), cr(weight=-3.0, met=True)], tmp_path
-        )
+        info = self._info([cr(weight=10.0, met=True), cr(weight=5.0, met=False), cr(weight=-3.0, met=True)], tmp_path)
         assert info["minimum_score"] == -3.0
         assert info["maximum_score"] == 15.0
 
