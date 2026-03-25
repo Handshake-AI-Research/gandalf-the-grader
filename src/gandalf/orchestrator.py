@@ -20,7 +20,6 @@ import shutil
 import subprocess
 import sys
 import tempfile
-from typing import Any
 
 from pydantic import TypeAdapter
 
@@ -183,31 +182,28 @@ def _clone_workspace(src: str) -> str:
     return clone_dir
 
 
-class _JudgeSubprocessError(Exception):
-    """Raised when the judge subprocess fails for any reason."""
-
-
-def _run_judge_subprocess(
+def _run_judge(
     judge_input: JudgeInput | BatchJudgeInput,
     sandbox_user: str | None,
     trace_path: str,
-    timeout: int,
-) -> Any:
-    """Clone workspace, run the judge subprocess, and return parsed output JSON.
+    timeout: int = 300,
+) -> tuple[list[Verdict], LLMUsage]:
+    """Clone workspace, run the judge subprocess, and return parsed verdicts.
 
-    Handles workspace cloning, temp file creation, command construction,
-    subprocess execution, trace saving, and cleanup.
-
-    Raises ``_JudgeSubprocessError`` on any failure (clone, timeout,
-    non-zero exit, bad output).
+    Always returns a *list* of verdicts, even for a single-criterion
+    ``JudgeInput`` (one-element list).  On any subprocess failure every
+    verdict is set to ``met=None`` with the error message.
     """
     batch = isinstance(judge_input, BatchJudgeInput)
+    n = len(judge_input.criteria) if isinstance(judge_input, BatchJudgeInput) else 1
+
+    def _fail(msg: str) -> tuple[list[Verdict], LLMUsage]:
+        return fail_verdicts(n, msg), LLMUsage()
 
     try:
         clone_dir = _clone_workspace(judge_input.workdir)
-    except Exception as e:
-        msg = f"Failed to clone workspace: {e}"
-        raise _JudgeSubprocessError(msg) from e
+    except Exception as e:  # noqa: BLE001
+        return _fail(f"Failed to clone workspace: {e}")
 
     cloned_input = judge_input.model_copy(update={"workdir": clone_dir})
 
@@ -265,74 +261,25 @@ def _run_judge_subprocess(
         _save_trace(trace_path, result.stdout, result.stderr, result.returncode)
 
         if result.returncode != 0:
-            msg = f"Judge process failed (exit {result.returncode}): {result.stderr[:500]}"
-            raise _JudgeSubprocessError(msg)
+            return _fail(f"Judge process failed (exit {result.returncode}): {result.stderr[:500]}")
 
         with open(output_path) as f:
-            return json.load(f)
+            data = json.load(f)
 
-    except subprocess.TimeoutExpired as e:
+    except subprocess.TimeoutExpired:
         _save_trace(trace_path, "", "Judge execution timed out.", -1)
-        msg = "Judge execution timed out."
-        raise _JudgeSubprocessError(msg) from e
+        return _fail("Judge execution timed out.")
     except (json.JSONDecodeError, FileNotFoundError) as e:
-        msg = f"Failed to read judge output: {e}"
-        raise _JudgeSubprocessError(msg) from e
+        return _fail(f"Failed to read judge output: {e}")
+    else:
+        if batch:
+            verdicts = TypeAdapter(list[Verdict]).validate_python(data["verdicts"])
+        else:
+            verdicts = [Verdict.model_validate(data["verdict"])]
+        usage = LLMUsage.model_validate(data["llm_usage"])
+        return verdicts, usage
     finally:
         shutil.rmtree(clone_dir, ignore_errors=True)
-
-
-def evaluate_criterion(
-    judge_input: JudgeInput,
-    sandbox_user: str | None,
-    trace_path: str,
-    timeout: int = 300,
-) -> tuple[Verdict, LLMUsage]:
-    """Run the inner judge for a single criterion.
-
-    When *sandbox_user* is set the judge is executed via ``sudo -u``.
-    When it is ``None`` the judge runs as the ambient (current) user.
-    """
-    try:
-        data = _run_judge_subprocess(judge_input, sandbox_user, trace_path, timeout)
-    except _JudgeSubprocessError as e:
-        return Verdict(met=None, reasoning=str(e)), LLMUsage()
-
-    verdict = Verdict.model_validate(data["verdict"])
-    usage = LLMUsage.model_validate(data["llm_usage"])
-    return verdict, usage
-
-
-def evaluate_all_criteria(
-    judge_input: BatchJudgeInput,
-    sandbox_user: str | None,
-    trace_path: str,
-    timeout: int = 300,
-) -> tuple[list[Verdict], LLMUsage]:
-    """Run the inner judge in batch mode -- all criteria in one agent session.
-
-    Args:
-        judge_input: Batch input with all context needed by the judge.
-        sandbox_user: Username to run the judge process as (via sudo),
-            or ``None`` to run as the ambient user.
-        trace_path: Path to write the judge's stdout/stderr trace.
-        timeout: Max seconds to wait for the judge to complete.
-
-    Returns:
-        (verdicts, llm_usage) where verdicts is a list of Verdict models
-        positionally aligned with the input criteria, and llm_usage is the
-        aggregate token/cost metrics for the batch session.
-    """
-    n_criteria = len(judge_input.criteria)
-
-    try:
-        data = _run_judge_subprocess(judge_input, sandbox_user, trace_path, timeout)
-    except _JudgeSubprocessError as e:
-        return fail_verdicts(n_criteria, str(e)), LLMUsage()
-
-    verdicts = TypeAdapter(list[Verdict]).validate_python(data["verdicts"])
-    llm_usage = LLMUsage.model_validate(data["llm_usage"])
-    return verdicts, llm_usage
 
 
 def _save_trace(trace_path: str, stdout: str, stderr: str, returncode: int) -> None:
@@ -355,23 +302,40 @@ def _merge_usage(a: LLMUsage, b: LLMUsage) -> LLMUsage:
     )
 
 
+def _format_status(*, met: bool | None) -> str:
+    """Format criterion evaluation status for display."""
+    if met is True:
+        return "MET"
+    if met is None:
+        return "ERROR"
+    return "UNMET"
+
+
+def _verdict_to_result(item: RubricItem, verdict: Verdict) -> CriterionResult:
+    """Convert a Verdict into a CriterionResult for the given rubric item."""
+    return CriterionResult(
+        criterion=item.criterion,
+        weight=item.weight,
+        met=verdict.met,
+        reasoning=verdict.reasoning,
+        evidence=verdict.evidence,
+    )
+
+
 def _run_sequential(
     config: GraderConfig,
     rubric: list[RubricItem],
     final_output: str,
     judge_guidance: str,
     judge_prompt: str | None,
+    trace_suffix: str = "",
 ) -> tuple[list[CriterionResult], LLMUsage]:
-    """Evaluate each criterion in its own agent session.
-
-    Returns (results, llm_usage) where llm_usage is the aggregated
-    token/cost totals across all individual judge sessions.
-    """
+    """Evaluate each rubric item in its own agent session."""
     results: list[CriterionResult] = []
     total_usage = LLMUsage()
+    n = len(rubric)
     for i, item in enumerate(rubric):
-        print(f"[{i + 1}/{len(rubric)}] Evaluating: {item.criterion[:80]}...")  # noqa: T201
-
+        print(f"[{i + 1}/{n}] Evaluating: {item.criterion[:80]}...")  # noqa: T201
         judge_input = JudgeInput(
             model=config.model,
             instructions=config.instructions,
@@ -382,29 +346,16 @@ def _run_sequential(
             judge_guidance=judge_guidance,
             judge_prompt=judge_prompt,
         )
-
-        trace_path = os.path.join(config.output_dir, f"judge_trace_{i}.txt")
-        verdict, usage = evaluate_criterion(
+        trace_path = os.path.join(config.output_dir, f"judge_trace_{i}{trace_suffix}.txt")
+        verdicts, usage = _run_judge(
             judge_input,
             sandbox_user=config.sandbox_user,
             trace_path=trace_path,
             timeout=config.judge_timeout,
         )
-
         total_usage = _merge_usage(total_usage, usage)
-
-        result = CriterionResult(
-            criterion=item.criterion,
-            weight=item.weight,
-            met=verdict.met,
-            reasoning=verdict.reasoning,
-            evidence=verdict.evidence,
-        )
-        results.append(result)
-
-        status = "MET" if result.met is True else ("ERROR" if result.met is None else "UNMET")
-        print(f"  -> {status}: {result.reasoning[:120]}")  # noqa: T201
-
+        results.append(_verdict_to_result(item, verdicts[0]))
+        print(f"  -> {_format_status(met=verdicts[0].met)}: {verdicts[0].reasoning[:120]}")  # noqa: T201
     return results, total_usage
 
 
@@ -414,21 +365,17 @@ def _run_batch(
     final_output: str,
     judge_guidance: str,
     judge_prompt: str | None,
+    trace_suffix: str = "",
 ) -> tuple[list[CriterionResult], LLMUsage]:
-    """Evaluate all criteria in a single agent session.
-
-    Returns (results, llm_usage) where llm_usage is the token/cost
-    totals from the single batch agent session.
-    """
+    """Evaluate all rubric items in a single agent session."""
     criteria = [item.criterion for item in rubric]
+    n = len(criteria)
 
-    n_criteria = len(criteria)
-    batch_timeout = config.judge_timeout * n_criteria
+    batch_timeout = config.judge_timeout * n
     if config.batch_timeout is not None:
         batch_timeout = min(batch_timeout, config.batch_timeout)
 
-    print(f"[batch] Evaluating all {n_criteria} criteria in one session (timeout={batch_timeout}s)...")  # noqa: T201
-
+    print(f"[batch] Evaluating {n} criteria in one session (timeout={batch_timeout}s)...")  # noqa: T201
     judge_input = BatchJudgeInput(
         model=config.model,
         instructions=config.instructions,
@@ -439,9 +386,8 @@ def _run_batch(
         judge_guidance=judge_guidance,
         judge_prompt=judge_prompt,
     )
-
-    trace_path = os.path.join(config.output_dir, "judge_trace_batch.txt")
-    verdicts, llm_usage = evaluate_all_criteria(
+    trace_path = os.path.join(config.output_dir, f"judge_trace_batch{trace_suffix}.txt")
+    verdicts, usage = _run_judge(
         judge_input,
         sandbox_user=config.sandbox_user,
         trace_path=trace_path,
@@ -451,19 +397,9 @@ def _run_batch(
     results: list[CriterionResult] = []
     for i, item in enumerate(rubric):
         v = verdicts[i] if i < len(verdicts) else Verdict(met=None, reasoning="No reasoning provided.")
-        result = CriterionResult(
-            criterion=item.criterion,
-            weight=item.weight,
-            met=v.met,
-            reasoning=v.reasoning,
-            evidence=v.evidence,
-        )
-        results.append(result)
-
-        status = "MET" if result.met is True else ("ERROR" if result.met is None else "UNMET")
-        print(f"  [{i + 1}/{len(rubric)}] {status}: {result.reasoning[:120]}")  # noqa: T201
-
-    return results, llm_usage
+        results.append(_verdict_to_result(item, v))
+        print(f"  [{i + 1}/{n}] {_format_status(met=v.met)}: {v.reasoning[:120]}")  # noqa: T201
+    return results, usage
 
 
 def _get_errored_indices(results: list[CriterionResult]) -> list[int]:
@@ -471,118 +407,14 @@ def _get_errored_indices(results: list[CriterionResult]) -> list[int]:
     return [i for i, r in enumerate(results) if r.met is None]
 
 
-def _retry_sequential(
-    config: GraderConfig,
-    rubric: list[RubricItem],
+def _apply_retries(
     results: list[CriterionResult],
-    llm_usage: LLMUsage,
-    final_output: str,
-    judge_guidance: str,
-    judge_prompt: str | None,
+    retry_results: list[CriterionResult],
     errored_indices: list[int],
-) -> LLMUsage:
-    """Re-run each errored criterion individually and merge results in-place.
-
-    Returns the updated cumulative LLMUsage.
-    """
-    for idx in errored_indices:
-        item = rubric[idx]
-        print(f"  [retry {idx}] Evaluating: {item.criterion[:80]}...")  # noqa: T201
-
-        judge_input = JudgeInput(
-            model=config.model,
-            instructions=config.instructions,
-            final_output=final_output,
-            criterion=item.criterion,
-            workdir=config.workdir,
-            mcp_servers=config.mcp_servers,
-            judge_guidance=judge_guidance,
-            judge_prompt=judge_prompt,
-        )
-
-        trace_path = os.path.join(config.output_dir, f"judge_trace_{idx}_retry.txt")
-        verdict, usage = evaluate_criterion(
-            judge_input,
-            sandbox_user=config.sandbox_user,
-            trace_path=trace_path,
-            timeout=config.judge_timeout,
-        )
-
-        llm_usage = _merge_usage(llm_usage, usage)
-
-        results[idx] = CriterionResult(
-            criterion=item.criterion,
-            weight=item.weight,
-            met=verdict.met,
-            reasoning=verdict.reasoning,
-            evidence=verdict.evidence,
-        )
-
-        status = "MET" if results[idx].met is True else ("ERROR" if results[idx].met is None else "UNMET")
-        print(f"    -> {status}: {results[idx].reasoning[:120]}")  # noqa: T201
-
-    return llm_usage
-
-
-def _retry_batch(
-    config: GraderConfig,
-    rubric: list[RubricItem],
-    results: list[CriterionResult],
-    llm_usage: LLMUsage,
-    final_output: str,
-    judge_guidance: str,
-    judge_prompt: str | None,
-    errored_indices: list[int],
-) -> LLMUsage:
-    """Re-run errored criteria as a batch and merge results in-place.
-
-    Returns the updated cumulative LLMUsage.
-    """
-    retry_criteria = [rubric[orig_idx].criterion for orig_idx in errored_indices]
-
-    n_retry = len(retry_criteria)
-    batch_timeout = config.judge_timeout * n_retry
-    if config.batch_timeout is not None:
-        batch_timeout = min(batch_timeout, config.batch_timeout)
-
-    print(f"  [retry batch] Re-evaluating {n_retry} criteria (timeout={batch_timeout}s)...")  # noqa: T201
-
-    judge_input = BatchJudgeInput(
-        model=config.model,
-        instructions=config.instructions,
-        final_output=final_output,
-        criteria=retry_criteria,
-        workdir=config.workdir,
-        mcp_servers=config.mcp_servers,
-        judge_guidance=judge_guidance,
-        judge_prompt=judge_prompt,
-    )
-
-    trace_path = os.path.join(config.output_dir, "judge_trace_batch_retry.txt")
-    verdicts, retry_usage = evaluate_all_criteria(
-        judge_input,
-        sandbox_user=config.sandbox_user,
-        trace_path=trace_path,
-        timeout=batch_timeout,
-    )
-
-    llm_usage = _merge_usage(llm_usage, retry_usage)
-
-    for new_idx, orig_idx in enumerate(errored_indices):
-        v = verdicts[new_idx] if new_idx < len(verdicts) else Verdict(met=None, reasoning="No reasoning provided.")
-        results[orig_idx] = CriterionResult(
-            criterion=rubric[orig_idx].criterion,
-            weight=rubric[orig_idx].weight,
-            met=v.met,
-            reasoning=v.reasoning,
-            evidence=v.evidence,
-        )
-
-        met = results[orig_idx].met
-        status = "MET" if met is True else ("ERROR" if met is None else "UNMET")
-        print(f"    [{orig_idx}] {status}: {results[orig_idx].reasoning[:120]}")  # noqa: T201
-
-    return llm_usage
+) -> list[CriterionResult]:
+    """Return a new results list with retry outcomes spliced in at *errored_indices*."""
+    retry_map = dict(zip(errored_indices, retry_results, strict=False))
+    return [retry_map.get(i, r) for i, r in enumerate(results)]
 
 
 def _write_info(
@@ -650,11 +482,10 @@ def main() -> None:
 
     os.makedirs(config.output_dir, exist_ok=True)
 
+    run = _run_batch if config.mode == "batch" else _run_sequential
+
     # 1. Initial evaluation
-    if config.mode == "batch":
-        results, llm_usage = _run_batch(config, rubric, final_output, judge_guidance, judge_prompt)
-    else:
-        results, llm_usage = _run_sequential(config, rubric, final_output, judge_guidance, judge_prompt)
+    results, llm_usage = run(config, rubric, final_output, judge_guidance, judge_prompt)
 
     # 2. Record initial error count for observability
     initial_errored = len(_get_errored_indices(results))
@@ -665,14 +496,17 @@ def main() -> None:
         if not errored:
             break
         print(f"\n[retry {attempt + 1}/{config.judge_retries}] Retrying {len(errored)} errored criteria...")  # noqa: T201
-        if config.mode == "batch":
-            llm_usage = _retry_batch(
-                config, rubric, results, llm_usage, final_output, judge_guidance, judge_prompt, errored
-            )
-        else:
-            llm_usage = _retry_sequential(
-                config, rubric, results, llm_usage, final_output, judge_guidance, judge_prompt, errored
-            )
+        retry_rubric = [rubric[i] for i in errored]
+        retry_results, retry_usage = run(
+            config,
+            retry_rubric,
+            final_output,
+            judge_guidance,
+            judge_prompt,
+            trace_suffix=f"_retry{attempt + 1}",
+        )
+        results = _apply_retries(results, retry_results, errored)
+        llm_usage = _merge_usage(llm_usage, retry_usage)
 
     # 4. ALWAYS write info.json (even on hard fail)
     final_errored = _get_errored_indices(results)
