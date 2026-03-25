@@ -11,6 +11,8 @@ from unittest.mock import patch
 
 import pytest
 
+from tests.conftest import cr, make_batch_input, make_config
+
 from gandalf.config import (
     BatchJudgeInput,
     CriterionResult,
@@ -24,7 +26,6 @@ from gandalf.orchestrator import (
     _JUDGE_ENV_ALLOWLIST,
     _clone_workspace,
     _judge_env_vars,
-    _run_batch_concurrent,
     _write_info,
     evaluate_all_criteria,
     evaluate_criterion,
@@ -34,38 +35,24 @@ from gandalf.orchestrator import (
 )
 
 
-def _make_config(**overrides: Any) -> GraderConfig:
-    """Create a GraderConfig with sensible defaults for testing."""
-    defaults: dict[str, Any] = {
-        "instructions": "test",
-        "rubric_path": "/rubric.json",
-        "workdir": "/workspace",
-        "trajectory_path": "/logs/trajectory.json",
-        "sandbox_user": "sandbox",
-        "output_dir": "/logs/grader",
-    }
-    defaults.update(overrides)
-    return GraderConfig(**defaults)
-
-
 class TestResolveJudgeGuidance:
     def test_no_path_returns_empty(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("GRADER_JUDGE_GUIDANCE_PATH", raising=False)
-        config = _make_config()
+        config = make_config()
         assert resolve_judge_guidance(config) == ""
 
     def test_reads_file_from_toml_path(self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("GRADER_JUDGE_GUIDANCE_PATH", raising=False)
         guidance_file = tmp_path / "guidance.md"
         guidance_file.write_text("Use openpyxl for .xlsx files.")
-        config = _make_config(judge_guidance_path=str(guidance_file))
+        config = make_config(judge_guidance_path=str(guidance_file))
         assert resolve_judge_guidance(config) == "Use openpyxl for .xlsx files."
 
     def test_reads_file_from_env_var(self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
         guidance_file = tmp_path / "guidance.md"
         guidance_file.write_text("From env var.")
         monkeypatch.setenv("GRADER_JUDGE_GUIDANCE_PATH", str(guidance_file))
-        config = _make_config()  # no judge_guidance_path in TOML
+        config = make_config()  # no judge_guidance_path in TOML
         assert resolve_judge_guidance(config) == "From env var."
 
     def test_toml_takes_precedence_over_env(self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -74,18 +61,18 @@ class TestResolveJudgeGuidance:
         env_file = tmp_path / "env_guidance.md"
         env_file.write_text("From env.")
         monkeypatch.setenv("GRADER_JUDGE_GUIDANCE_PATH", str(env_file))
-        config = _make_config(judge_guidance_path=str(toml_file))
+        config = make_config(judge_guidance_path=str(toml_file))
         assert resolve_judge_guidance(config) == "From TOML."
 
     def test_missing_configured_toml_path_exits(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("GRADER_JUDGE_GUIDANCE_PATH", raising=False)
-        config = _make_config(judge_guidance_path="/nonexistent/guidance.md")
+        config = make_config(judge_guidance_path="/nonexistent/guidance.md")
         with pytest.raises(SystemExit):
             resolve_judge_guidance(config)
 
     def test_missing_configured_env_path_exits(self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:  # noqa: ARG002
         monkeypatch.setenv("GRADER_JUDGE_GUIDANCE_PATH", "/nonexistent/guidance.md")
-        config = _make_config()
+        config = make_config()
         with pytest.raises(SystemExit):
             resolve_judge_guidance(config)
 
@@ -93,7 +80,7 @@ class TestResolveJudgeGuidance:
         self, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.delenv("GRADER_JUDGE_GUIDANCE_PATH", raising=False)
-        config = _make_config(judge_guidance_path="/missing/guidance.md")
+        config = make_config(judge_guidance_path="/missing/guidance.md")
         with pytest.raises(SystemExit):
             resolve_judge_guidance(config)
         stderr = capsys.readouterr().err
@@ -104,7 +91,7 @@ class TestResolveJudgeGuidance:
         self, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setenv("GRADER_JUDGE_GUIDANCE_PATH", "/missing/env_guidance.md")
-        config = _make_config()
+        config = make_config()
         with pytest.raises(SystemExit):
             resolve_judge_guidance(config)
         stderr = capsys.readouterr().err
@@ -117,40 +104,40 @@ class TestResolveJudgeGuidanceInline:
 
     def test_inline_returns_content(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("GRADER_JUDGE_GUIDANCE_PATH", raising=False)
-        config = _make_config(judge_guidance="inline guidance text")
+        config = make_config(judge_guidance="inline guidance text")
         assert resolve_judge_guidance(config) == "inline guidance text"
 
     def test_inline_takes_precedence_over_env(self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
         env_file = tmp_path / "env_guidance.md"
         env_file.write_text("From env.")
         monkeypatch.setenv("GRADER_JUDGE_GUIDANCE_PATH", str(env_file))
-        config = _make_config(judge_guidance="inline wins")
+        config = make_config(judge_guidance="inline wins")
         assert resolve_judge_guidance(config) == "inline wins"
 
 
 class TestResolveJudgePrompt:
     def test_no_config_returns_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("GRADER_JUDGE_PROMPT_PATH", raising=False)
-        config = _make_config()
+        config = make_config()
         assert resolve_judge_prompt(config) is None
 
     def test_inline_returns_content(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("GRADER_JUDGE_PROMPT_PATH", raising=False)
-        config = _make_config(judge_prompt="Hello {{ instructions }}")
+        config = make_config(judge_prompt="Hello {{ instructions }}")
         assert resolve_judge_prompt(config) == "Hello {{ instructions }}"
 
     def test_reads_file_from_path(self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("GRADER_JUDGE_PROMPT_PATH", raising=False)
         template_file = tmp_path / "prompt.j2"
         template_file.write_text("Custom {{ criterion }}")
-        config = _make_config(judge_prompt_path=str(template_file))
+        config = make_config(judge_prompt_path=str(template_file))
         assert resolve_judge_prompt(config) == "Custom {{ criterion }}"
 
     def test_reads_file_from_env_var(self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
         template_file = tmp_path / "prompt.j2"
         template_file.write_text("From env var.")
         monkeypatch.setenv("GRADER_JUDGE_PROMPT_PATH", str(template_file))
-        config = _make_config()
+        config = make_config()
         assert resolve_judge_prompt(config) == "From env var."
 
     def test_path_takes_precedence_over_env(self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -159,25 +146,25 @@ class TestResolveJudgePrompt:
         env_file = tmp_path / "env_prompt.j2"
         env_file.write_text("From env.")
         monkeypatch.setenv("GRADER_JUDGE_PROMPT_PATH", str(env_file))
-        config = _make_config(judge_prompt_path=str(toml_file))
+        config = make_config(judge_prompt_path=str(toml_file))
         assert resolve_judge_prompt(config) == "From TOML."
 
     def test_inline_takes_precedence_over_env(self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
         env_file = tmp_path / "env_prompt.j2"
         env_file.write_text("From env.")
         monkeypatch.setenv("GRADER_JUDGE_PROMPT_PATH", str(env_file))
-        config = _make_config(judge_prompt="inline wins")
+        config = make_config(judge_prompt="inline wins")
         assert resolve_judge_prompt(config) == "inline wins"
 
     def test_missing_path_exits(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("GRADER_JUDGE_PROMPT_PATH", raising=False)
-        config = _make_config(judge_prompt_path="/nonexistent/prompt.j2")
+        config = make_config(judge_prompt_path="/nonexistent/prompt.j2")
         with pytest.raises(SystemExit):
             resolve_judge_prompt(config)
 
     def test_missing_env_path_exits(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("GRADER_JUDGE_PROMPT_PATH", "/nonexistent/prompt.j2")
-        config = _make_config()
+        config = make_config()
         with pytest.raises(SystemExit):
             resolve_judge_prompt(config)
 
@@ -187,7 +174,7 @@ class TestResolveJudgePrompt:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         monkeypatch.delenv("GRADER_JUDGE_PROMPT_PATH", raising=False)
-        config = _make_config(judge_prompt_path="/missing/prompt.j2")
+        config = make_config(judge_prompt_path="/missing/prompt.j2")
         with pytest.raises(SystemExit):
             resolve_judge_prompt(config)
         stderr = capsys.readouterr().err
@@ -200,7 +187,7 @@ class TestResolveJudgePrompt:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         monkeypatch.setenv("GRADER_JUDGE_PROMPT_PATH", "/missing/env_prompt.j2")
-        config = _make_config()
+        config = make_config()
         with pytest.raises(SystemExit):
             resolve_judge_prompt(config)
         stderr = capsys.readouterr().err
@@ -244,16 +231,6 @@ class TestJudgeEnvVars:
         assert keys == _JUDGE_ENV_ALLOWLIST
 
 
-def _make_batch_input(tmp_path: pathlib.Path, n: int = 2) -> BatchJudgeInput:
-    """Create a BatchJudgeInput with *n* criteria rooted in tmp_path."""
-    return BatchJudgeInput(
-        model="test-model",
-        instructions="do a thing",
-        final_output="done",
-        criteria=[f"criterion {i}" for i in range(n)],
-        workdir=str(tmp_path),
-    )
-
 
 def _run_ok(output_path: str, content: Any) -> subprocess.CompletedProcess[str]:
     """Return a subprocess.CompletedProcess that succeeds and writes *content* to output_path."""
@@ -291,7 +268,7 @@ class TestEvaluateAllCriteria:
         }
 
         mock_run.side_effect = _make_run_writing(output_content)
-        judge_input = _make_batch_input(tmp_path, n=2)
+        judge_input = make_batch_input(tmp_path, n=2)
         trace_path = str(tmp_path / "trace.txt")
 
         verdicts, usage = evaluate_all_criteria(judge_input, sandbox_user="sandbox", trace_path=trace_path)
@@ -308,7 +285,7 @@ class TestEvaluateAllCriteria:
         mock_clone.return_value = str(tmp_path)
         mock_run.return_value = subprocess.CompletedProcess(args=[], returncode=1, stdout="", stderr="segfault")
 
-        judge_input = _make_batch_input(tmp_path, n=2)
+        judge_input = make_batch_input(tmp_path, n=2)
         trace_path = str(tmp_path / "trace.txt")
 
         verdicts, usage = evaluate_all_criteria(judge_input, sandbox_user="sandbox", trace_path=trace_path)
@@ -325,7 +302,7 @@ class TestEvaluateAllCriteria:
         mock_clone.return_value = str(tmp_path)
         mock_run.side_effect = subprocess.TimeoutExpired(cmd="judge", timeout=300)
 
-        judge_input = _make_batch_input(tmp_path, n=2)
+        judge_input = make_batch_input(tmp_path, n=2)
         trace_path = str(tmp_path / "trace.txt")
 
         verdicts, usage = evaluate_all_criteria(judge_input, sandbox_user="sandbox", trace_path=trace_path)
@@ -350,7 +327,7 @@ class TestEvaluateAllCriteria:
 
         mock_run.side_effect = _write_invalid
 
-        judge_input = _make_batch_input(tmp_path, n=1)
+        judge_input = make_batch_input(tmp_path, n=1)
         trace_path = str(tmp_path / "trace.txt")
 
         verdicts, usage = evaluate_all_criteria(judge_input, sandbox_user="sandbox", trace_path=trace_path)
@@ -367,7 +344,7 @@ class TestEvaluateAllCriteria:
         # mock_run does not write to the output file — it stays empty (pre-created by grader)
         mock_run.return_value = subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
 
-        judge_input = _make_batch_input(tmp_path, n=2)
+        judge_input = make_batch_input(tmp_path, n=2)
         trace_path = str(tmp_path / "trace.txt")
 
         verdicts, usage = evaluate_all_criteria(judge_input, sandbox_user="sandbox", trace_path=trace_path)
@@ -447,7 +424,7 @@ class TestSandboxUserNone:
         workdir.mkdir()
         (workdir / "hello.txt").write_text("hi")
 
-        judge_input = _make_batch_input(tmp_path, n=2)
+        judge_input = make_batch_input(tmp_path, n=2)
         judge_input = judge_input.model_copy(update={"workdir": str(workdir)})
         trace_path = str(tmp_path / "trace.txt")
 
@@ -456,16 +433,6 @@ class TestSandboxUserNone:
         assert len(verdicts) == 2
         assert all(v.met is True for v in verdicts)
         assert usage.cost_usd == 0.01
-
-
-def _cr(*, weight: float, met: bool | None) -> CriterionResult:
-    """Helper to build a CriterionResult for scoring tests."""
-    return CriterionResult(
-        criterion="test",
-        weight=weight,
-        met=met,
-        reasoning="test",
-    )
 
 
 class TestScoring:
@@ -477,7 +444,7 @@ class TestScoring:
 
     def _info(self, results: list[CriterionResult], tmp_path: pathlib.Path) -> dict[str, Any]:
         """Run _write_info and return parsed info.json."""
-        config = _make_config(output_dir=str(tmp_path))
+        config = make_config(output_dir=str(tmp_path))
         errored = sum(1 for r in results if r.met is None)
         _write_info(config, results, LLMUsage(), errored)
         with open(tmp_path / "info.json") as f:
@@ -488,7 +455,7 @@ class TestScoring:
 
     def test_all_positive_all_met(self, tmp_path: pathlib.Path) -> None:
         """weights=[2,3], met=[T,T] → raw=5, reward=1.0, min=0, max=5."""
-        info = self._info([_cr(weight=2.0, met=True), _cr(weight=3.0, met=True)], tmp_path)
+        info = self._info([cr(weight=2.0, met=True), cr(weight=3.0, met=True)], tmp_path)
         assert info["raw_score"] == 5.0
         assert info["reward"] == 1.0
         assert info["minimum_score"] == 0.0
@@ -496,37 +463,37 @@ class TestScoring:
 
     def test_all_positive_partial_met(self, tmp_path: pathlib.Path) -> None:
         """weights=[2,3], met=[T,F] → raw=2, reward=0.4."""
-        info = self._info([_cr(weight=2.0, met=True), _cr(weight=3.0, met=False)], tmp_path)
+        info = self._info([cr(weight=2.0, met=True), cr(weight=3.0, met=False)], tmp_path)
         assert info["raw_score"] == 2.0
         assert info["reward"] == 0.4
 
     def test_all_positive_none_met(self, tmp_path: pathlib.Path) -> None:
         """weights=[2,3], met=[F,F] → raw=0, reward=0.0."""
-        info = self._info([_cr(weight=2.0, met=False), _cr(weight=3.0, met=False)], tmp_path)
+        info = self._info([cr(weight=2.0, met=False), cr(weight=3.0, met=False)], tmp_path)
         assert info["raw_score"] == 0.0
         assert info["reward"] == 0.0
 
     def test_mixed_negative_penalty_applied(self, tmp_path: pathlib.Path) -> None:
         """weights=[3,-1], met=[T,T] → raw=2, reward=2/3."""
-        info = self._info([_cr(weight=3.0, met=True), _cr(weight=-1.0, met=True)], tmp_path)
+        info = self._info([cr(weight=3.0, met=True), cr(weight=-1.0, met=True)], tmp_path)
         assert info["raw_score"] == 2.0
         assert info["reward"] == 0.6667
 
     def test_mixed_negative_drives_below_zero_clipped(self, tmp_path: pathlib.Path) -> None:
         """weights=[1,-3], met=[F,T] → raw=-3, reward=0.0 (clip lower bound)."""
-        info = self._info([_cr(weight=1.0, met=False), _cr(weight=-3.0, met=True)], tmp_path)
+        info = self._info([cr(weight=1.0, met=False), cr(weight=-3.0, met=True)], tmp_path)
         assert info["raw_score"] == -3.0
         assert info["reward"] == 0.0
 
     def test_negative_not_met_no_penalty(self, tmp_path: pathlib.Path) -> None:
         """weights=[3,-1], met=[T,F] → raw=3, reward=1.0."""
-        info = self._info([_cr(weight=3.0, met=True), _cr(weight=-1.0, met=False)], tmp_path)
+        info = self._info([cr(weight=3.0, met=True), cr(weight=-1.0, met=False)], tmp_path)
         assert info["raw_score"] == 3.0
         assert info["reward"] == 1.0
 
     def test_all_negative_denominator_zero(self, tmp_path: pathlib.Path) -> None:
         """weights=[-2,-3], met=[T,T] → raw=-5, reward=0.0 (no divide-by-zero)."""
-        info = self._info([_cr(weight=-2.0, met=True), _cr(weight=-3.0, met=True)], tmp_path)
+        info = self._info([cr(weight=-2.0, met=True), cr(weight=-3.0, met=True)], tmp_path)
         assert info["raw_score"] == -5.0
         assert info["reward"] == 0.0
 
@@ -538,13 +505,13 @@ class TestScoring:
 
     def test_errored_positive_criterion(self, tmp_path: pathlib.Path) -> None:
         """weights=[3,2], met=[T,None] → raw=3, reward=3/5=0.6."""
-        info = self._info([_cr(weight=3.0, met=True), _cr(weight=2.0, met=None)], tmp_path)
+        info = self._info([cr(weight=3.0, met=True), cr(weight=2.0, met=None)], tmp_path)
         assert info["raw_score"] == 3.0
         assert info["reward"] == 0.6
 
     def test_errored_negative_criterion(self, tmp_path: pathlib.Path) -> None:
         """weights=[3,-2], met=[T,None] → raw=3, reward=3/3=1.0."""
-        info = self._info([_cr(weight=3.0, met=True), _cr(weight=-2.0, met=None)], tmp_path)
+        info = self._info([cr(weight=3.0, met=True), cr(weight=-2.0, met=None)], tmp_path)
         assert info["raw_score"] == 3.0
         assert info["reward"] == 1.0
 
@@ -552,7 +519,7 @@ class TestScoring:
 
     def test_info_json_contains_reward_and_raw_score(self, tmp_path: pathlib.Path) -> None:
         """info.json must contain both reward and raw_score fields."""
-        info = self._info([_cr(weight=2.0, met=True), _cr(weight=3.0, met=False)], tmp_path)
+        info = self._info([cr(weight=2.0, met=True), cr(weight=3.0, met=False)], tmp_path)
         assert "reward" in info
         assert "raw_score" in info
         assert isinstance(info["reward"], float)
@@ -560,7 +527,7 @@ class TestScoring:
 
     def test_info_json_contains_minimum_and_maximum_score(self, tmp_path: pathlib.Path) -> None:
         info = self._info(
-            [_cr(weight=10.0, met=True), _cr(weight=5.0, met=False), _cr(weight=-3.0, met=True)], tmp_path
+            [cr(weight=10.0, met=True), cr(weight=5.0, met=False), cr(weight=-3.0, met=True)], tmp_path
         )
         assert info["minimum_score"] == -3.0
         assert info["maximum_score"] == 15.0
@@ -604,7 +571,7 @@ class TestOutputFilePermissions:
             return subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
 
         mock_run.side_effect = _capture
-        judge_input = _make_batch_input(tmp_path, n=1)
+        judge_input = make_batch_input(tmp_path, n=1)
 
         evaluate_all_criteria(judge_input, sandbox_user="sandbox", trace_path=str(tmp_path / "trace.txt"))
 
@@ -647,7 +614,7 @@ class TestOutputFilePermissions:
             return subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
 
         mock_run.side_effect = _capture_and_check_permissions
-        judge_input = _make_batch_input(tmp_path, n=1)
+        judge_input = make_batch_input(tmp_path, n=1)
         evaluate_all_criteria(judge_input, sandbox_user="sandbox", trace_path=str(tmp_path / "trace.txt"))
 
         assert captured.get("exists"), (
@@ -691,7 +658,7 @@ class TestRetryLogic:
             sandbox_user="sandbox",
             output_dir=output_dir,
             judge_retries=1,
-            mode="individual",
+            mode="sequential",
         )
         mock_rubric.return_value = [
             RubricItem(criterion="c1", weight=1.0),
@@ -803,7 +770,7 @@ class TestRetryLogic:
             sandbox_user="sandbox",
             output_dir=output_dir,
             judge_retries=0,
-            mode="individual",
+            mode="sequential",
         )
         mock_rubric.return_value = [RubricItem(criterion="c1", weight=1.0)]
         mock_eval.return_value = (Verdict(met=None, reasoning="timeout"), LLMUsage())
@@ -844,7 +811,7 @@ class TestRetryLogic:
             sandbox_user="sandbox",
             output_dir=output_dir,
             judge_retries=1,
-            mode="individual",
+            mode="sequential",
         )
         mock_rubric.return_value = [RubricItem(criterion="c1", weight=1.0)]
         mock_eval.return_value = (Verdict(met=None, reasoning="always fails"), LLMUsage())
@@ -886,7 +853,7 @@ class TestRetryLogic:
             sandbox_user="sandbox",
             output_dir=output_dir,
             judge_retries=1,
-            mode="individual",
+            mode="sequential",
         )
         mock_rubric.return_value = [
             RubricItem(criterion="c1", weight=1.0),
@@ -936,7 +903,7 @@ class TestRetryLogic:
             sandbox_user="sandbox",
             output_dir=output_dir,
             judge_retries=0,
-            mode="individual",
+            mode="sequential",
         )
         mock_rubric.return_value = [
             RubricItem(criterion="correct output", weight=3.0),
@@ -1174,680 +1141,190 @@ class TestCloneWorkspace:
         finally:
             shutil.rmtree(clone_dir, ignore_errors=True)
 
+    def test_symlink_loop_is_skipped_not_fatal(self, tmp_path: pathlib.Path) -> None:
+        """Circular symlinks in the workspace must be skipped, not crash the clone."""
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        (workspace / "good.txt").write_text("ok")
+        # Create a symlink loop: a -> b -> a
+        (workspace / "loop_a").symlink_to(workspace / "loop_b")
+        (workspace / "loop_b").symlink_to(workspace / "loop_a")
 
-class TestBatchConcurrent:
-    """Tests for _run_batch_concurrent — parallel positional splitting of batch evaluation."""
+        clone_dir = _clone_workspace(str(workspace))
+        try:
+            cloned = pathlib.Path(clone_dir)
+            assert (cloned / "good.txt").read_text() == "ok"
+            assert not (cloned / "loop_a").exists()
+            assert not (cloned / "loop_b").exists()
+        finally:
+            shutil.rmtree(clone_dir, ignore_errors=True)
 
-    def _make_rubric(self, n: int) -> list[RubricItem]:
-        return [RubricItem(criteria=f"criterion {i}", weight=1.0) for i in range(n)]
 
-    @patch("gandalf_grader.__main__._run_batch")
-    @patch("gandalf_grader.__main__.resolve_judge_guidance", return_value="")
-    @patch("gandalf_grader.__main__.load_trajectory_final_output", return_value="done")
-    @patch("gandalf_grader.__main__.load_rubric")
-    @patch("gandalf_grader.__main__.load_config")
-    def test_splits_1_dispatches_to_run_batch(
-        self, mock_config, mock_rubric, mock_trajectory, mock_guidance, mock_run_batch, tmp_path
-    ):
-        """max_concurrency=None (default) dispatches to _run_batch, not _run_batch_concurrent."""
+class TestBatchRetryNegativeWeights:
+    """Issue 9: batch mode + retries + negative weights combined."""
+
+    @patch("gandalf.orchestrator.resolve_judge_guidance", return_value="")
+    @patch("gandalf.orchestrator.resolve_judge_prompt", return_value=None)
+    @patch("gandalf.orchestrator.load_trajectory_final_output", return_value="done")
+    @patch("gandalf.orchestrator.load_rubric")
+    @patch("gandalf.orchestrator.load_config")
+    @patch("gandalf.orchestrator.evaluate_all_criteria")
+    def test_batch_retry_with_negative_weights(
+        self,
+        mock_eval_all: Any,
+        mock_config: Any,
+        mock_rubric: Any,
+        mock_trajectory: Any,  # noqa: ARG002
+        mock_prompt: Any,  # noqa: ARG002
+        mock_guidance: Any,  # noqa: ARG002
+        tmp_path: pathlib.Path,
+    ) -> None:
+        """Batch retry with negative weights: errored negative-weight criterion
+        resolves on retry and the penalty is correctly applied."""
+
         output_dir = str(tmp_path / "output")
         os.makedirs(output_dir, exist_ok=True)
 
-        mock_config.return_value = VerifierConfig(
+        mock_config.return_value = GraderConfig(
             instructions="test",
             rubric_path="/rubric.json",
             workdir=str(tmp_path),
             trajectory_path="/logs/trajectory.json",
             sandbox_user="sandbox",
             output_dir=output_dir,
+            judge_retries=1,
             mode="batch",
         )
-        rubric = self._make_rubric(2)
-        mock_rubric.return_value = rubric
+        mock_rubric.return_value = [
+            RubricItem(criterion="correct output", weight=3.0),
+            RubricItem(criterion="no hardcoded values", weight=-1.0),
+            RubricItem(criterion="has tests", weight=2.0),
+        ]
 
-        mock_run_batch.return_value = (
-            [
-                CriteriaResult(criteria="criterion 0", weight=1.0, met=True, reasoning="ok"),
-                CriteriaResult(criteria="criterion 1", weight=1.0, met=True, reasoning="ok"),
-            ],
-            {"cost_usd": 0.1, "prompt_tokens": 100, "completion_tokens": 50, "cache_read_tokens": 0},
-        )
-
-        from gandalf_grader.__main__ import main
+        # Initial: c0 passes, c1 (negative) errors, c2 passes
+        initial_verdicts = [
+            Verdict(met=True, reasoning="ok"),
+            Verdict(met=None, reasoning="timeout"),
+            Verdict(met=True, reasoning="ok"),
+        ]
+        # Retry: c1 (negative) met — penalty applies
+        retry_verdicts = [
+            Verdict(met=True, reasoning="hardcoded detected"),
+        ]
+        mock_eval_all.side_effect = [
+            (initial_verdicts, LLMUsage(cost_usd=0.1)),
+            (retry_verdicts, LLMUsage(cost_usd=0.02)),
+        ]
 
         with patch("sys.argv", ["prog", "--config", "dummy.toml"]):
             main()
 
-        mock_run_batch.assert_called_once()
+        info = json.loads((tmp_path / "output" / "info.json").read_text())
+        assert info["errored_criterion_count"] == 0
+        # raw = 3 + (-1) + 2 = 4, max_positive = 5, reward = 4/5 = 0.8
+        assert info["raw_score"] == 4.0
+        assert info["reward"] == 0.8
 
-    def test_empty_rubric(self, tmp_path):
-        """Empty rubric returns empty results without crashing."""
-        config = _make_config(
+        reward = json.loads((tmp_path / "output" / "reward.json").read_text())
+        assert reward["reward"] == 0.8
+
+
+class TestRetryJudgePromptPassthrough:
+    """Issue 10: verify resolve_judge_prompt flows through to retry calls."""
+
+    @patch("gandalf.orchestrator.resolve_judge_guidance", return_value="")
+    @patch("gandalf.orchestrator.resolve_judge_prompt", return_value="CUSTOM {{ criterion }}")
+    @patch("gandalf.orchestrator.load_trajectory_final_output", return_value="done")
+    @patch("gandalf.orchestrator.load_rubric")
+    @patch("gandalf.orchestrator.load_config")
+    @patch("gandalf.orchestrator.evaluate_criterion")
+    def test_sequential_retry_passes_judge_prompt(
+        self,
+        mock_eval: Any,
+        mock_config: Any,
+        mock_rubric: Any,
+        mock_trajectory: Any,  # noqa: ARG002
+        mock_prompt: Any,  # noqa: ARG002
+        mock_guidance: Any,  # noqa: ARG002
+        tmp_path: pathlib.Path,
+    ) -> None:
+        """Custom judge_prompt must be forwarded to retry evaluate_criterion calls."""
+
+        output_dir = str(tmp_path / "output")
+        os.makedirs(output_dir, exist_ok=True)
+
+        mock_config.return_value = GraderConfig(
+            instructions="test",
+            rubric_path="/rubric.json",
             workdir=str(tmp_path),
-            output_dir=str(tmp_path / "output"),
-            mode="batch",
-            max_concurrency=2,
+            trajectory_path="/logs/trajectory.json",
+            sandbox_user="sandbox",
+            output_dir=output_dir,
+            judge_retries=1,
+            mode="sequential",
         )
-        os.makedirs(config.output_dir, exist_ok=True)
+        mock_rubric.return_value = [RubricItem(criterion="c1", weight=1.0)]
 
-        results, usage = _run_batch_concurrent(config, [], "done", "")
+        # First call errors, retry succeeds
+        mock_eval.side_effect = [
+            (Verdict(met=None, reasoning="timeout"), LLMUsage()),
+            (Verdict(met=True, reasoning="ok"), LLMUsage()),
+        ]
 
-        assert results == []
-        assert usage == {}
+        with patch("sys.argv", ["prog", "--config", "dummy.toml"]):
+            main()
 
-    @patch("gandalf_grader.__main__.evaluate_all_criteria")
-    def test_splits_2_even(self, mock_eval_all, tmp_path):
-        """4 criteria split into 2 chunks of 2, results merged in order."""
-        config = _make_config(
+        # Both the initial call and the retry call should have judge_prompt set
+        assert mock_eval.call_count == 2
+        for call in mock_eval.call_args_list:
+            judge_input = call[0][0]
+            assert judge_input.judge_prompt == "CUSTOM {{ criterion }}"
+
+    @patch("gandalf.orchestrator.resolve_judge_guidance", return_value="")
+    @patch("gandalf.orchestrator.resolve_judge_prompt", return_value="BATCH CUSTOM {{ criteria }}")
+    @patch("gandalf.orchestrator.load_trajectory_final_output", return_value="done")
+    @patch("gandalf.orchestrator.load_rubric")
+    @patch("gandalf.orchestrator.load_config")
+    @patch("gandalf.orchestrator.evaluate_all_criteria")
+    def test_batch_retry_passes_judge_prompt(
+        self,
+        mock_eval_all: Any,
+        mock_config: Any,
+        mock_rubric: Any,
+        mock_trajectory: Any,  # noqa: ARG002
+        mock_prompt: Any,  # noqa: ARG002
+        mock_guidance: Any,  # noqa: ARG002
+        tmp_path: pathlib.Path,
+    ) -> None:
+        """Custom judge_prompt must be forwarded to retry evaluate_all_criteria calls."""
+
+        output_dir = str(tmp_path / "output")
+        os.makedirs(output_dir, exist_ok=True)
+
+        mock_config.return_value = GraderConfig(
+            instructions="test",
+            rubric_path="/rubric.json",
             workdir=str(tmp_path),
-            output_dir=str(tmp_path / "output"),
+            trajectory_path="/logs/trajectory.json",
+            sandbox_user="sandbox",
+            output_dir=output_dir,
+            judge_retries=1,
             mode="batch",
-            max_concurrency=2,
         )
-        os.makedirs(config.output_dir, exist_ok=True)
-        rubric = self._make_rubric(4)
+        mock_rubric.return_value = [
+            RubricItem(criterion="c1", weight=1.0),
+            RubricItem(criterion="c2", weight=1.0),
+        ]
 
-        def _side_effect(judge_input, **kwargs):
-            verdicts = [
-                {"index": c.index, "met": True, "reasoning": f"ok {c.index}", "evidence": []}
-                for c in judge_input.criteria
-            ]
-            usage = {"cost_usd": 0.1, "prompt_tokens": 100, "completion_tokens": 50, "cache_read_tokens": 10}
-            return verdicts, usage
+        mock_eval_all.side_effect = [
+            ([Verdict(met=True, reasoning="ok"), Verdict(met=None, reasoning="err")], LLMUsage()),
+            ([Verdict(met=True, reasoning="ok retry")], LLMUsage()),
+        ]
 
-        mock_eval_all.side_effect = _side_effect
+        with patch("sys.argv", ["prog", "--config", "dummy.toml"]):
+            main()
 
-        results, usage = _run_batch_concurrent(config, rubric, "done", "")
-
-        assert len(results) == 4
-        # Verify order preserved
-        for i, r in enumerate(results):
-            assert r.criteria == f"criterion {i}"
-            assert r.met is True
-
-        # 2 splits, each with usage
-        assert usage["cost_usd"] == pytest.approx(0.2)
-        assert usage["prompt_tokens"] == 200
-        assert usage["completion_tokens"] == 100
-        assert usage["cache_read_tokens"] == 20
-
-        # Verify evaluate_all_criteria was called twice (one per split)
         assert mock_eval_all.call_count == 2
-
-    @patch("gandalf_grader.__main__.evaluate_all_criteria")
-    def test_split_uses_local_indices(self, mock_eval_all, tmp_path):
-        """Chunks must use 0-based local indices, not global rubric positions.
-
-        Regression test: the judge prompt says "0 through N-1" and
-        _read_batch_verdict filters by 0 <= idx < N, so passing global
-        indices (e.g. 3, 4, 5) for chunk 2 causes the judge to either
-        write mismatched indices or have its verdicts silently discarded.
-        """
-        config = _make_config(
-            workdir=str(tmp_path),
-            output_dir=str(tmp_path / "output"),
-            mode="batch",
-            max_concurrency=3,
-        )
-        os.makedirs(config.output_dir, exist_ok=True)
-        rubric = self._make_rubric(6)  # 6 criteria → 3 chunks of 2
-
-        received_indices = []
-
-        def _side_effect(judge_input, **kwargs):
-            indices = [c.index for c in judge_input.criteria]
-            received_indices.append(indices)
-            verdicts = [
-                {"index": c.index, "met": True, "reasoning": "ok", "evidence": []}
-                for c in judge_input.criteria
-            ]
-            return verdicts, {"cost_usd": 0.05}
-
-        mock_eval_all.side_effect = _side_effect
-
-        results, _ = _run_batch_concurrent(config, rubric, "done", "")
-
-        # Every chunk must use local 0-based indices
-        for indices in received_indices:
-            assert indices == list(range(len(indices))), (
-                f"Expected 0-based local indices, got {indices}"
-            )
-
-        # All 6 results should be successful
-        assert len(results) == 6
-        assert all(r.met is True for r in results)
-        # Results are in original rubric order
-        for i, r in enumerate(results):
-            assert r.criteria == f"criterion {i}"
-
-    @patch("gandalf_grader.__main__.evaluate_all_criteria")
-    def test_splits_3_uneven(self, mock_eval_all, tmp_path):
-        """7 criteria split into chunks of [3, 3, 1]."""
-        config = _make_config(
-            workdir=str(tmp_path),
-            output_dir=str(tmp_path / "output"),
-            mode="batch",
-            max_concurrency=3,
-        )
-        os.makedirs(config.output_dir, exist_ok=True)
-        rubric = self._make_rubric(7)
-
-        def _side_effect(judge_input, **kwargs):
-            verdicts = [
-                {"index": c.index, "met": True, "reasoning": f"ok {c.index}", "evidence": []}
-                for c in judge_input.criteria
-            ]
-            return verdicts, {"cost_usd": 0.1}
-
-        mock_eval_all.side_effect = _side_effect
-
-        results, usage = _run_batch_concurrent(config, rubric, "done", "")
-
-        assert len(results) == 7
-        for i, r in enumerate(results):
-            assert r.criteria == f"criterion {i}"
-
-        assert mock_eval_all.call_count == 3
-        assert usage["cost_usd"] == pytest.approx(0.3)
-
-    @patch("gandalf_grader.__main__.evaluate_all_criteria")
-    def test_splits_exceeds_rubric_size(self, mock_eval_all, tmp_path):
-        """splits=5 with 3 criteria → 3 chunks of 1 each."""
-        config = _make_config(
-            workdir=str(tmp_path),
-            output_dir=str(tmp_path / "output"),
-            mode="batch",
-            max_concurrency=5,
-        )
-        os.makedirs(config.output_dir, exist_ok=True)
-        rubric = self._make_rubric(3)
-
-        def _side_effect(judge_input, **kwargs):
-            verdicts = [
-                {"index": c.index, "met": True, "reasoning": f"ok {c.index}", "evidence": []}
-                for c in judge_input.criteria
-            ]
-            return verdicts, {"cost_usd": 0.05}
-
-        mock_eval_all.side_effect = _side_effect
-
-        results, usage = _run_batch_concurrent(config, rubric, "done", "")
-
-        assert len(results) == 3
-        assert mock_eval_all.call_count == 3
-        assert usage["cost_usd"] == pytest.approx(0.15)
-
-    @patch("gandalf_grader.__main__.evaluate_all_criteria")
-    def test_trace_file_naming(self, mock_eval_all, tmp_path):
-        """Each split gets a unique trace path."""
-        config = _make_config(
-            workdir=str(tmp_path),
-            output_dir=str(tmp_path / "output"),
-            mode="batch",
-            max_concurrency=2,
-        )
-        os.makedirs(config.output_dir, exist_ok=True)
-        rubric = self._make_rubric(4)
-
-        trace_paths = []
-
-        def _side_effect(judge_input, sandbox_user, trace_path, timeout):
-            trace_paths.append(trace_path)
-            verdicts = [
-                {"index": c.index, "met": True, "reasoning": "ok", "evidence": []}
-                for c in judge_input.criteria
-            ]
-            return verdicts, {}
-
-        mock_eval_all.side_effect = _side_effect
-
-        _run_batch_concurrent(config, rubric, "done", "")
-
-        assert len(trace_paths) == 2
-        assert trace_paths[0] != trace_paths[1]
-        # Order may vary due to parallel execution
-        trace_basenames = sorted(os.path.basename(p) for p in trace_paths)
-        assert trace_basenames[0] == "judge_trace_batch_split0.txt"
-        assert trace_basenames[1] == "judge_trace_batch_split1.txt"
-
-    @patch("gandalf_grader.__main__.evaluate_all_criteria")
-    def test_errored_criteria_in_split(self, mock_eval_all, tmp_path):
-        """Errors in one split are properly reflected in merged results."""
-        config = _make_config(
-            workdir=str(tmp_path),
-            output_dir=str(tmp_path / "output"),
-            mode="batch",
-            max_concurrency=2,
-        )
-        os.makedirs(config.output_dir, exist_ok=True)
-        rubric = self._make_rubric(4)
-
-        def _side_effect(judge_input, **kwargs):
-            criteria = judge_input.criteria
-            # Identify chunk by criteria text (indices are local 0-based in both chunks)
-            is_second_chunk = any("criterion 2" in c.criteria for c in criteria)
-            if not is_second_chunk:
-                # First split: both pass
-                verdicts = [
-                    {"index": c.index, "met": True, "reasoning": "ok", "evidence": []}
-                    for c in criteria
-                ]
-            else:
-                # Second split: first criterion errors, second passes
-                verdicts = [
-                    {"index": 0, "met": None, "reasoning": "timeout", "evidence": []},
-                    {"index": 1, "met": True, "reasoning": "ok", "evidence": []},
-                ]
-            return verdicts, {"cost_usd": 0.1}
-
-        mock_eval_all.side_effect = _side_effect
-
-        results, _ = _run_batch_concurrent(config, rubric, "done", "")
-
-        assert results[0].met is True
-        assert results[1].met is True
-        assert results[2].met is None  # errored in second split
-        assert results[3].met is True
-
-    @patch("gandalf_grader.__main__.evaluate_all_criteria")
-    def test_timeout_per_split(self, mock_eval_all, tmp_path):
-        """Each split's timeout is based on its chunk size, not total rubric."""
-        config = _make_config(
-            workdir=str(tmp_path),
-            output_dir=str(tmp_path / "output"),
-            mode="batch",
-            max_concurrency=2,
-            judge_timeout=100,
-        )
-        os.makedirs(config.output_dir, exist_ok=True)
-        rubric = self._make_rubric(4)  # 2 per split
-
-        timeouts = []
-
-        def _side_effect(judge_input, sandbox_user, trace_path, timeout):
-            timeouts.append(timeout)
-            verdicts = [
-                {"index": c.index, "met": True, "reasoning": "ok", "evidence": []}
-                for c in judge_input.criteria
-            ]
-            return verdicts, {}
-
-        mock_eval_all.side_effect = _side_effect
-
-        _run_batch_concurrent(config, rubric, "done", "")
-
-        # Each split has 2 criteria → timeout = 100 * 2 = 200
-        assert all(t == 200 for t in timeouts)
-
-    @patch("gandalf_grader.__main__.evaluate_all_criteria")
-    def test_batch_timeout_cap_per_split(self, mock_eval_all, tmp_path):
-        """batch_timeout caps each split's timeout independently."""
-        config = _make_config(
-            workdir=str(tmp_path),
-            output_dir=str(tmp_path / "output"),
-            mode="batch",
-            max_concurrency=2,
-            judge_timeout=100,
-            batch_timeout=150,
-        )
-        os.makedirs(config.output_dir, exist_ok=True)
-        rubric = self._make_rubric(4)
-
-        timeouts = []
-
-        def _side_effect(judge_input, sandbox_user, trace_path, timeout):
-            timeouts.append(timeout)
-            verdicts = [
-                {"index": c.index, "met": True, "reasoning": "ok", "evidence": []}
-                for c in judge_input.criteria
-            ]
-            return verdicts, {}
-
-        mock_eval_all.side_effect = _side_effect
-
-        _run_batch_concurrent(config, rubric, "done", "")
-
-        # 2 criteria * 100s = 200, capped to 150
-        assert all(t == 150 for t in timeouts)
-
-    @patch("gandalf_grader.__main__.resolve_judge_guidance", return_value="")
-    @patch("gandalf_grader.__main__.load_trajectory_final_output", return_value="done")
-    @patch("gandalf_grader.__main__.load_rubric")
-    @patch("gandalf_grader.__main__.load_config")
-    @patch("gandalf_grader.__main__.evaluate_all_criteria")
-    def test_main_dispatches_batch_concurrent(
-        self, mock_eval_all, mock_config, mock_rubric, mock_trajectory, mock_guidance, tmp_path
-    ):
-        """main() dispatches to _run_batch_concurrent when max_concurrency > 1."""
-        output_dir = str(tmp_path / "output")
-        os.makedirs(output_dir, exist_ok=True)
-
-        mock_config.return_value = VerifierConfig(
-            instructions="test",
-            rubric_path="/rubric.json",
-            workdir=str(tmp_path),
-            trajectory_path="/logs/trajectory.json",
-            sandbox_user="sandbox",
-            output_dir=output_dir,
-            mode="batch",
-            max_concurrency=2,
-        )
-        mock_rubric.return_value = self._make_rubric(4)
-
-        def _side_effect(judge_input, **kwargs):
-            verdicts = [
-                {"index": c.index, "met": True, "reasoning": "ok", "evidence": []}
-                for c in judge_input.criteria
-            ]
-            return verdicts, {"cost_usd": 0.1, "prompt_tokens": 100, "completion_tokens": 50, "cache_read_tokens": 0}
-
-        mock_eval_all.side_effect = _side_effect
-
-        from gandalf_grader.__main__ import main
-
-        with patch("sys.argv", ["prog", "--config", "dummy.toml"]):
-            main()
-
-        info = json.loads((tmp_path / "output" / "info.json").read_text())
-        assert len(info["criteria_results"]) == 4
-        assert all(r["met"] is True for r in info["criteria_results"])
-
-        reward = json.loads((tmp_path / "output" / "reward.json").read_text())
-        assert reward["reward"] == 1.0
-
-    @patch("gandalf_grader.__main__.resolve_judge_guidance", return_value="")
-    @patch("gandalf_grader.__main__.load_trajectory_final_output", return_value="done")
-    @patch("gandalf_grader.__main__.load_rubric")
-    @patch("gandalf_grader.__main__.load_config")
-    @patch("gandalf_grader.__main__.evaluate_all_criteria")
-    def test_retry_after_batch_concurrent(
-        self, mock_eval_all, mock_config, mock_rubric, mock_trajectory, mock_guidance, tmp_path
-    ):
-        """Retry logic works correctly on results produced by batch concurrent splits."""
-        output_dir = str(tmp_path / "output")
-        os.makedirs(output_dir, exist_ok=True)
-
-        mock_config.return_value = VerifierConfig(
-            instructions="test",
-            rubric_path="/rubric.json",
-            workdir=str(tmp_path),
-            trajectory_path="/logs/trajectory.json",
-            sandbox_user="sandbox",
-            output_dir=output_dir,
-            mode="batch",
-            max_concurrency=2,
-            judge_retries=1,
-        )
-        mock_rubric.return_value = self._make_rubric(4)
-
-        call_count = [0]
-
-        def _side_effect(judge_input, **kwargs):
-            idx = call_count[0]
-            call_count[0] += 1
-            if idx == 0:
-                # Split 0: both pass
-                verdicts = [
-                    {"index": c.index, "met": True, "reasoning": "ok", "evidence": []}
-                    for c in judge_input.criteria
-                ]
-            elif idx == 1:
-                # Split 1: one error
-                verdicts = [
-                    {"index": judge_input.criteria[0].index, "met": None, "reasoning": "timeout", "evidence": []},
-                    {"index": judge_input.criteria[1].index, "met": True, "reasoning": "ok", "evidence": []},
-                ]
-            else:
-                # Retry: the errored criterion resolves
-                verdicts = [
-                    {"index": 0, "met": True, "reasoning": "ok on retry", "evidence": []},
-                ]
-            return verdicts, {"cost_usd": 0.05}
-
-        mock_eval_all.side_effect = _side_effect
-
-        from gandalf_grader.__main__ import main
-
-        with patch("sys.argv", ["prog", "--config", "dummy.toml"]):
-            main()
-
-        info = json.loads((tmp_path / "output" / "info.json").read_text())
-        assert all(r["met"] is True for r in info["criteria_results"])
-        assert info["errored_criteria_count"] == 0
-
-        reward = json.loads((tmp_path / "output" / "reward.json").read_text())
-        assert reward["reward"] == 1.0
-
-    # -- Error scenario tests (no partial scores) --
-
-    @patch("gandalf_grader.__main__.evaluate_all_criteria")
-    def test_one_split_crashes_criteria_errored(self, mock_eval_all, tmp_path):
-        """When one split's subprocess crashes, its criteria get met=None."""
-        config = _make_config(
-            workdir=str(tmp_path),
-            output_dir=str(tmp_path / "output"),
-            mode="batch",
-            max_concurrency=2,
-        )
-        os.makedirs(config.output_dir, exist_ok=True)
-        rubric = self._make_rubric(4)
-
-        def _side_effect(judge_input, **kwargs):
-            is_second_chunk = any("criterion 2" in c.criteria for c in judge_input.criteria)
-            if not is_second_chunk:
-                verdicts = [
-                    {"index": c.index, "met": True, "reasoning": "ok", "evidence": []}
-                    for c in judge_input.criteria
-                ]
-                return verdicts, {"cost_usd": 0.1}
-            else:
-                verdicts = [
-                    {"index": c.index, "met": None, "reasoning": "Judge process failed (exit 1)", "evidence": []}
-                    for c in judge_input.criteria
-                ]
-                return verdicts, {}
-
-        mock_eval_all.side_effect = _side_effect
-
-        results, _ = _run_batch_concurrent(config, rubric, "done", "")
-
-        assert results[0].met is True
-        assert results[1].met is True
-        assert results[2].met is None
-        assert results[3].met is None
-
-    @patch("gandalf_grader.__main__.evaluate_all_criteria")
-    def test_one_split_times_out(self, mock_eval_all, tmp_path):
-        """When one split times out, its criteria get met=None."""
-        config = _make_config(
-            workdir=str(tmp_path),
-            output_dir=str(tmp_path / "output"),
-            mode="batch",
-            max_concurrency=2,
-        )
-        os.makedirs(config.output_dir, exist_ok=True)
-        rubric = self._make_rubric(4)
-
-        def _side_effect(judge_input, **kwargs):
-            is_second_chunk = any("criterion 2" in c.criteria for c in judge_input.criteria)
-            if not is_second_chunk:
-                verdicts = [
-                    {"index": c.index, "met": True, "reasoning": "ok", "evidence": []}
-                    for c in judge_input.criteria
-                ]
-                return verdicts, {"cost_usd": 0.1}
-            else:
-                verdicts = [
-                    {"index": c.index, "met": None, "reasoning": "Judge execution timed out.", "evidence": []}
-                    for c in judge_input.criteria
-                ]
-                return verdicts, {}
-
-        mock_eval_all.side_effect = _side_effect
-
-        results, _ = _run_batch_concurrent(config, rubric, "done", "")
-
-        assert results[2].met is None
-        assert "timed out" in results[2].reasoning
-
-    @patch("gandalf_grader.__main__.evaluate_all_criteria")
-    def test_all_splits_fail(self, mock_eval_all, tmp_path):
-        """When all splits fail, every criterion has met=None."""
-        config = _make_config(
-            workdir=str(tmp_path),
-            output_dir=str(tmp_path / "output"),
-            mode="batch",
-            max_concurrency=2,
-        )
-        os.makedirs(config.output_dir, exist_ok=True)
-        rubric = self._make_rubric(4)
-
-        def _side_effect(judge_input, **kwargs):
-            verdicts = [
-                {"index": c.index, "met": None, "reasoning": "crash", "evidence": []}
-                for c in judge_input.criteria
-            ]
-            return verdicts, {}
-
-        mock_eval_all.side_effect = _side_effect
-
-        results, _ = _run_batch_concurrent(config, rubric, "done", "")
-
-        assert all(r.met is None for r in results)
-
-    @patch("gandalf_grader.__main__.resolve_judge_guidance", return_value="")
-    @patch("gandalf_grader.__main__.load_trajectory_final_output", return_value="done")
-    @patch("gandalf_grader.__main__.load_rubric")
-    @patch("gandalf_grader.__main__.load_config")
-    @patch("gandalf_grader.__main__.evaluate_all_criteria")
-    def test_no_partial_scores_when_split_fails(
-        self, mock_eval_all, mock_config, mock_rubric, mock_trajectory, mock_guidance, tmp_path
-    ):
-        """Critical: when one split fails and retries are exhausted, reward.json must NOT be written.
-
-        Regression test for the bug in auto_split_rubric.py where failed batches
-        were silently excluded from scoring, producing misleading partial scores.
-        See: https://joinhandshake.slack.com/archives/C0A9LSJRZ09/p1774474260805669
-        """
-        output_dir = str(tmp_path / "output")
-        os.makedirs(output_dir, exist_ok=True)
-
-        mock_config.return_value = VerifierConfig(
-            instructions="test",
-            rubric_path="/rubric.json",
-            workdir=str(tmp_path),
-            trajectory_path="/logs/trajectory.json",
-            sandbox_user="sandbox",
-            output_dir=output_dir,
-            mode="batch",
-            max_concurrency=2,
-            judge_retries=1,
-        )
-        mock_rubric.return_value = self._make_rubric(4)
-
-        def _side_effect(judge_input, **kwargs):
-            criteria = judge_input.criteria
-            # Identify by criteria text — "criterion 2" and "criterion 3" always fail
-            has_failing = any("criterion 2" in c.criteria or "criterion 3" in c.criteria for c in criteria)
-
-            if has_failing:
-                return (
-                    [{"index": c.index, "met": None, "reasoning": "persistent failure", "evidence": []} for c in criteria],
-                    {"cost_usd": 0.05},
-                )
-            else:
-                return (
-                    [{"index": c.index, "met": True, "reasoning": "ok", "evidence": []} for c in criteria],
-                    {"cost_usd": 0.1},
-                )
-
-        mock_eval_all.side_effect = _side_effect
-
-        from gandalf_grader.__main__ import main
-
-        with patch("sys.argv", ["prog", "--config", "dummy.toml"]):
-            with pytest.raises(SystemExit) as exc_info:
-                main()
-            assert exc_info.value.code == 1
-
-        # reward.json must NOT exist — no partial scores
-        assert not (tmp_path / "output" / "reward.json").exists()
-
-        # info.json MUST exist with ALL criteria (not just the successful split)
-        info = json.loads((tmp_path / "output" / "info.json").read_text())
-        assert len(info["criteria_results"]) == 4
-        assert info["criteria_results"][0]["met"] is True
-        assert info["criteria_results"][1]["met"] is True
-        assert info["criteria_results"][2]["met"] is None
-        assert info["criteria_results"][3]["met"] is None
-        assert info["errored_criteria_count"] == 2
-
-    @patch("gandalf_grader.__main__.evaluate_all_criteria")
-    def test_split_future_raises_exception(self, mock_eval_all, tmp_path):
-        """When evaluate_all_criteria raises an unhandled exception, all criteria fail gracefully."""
-        config = _make_config(
-            workdir=str(tmp_path),
-            output_dir=str(tmp_path / "output"),
-            mode="batch",
-            max_concurrency=2,
-        )
-        os.makedirs(config.output_dir, exist_ok=True)
-        rubric = self._make_rubric(4)
-
-        def _side_effect(judge_input, **kwargs):
-            is_second_chunk = any("criterion 2" in c.criteria for c in judge_input.criteria)
-            if not is_second_chunk:
-                verdicts = [
-                    {"index": c.index, "met": True, "reasoning": "ok", "evidence": []}
-                    for c in judge_input.criteria
-                ]
-                return verdicts, {"cost_usd": 0.1}
-            else:
-                raise RuntimeError("unexpected internal error")
-
-        mock_eval_all.side_effect = _side_effect
-
-        results, usage = _run_batch_concurrent(config, rubric, "done", "")
-
-        # All criteria should be marked as errored (not just the failed split)
-        assert all(r.met is None for r in results)
-        assert "Batch split failed" in results[0].reasoning
-        # Usage must be reset to stay consistent with all-error results
-        assert usage == {}
-
-    @patch("gandalf_grader.__main__.evaluate_all_criteria")
-    def test_split_returns_fewer_verdicts(self, mock_eval_all, tmp_path):
-        """When a split returns fewer verdicts than criteria, missing ones get met=None."""
-        config = _make_config(
-            workdir=str(tmp_path),
-            output_dir=str(tmp_path / "output"),
-            mode="batch",
-            max_concurrency=2,
-        )
-        os.makedirs(config.output_dir, exist_ok=True)
-        rubric = self._make_rubric(4)
-
-        def _side_effect(judge_input, **kwargs):
-            is_second_chunk = any("criterion 2" in c.criteria for c in judge_input.criteria)
-            if not is_second_chunk:
-                # First split (criteria 0, 1): returns both verdicts
-                verdicts = [
-                    {"index": c.index, "met": True, "reasoning": "ok", "evidence": []}
-                    for c in judge_input.criteria
-                ]
-                return verdicts, {}
-            else:
-                # Second split (criteria 2, 3): only returns 1 verdict for 2 criteria
-                verdicts = [
-                    {"index": 0, "met": True, "reasoning": "ok", "evidence": []},
-                ]
-                return verdicts, {}
-
-        mock_eval_all.side_effect = _side_effect
-
-        results, _ = _run_batch_concurrent(config, rubric, "done", "")
-
-        assert results[0].met is True   # split 0, verdict present
-        assert results[1].met is True   # split 0, verdict present
-        assert results[2].met is True   # split 1, position 0 — verdict present
-        assert results[3].met is None   # split 1, position 1 — no verdict, defaults to met=None
+        for call in mock_eval_all.call_args_list:
+            judge_input = call[0][0]
+            assert judge_input.judge_prompt == "BATCH CUSTOM {{ criteria }}"
