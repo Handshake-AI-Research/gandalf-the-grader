@@ -24,6 +24,7 @@ from typing import Any
 
 from pydantic import TypeAdapter
 
+from gandalf.common import fail_verdicts
 from gandalf.config import (
     BatchJudgeInput,
     CriteriaResult,
@@ -300,10 +301,6 @@ def evaluate_criteria(
     return verdict, usage
 
 
-def _fail_all(n: int, reason: str) -> list[Verdict]:
-    """Return *n* fail verdicts that all share the same reason."""
-    return [Verdict(met=None, reasoning=reason) for _ in range(n)]
-
 
 def evaluate_all_criteria(
     judge_input: BatchJudgeInput,
@@ -330,7 +327,7 @@ def evaluate_all_criteria(
     try:
         data = _run_judge_subprocess(judge_input, sandbox_user, trace_path, timeout)
     except _JudgeSubprocessError as e:
-        return _fail_all(n_criteria, str(e)), LLMUsage()
+        return fail_verdicts(n_criteria, str(e)), LLMUsage()
 
     verdicts = TypeAdapter(list[Verdict]).validate_python(data["verdicts"])
     llm_usage = LLMUsage.model_validate(data["llm_usage"])
