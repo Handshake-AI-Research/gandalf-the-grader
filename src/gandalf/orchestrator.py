@@ -41,7 +41,7 @@ from gandalf.trajectory import load_trajectory_final_output
 # Environment variables forwarded to the inner judge subprocess (via sudo).
 # Only these are passed — everything else is stripped to avoid leaking secrets
 # or host-specific state into the sandbox.
-_JUDGE_ENV_ALLOWLIST = (
+_JUDGE_ENV_ALLOWLIST = frozenset({
     "PATH",
     "LLM_API_KEY",
     "LLM_BASE_URL",
@@ -54,7 +54,7 @@ _JUDGE_ENV_ALLOWLIST = (
     "OTEL_EXPORTER_OTLP_ENDPOINT",
     "OTEL_EXPORTER_OTLP_HEADERS",
     "OTEL_EXPORTER_OTLP_TRACES_PROTOCOL",
-)
+})
 
 
 def _judge_env_vars() -> list[str]:
