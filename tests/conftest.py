@@ -1,5 +1,6 @@
 """Shared test fixtures and helpers."""
 
+import pathlib
 from typing import Any
 
 from gandalf.config import (
@@ -8,9 +9,6 @@ from gandalf.config import (
     GraderConfig,
     LLMUsage,
 )
-
-import pathlib
-import pytest
 
 
 def make_config(**overrides: Any) -> GraderConfig:
