@@ -32,17 +32,17 @@ _TEMPLATES_DIR = Path(__file__).parent / "templates"
 
 def _render_template(
     template_name: str,
-    judge_prompt_template: str | None,
+    judge_prompt: str | None,
     **variables: Any,
 ) -> str:
     """Render a Jinja2 prompt template.
 
     The rendered result is sent to kick off a judge session.
-    If *judge_prompt_template* is provided (a raw Jinja2 template string),
+    If *judge_prompt* is provided (a raw Jinja2 template string),
     it is used instead of the built-in template identified by *template_name*.
     """
-    if judge_prompt_template is not None:
-        template_str = judge_prompt_template
+    if judge_prompt is not None:
+        template_str = judge_prompt
     else:
         template_str = (_TEMPLATES_DIR / template_name).read_text()
     return jinja2.Template(template_str).render(**variables)
@@ -54,12 +54,12 @@ def build_judge_prompt(
     criteria: str,
     verdict_path: str,
     judge_guidance: str = "",
-    judge_prompt_template: str | None = None,
+    judge_prompt: str | None = None,
 ) -> str:
     """Build the user message sent to kick off a single-criterion judge session."""
     return _render_template(
         "judge_single.j2",
-        judge_prompt_template,
+        judge_prompt,
         instructions=instructions,
         final_output=final_output,
         criteria=criteria,
@@ -74,7 +74,7 @@ def build_batch_judge_prompt(
     criteria: list[str],
     verdict_path: str,
     judge_guidance: str = "",
-    judge_prompt_template: str | None = None,
+    judge_prompt: str | None = None,
 ) -> str:
     """Build the user message sent to kick off a batch-mode judge session.
 
@@ -83,7 +83,7 @@ def build_batch_judge_prompt(
     """
     return _render_template(
         "judge_batch.j2",
-        judge_prompt_template,
+        judge_prompt,
         instructions=instructions,
         final_output=final_output,
         criteria=criteria,
@@ -291,7 +291,7 @@ def run_judge(input_path: str, output_path: str) -> None:
         criteria=judge_input.criteria,
         verdict_path=verdict_path,
         judge_guidance=judge_input.judge_guidance,
-        judge_prompt_template=judge_input.judge_prompt_template,
+        judge_prompt=judge_input.judge_prompt,
     )
 
     llm_usage = LLMUsage()
@@ -332,7 +332,7 @@ def run_judge_batch(input_path: str, output_path: str) -> None:
         criteria=judge_input.criteria,
         verdict_path=verdict_path,
         judge_guidance=judge_input.judge_guidance,
-        judge_prompt_template=judge_input.judge_prompt_template,
+        judge_prompt=judge_input.judge_prompt,
     )
 
     llm_usage = LLMUsage()
