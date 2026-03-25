@@ -20,8 +20,8 @@ The grader uses a two-process architecture:
 
 Two evaluation modes are supported:
 
-- **Sequential** (default): one agent session per rubric criterion.
-- **Batch**: all criteria evaluated in a single agent session.
+- **Batch** (default): all criteria evaluated in a single agent session.
+- **Sequential**: one agent session per rubric criterion.
 
 ## Installation
 
