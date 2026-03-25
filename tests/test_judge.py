@@ -9,6 +9,8 @@ from unittest.mock import patch
 
 import pytest
 
+from tests.conftest import MOCK_USAGE
+
 from gandalf.config import LLMUsage
 from gandalf.judge import (
     _make_verdict_path,
@@ -314,13 +316,6 @@ class TestReadBatchVerdict:
         results = _read_batch_verdict(str(p), 1)
         assert results[0].met is None
 
-
-MOCK_USAGE = LLMUsage(
-    cost_usd=0.05,
-    prompt_tokens=1000,
-    completion_tokens=500,
-    cache_read_tokens=200,
-)
 
 
 def _make_judge_input_json(tmp_path: pathlib.Path, criterion: str = "check something") -> str:

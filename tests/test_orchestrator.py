@@ -11,6 +11,8 @@ from unittest.mock import patch
 
 import pytest
 
+from tests.conftest import cr, make_batch_input, make_config
+
 from gandalf.config import (
     BatchJudgeInput,
     CriterionResult,
@@ -33,38 +35,24 @@ from gandalf.orchestrator import (
 )
 
 
-def _make_config(**overrides: Any) -> GraderConfig:
-    """Create a GraderConfig with sensible defaults for testing."""
-    defaults: dict[str, Any] = {
-        "instructions": "test",
-        "rubric_path": "/rubric.json",
-        "workdir": "/workspace",
-        "trajectory_path": "/logs/trajectory.json",
-        "sandbox_user": "sandbox",
-        "output_dir": "/logs/grader",
-    }
-    defaults.update(overrides)
-    return GraderConfig(**defaults)
-
-
 class TestResolveJudgeGuidance:
     def test_no_path_returns_empty(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("GRADER_JUDGE_GUIDANCE_PATH", raising=False)
-        config = _make_config()
+        config = make_config()
         assert resolve_judge_guidance(config) == ""
 
     def test_reads_file_from_toml_path(self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("GRADER_JUDGE_GUIDANCE_PATH", raising=False)
         guidance_file = tmp_path / "guidance.md"
         guidance_file.write_text("Use openpyxl for .xlsx files.")
-        config = _make_config(judge_guidance_path=str(guidance_file))
+        config = make_config(judge_guidance_path=str(guidance_file))
         assert resolve_judge_guidance(config) == "Use openpyxl for .xlsx files."
 
     def test_reads_file_from_env_var(self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
         guidance_file = tmp_path / "guidance.md"
         guidance_file.write_text("From env var.")
         monkeypatch.setenv("GRADER_JUDGE_GUIDANCE_PATH", str(guidance_file))
-        config = _make_config()  # no judge_guidance_path in TOML
+        config = make_config()  # no judge_guidance_path in TOML
         assert resolve_judge_guidance(config) == "From env var."
 
     def test_toml_takes_precedence_over_env(self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -73,18 +61,18 @@ class TestResolveJudgeGuidance:
         env_file = tmp_path / "env_guidance.md"
         env_file.write_text("From env.")
         monkeypatch.setenv("GRADER_JUDGE_GUIDANCE_PATH", str(env_file))
-        config = _make_config(judge_guidance_path=str(toml_file))
+        config = make_config(judge_guidance_path=str(toml_file))
         assert resolve_judge_guidance(config) == "From TOML."
 
     def test_missing_configured_toml_path_exits(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("GRADER_JUDGE_GUIDANCE_PATH", raising=False)
-        config = _make_config(judge_guidance_path="/nonexistent/guidance.md")
+        config = make_config(judge_guidance_path="/nonexistent/guidance.md")
         with pytest.raises(SystemExit):
             resolve_judge_guidance(config)
 
     def test_missing_configured_env_path_exits(self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:  # noqa: ARG002
         monkeypatch.setenv("GRADER_JUDGE_GUIDANCE_PATH", "/nonexistent/guidance.md")
-        config = _make_config()
+        config = make_config()
         with pytest.raises(SystemExit):
             resolve_judge_guidance(config)
 
@@ -92,7 +80,7 @@ class TestResolveJudgeGuidance:
         self, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.delenv("GRADER_JUDGE_GUIDANCE_PATH", raising=False)
-        config = _make_config(judge_guidance_path="/missing/guidance.md")
+        config = make_config(judge_guidance_path="/missing/guidance.md")
         with pytest.raises(SystemExit):
             resolve_judge_guidance(config)
         stderr = capsys.readouterr().err
@@ -103,7 +91,7 @@ class TestResolveJudgeGuidance:
         self, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setenv("GRADER_JUDGE_GUIDANCE_PATH", "/missing/env_guidance.md")
-        config = _make_config()
+        config = make_config()
         with pytest.raises(SystemExit):
             resolve_judge_guidance(config)
         stderr = capsys.readouterr().err
@@ -116,40 +104,40 @@ class TestResolveJudgeGuidanceInline:
 
     def test_inline_returns_content(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("GRADER_JUDGE_GUIDANCE_PATH", raising=False)
-        config = _make_config(judge_guidance="inline guidance text")
+        config = make_config(judge_guidance="inline guidance text")
         assert resolve_judge_guidance(config) == "inline guidance text"
 
     def test_inline_takes_precedence_over_env(self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
         env_file = tmp_path / "env_guidance.md"
         env_file.write_text("From env.")
         monkeypatch.setenv("GRADER_JUDGE_GUIDANCE_PATH", str(env_file))
-        config = _make_config(judge_guidance="inline wins")
+        config = make_config(judge_guidance="inline wins")
         assert resolve_judge_guidance(config) == "inline wins"
 
 
 class TestResolveJudgePrompt:
     def test_no_config_returns_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("GRADER_JUDGE_PROMPT_PATH", raising=False)
-        config = _make_config()
+        config = make_config()
         assert resolve_judge_prompt(config) is None
 
     def test_inline_returns_content(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("GRADER_JUDGE_PROMPT_PATH", raising=False)
-        config = _make_config(judge_prompt="Hello {{ instructions }}")
+        config = make_config(judge_prompt="Hello {{ instructions }}")
         assert resolve_judge_prompt(config) == "Hello {{ instructions }}"
 
     def test_reads_file_from_path(self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("GRADER_JUDGE_PROMPT_PATH", raising=False)
         template_file = tmp_path / "prompt.j2"
         template_file.write_text("Custom {{ criterion }}")
-        config = _make_config(judge_prompt_path=str(template_file))
+        config = make_config(judge_prompt_path=str(template_file))
         assert resolve_judge_prompt(config) == "Custom {{ criterion }}"
 
     def test_reads_file_from_env_var(self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
         template_file = tmp_path / "prompt.j2"
         template_file.write_text("From env var.")
         monkeypatch.setenv("GRADER_JUDGE_PROMPT_PATH", str(template_file))
-        config = _make_config()
+        config = make_config()
         assert resolve_judge_prompt(config) == "From env var."
 
     def test_path_takes_precedence_over_env(self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -158,25 +146,25 @@ class TestResolveJudgePrompt:
         env_file = tmp_path / "env_prompt.j2"
         env_file.write_text("From env.")
         monkeypatch.setenv("GRADER_JUDGE_PROMPT_PATH", str(env_file))
-        config = _make_config(judge_prompt_path=str(toml_file))
+        config = make_config(judge_prompt_path=str(toml_file))
         assert resolve_judge_prompt(config) == "From TOML."
 
     def test_inline_takes_precedence_over_env(self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
         env_file = tmp_path / "env_prompt.j2"
         env_file.write_text("From env.")
         monkeypatch.setenv("GRADER_JUDGE_PROMPT_PATH", str(env_file))
-        config = _make_config(judge_prompt="inline wins")
+        config = make_config(judge_prompt="inline wins")
         assert resolve_judge_prompt(config) == "inline wins"
 
     def test_missing_path_exits(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("GRADER_JUDGE_PROMPT_PATH", raising=False)
-        config = _make_config(judge_prompt_path="/nonexistent/prompt.j2")
+        config = make_config(judge_prompt_path="/nonexistent/prompt.j2")
         with pytest.raises(SystemExit):
             resolve_judge_prompt(config)
 
     def test_missing_env_path_exits(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("GRADER_JUDGE_PROMPT_PATH", "/nonexistent/prompt.j2")
-        config = _make_config()
+        config = make_config()
         with pytest.raises(SystemExit):
             resolve_judge_prompt(config)
 
@@ -186,7 +174,7 @@ class TestResolveJudgePrompt:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         monkeypatch.delenv("GRADER_JUDGE_PROMPT_PATH", raising=False)
-        config = _make_config(judge_prompt_path="/missing/prompt.j2")
+        config = make_config(judge_prompt_path="/missing/prompt.j2")
         with pytest.raises(SystemExit):
             resolve_judge_prompt(config)
         stderr = capsys.readouterr().err
@@ -199,7 +187,7 @@ class TestResolveJudgePrompt:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         monkeypatch.setenv("GRADER_JUDGE_PROMPT_PATH", "/missing/env_prompt.j2")
-        config = _make_config()
+        config = make_config()
         with pytest.raises(SystemExit):
             resolve_judge_prompt(config)
         stderr = capsys.readouterr().err
@@ -243,16 +231,6 @@ class TestJudgeEnvVars:
         assert keys == _JUDGE_ENV_ALLOWLIST
 
 
-def _make_batch_input(tmp_path: pathlib.Path, n: int = 2) -> BatchJudgeInput:
-    """Create a BatchJudgeInput with *n* criteria rooted in tmp_path."""
-    return BatchJudgeInput(
-        model="test-model",
-        instructions="do a thing",
-        final_output="done",
-        criteria=[f"criterion {i}" for i in range(n)],
-        workdir=str(tmp_path),
-    )
-
 
 def _run_ok(output_path: str, content: Any) -> subprocess.CompletedProcess[str]:
     """Return a subprocess.CompletedProcess that succeeds and writes *content* to output_path."""
@@ -290,7 +268,7 @@ class TestEvaluateAllCriteria:
         }
 
         mock_run.side_effect = _make_run_writing(output_content)
-        judge_input = _make_batch_input(tmp_path, n=2)
+        judge_input = make_batch_input(tmp_path, n=2)
         trace_path = str(tmp_path / "trace.txt")
 
         verdicts, usage = evaluate_all_criteria(judge_input, sandbox_user="sandbox", trace_path=trace_path)
@@ -307,7 +285,7 @@ class TestEvaluateAllCriteria:
         mock_clone.return_value = str(tmp_path)
         mock_run.return_value = subprocess.CompletedProcess(args=[], returncode=1, stdout="", stderr="segfault")
 
-        judge_input = _make_batch_input(tmp_path, n=2)
+        judge_input = make_batch_input(tmp_path, n=2)
         trace_path = str(tmp_path / "trace.txt")
 
         verdicts, usage = evaluate_all_criteria(judge_input, sandbox_user="sandbox", trace_path=trace_path)
@@ -324,7 +302,7 @@ class TestEvaluateAllCriteria:
         mock_clone.return_value = str(tmp_path)
         mock_run.side_effect = subprocess.TimeoutExpired(cmd="judge", timeout=300)
 
-        judge_input = _make_batch_input(tmp_path, n=2)
+        judge_input = make_batch_input(tmp_path, n=2)
         trace_path = str(tmp_path / "trace.txt")
 
         verdicts, usage = evaluate_all_criteria(judge_input, sandbox_user="sandbox", trace_path=trace_path)
@@ -349,7 +327,7 @@ class TestEvaluateAllCriteria:
 
         mock_run.side_effect = _write_invalid
 
-        judge_input = _make_batch_input(tmp_path, n=1)
+        judge_input = make_batch_input(tmp_path, n=1)
         trace_path = str(tmp_path / "trace.txt")
 
         verdicts, usage = evaluate_all_criteria(judge_input, sandbox_user="sandbox", trace_path=trace_path)
@@ -366,7 +344,7 @@ class TestEvaluateAllCriteria:
         # mock_run does not write to the output file — it stays empty (pre-created by grader)
         mock_run.return_value = subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
 
-        judge_input = _make_batch_input(tmp_path, n=2)
+        judge_input = make_batch_input(tmp_path, n=2)
         trace_path = str(tmp_path / "trace.txt")
 
         verdicts, usage = evaluate_all_criteria(judge_input, sandbox_user="sandbox", trace_path=trace_path)
@@ -446,7 +424,7 @@ class TestSandboxUserNone:
         workdir.mkdir()
         (workdir / "hello.txt").write_text("hi")
 
-        judge_input = _make_batch_input(tmp_path, n=2)
+        judge_input = make_batch_input(tmp_path, n=2)
         judge_input = judge_input.model_copy(update={"workdir": str(workdir)})
         trace_path = str(tmp_path / "trace.txt")
 
@@ -455,16 +433,6 @@ class TestSandboxUserNone:
         assert len(verdicts) == 2
         assert all(v.met is True for v in verdicts)
         assert usage.cost_usd == 0.01
-
-
-def _cr(*, weight: float, met: bool | None) -> CriterionResult:
-    """Helper to build a CriterionResult for scoring tests."""
-    return CriterionResult(
-        criterion="test",
-        weight=weight,
-        met=met,
-        reasoning="test",
-    )
 
 
 class TestScoring:
@@ -476,7 +444,7 @@ class TestScoring:
 
     def _info(self, results: list[CriterionResult], tmp_path: pathlib.Path) -> dict[str, Any]:
         """Run _write_info and return parsed info.json."""
-        config = _make_config(output_dir=str(tmp_path))
+        config = make_config(output_dir=str(tmp_path))
         errored = sum(1 for r in results if r.met is None)
         _write_info(config, results, LLMUsage(), errored)
         with open(tmp_path / "info.json") as f:
@@ -487,7 +455,7 @@ class TestScoring:
 
     def test_all_positive_all_met(self, tmp_path: pathlib.Path) -> None:
         """weights=[2,3], met=[T,T] → raw=5, reward=1.0, min=0, max=5."""
-        info = self._info([_cr(weight=2.0, met=True), _cr(weight=3.0, met=True)], tmp_path)
+        info = self._info([cr(weight=2.0, met=True), cr(weight=3.0, met=True)], tmp_path)
         assert info["raw_score"] == 5.0
         assert info["reward"] == 1.0
         assert info["minimum_score"] == 0.0
@@ -495,37 +463,37 @@ class TestScoring:
 
     def test_all_positive_partial_met(self, tmp_path: pathlib.Path) -> None:
         """weights=[2,3], met=[T,F] → raw=2, reward=0.4."""
-        info = self._info([_cr(weight=2.0, met=True), _cr(weight=3.0, met=False)], tmp_path)
+        info = self._info([cr(weight=2.0, met=True), cr(weight=3.0, met=False)], tmp_path)
         assert info["raw_score"] == 2.0
         assert info["reward"] == 0.4
 
     def test_all_positive_none_met(self, tmp_path: pathlib.Path) -> None:
         """weights=[2,3], met=[F,F] → raw=0, reward=0.0."""
-        info = self._info([_cr(weight=2.0, met=False), _cr(weight=3.0, met=False)], tmp_path)
+        info = self._info([cr(weight=2.0, met=False), cr(weight=3.0, met=False)], tmp_path)
         assert info["raw_score"] == 0.0
         assert info["reward"] == 0.0
 
     def test_mixed_negative_penalty_applied(self, tmp_path: pathlib.Path) -> None:
         """weights=[3,-1], met=[T,T] → raw=2, reward=2/3."""
-        info = self._info([_cr(weight=3.0, met=True), _cr(weight=-1.0, met=True)], tmp_path)
+        info = self._info([cr(weight=3.0, met=True), cr(weight=-1.0, met=True)], tmp_path)
         assert info["raw_score"] == 2.0
         assert info["reward"] == 0.6667
 
     def test_mixed_negative_drives_below_zero_clipped(self, tmp_path: pathlib.Path) -> None:
         """weights=[1,-3], met=[F,T] → raw=-3, reward=0.0 (clip lower bound)."""
-        info = self._info([_cr(weight=1.0, met=False), _cr(weight=-3.0, met=True)], tmp_path)
+        info = self._info([cr(weight=1.0, met=False), cr(weight=-3.0, met=True)], tmp_path)
         assert info["raw_score"] == -3.0
         assert info["reward"] == 0.0
 
     def test_negative_not_met_no_penalty(self, tmp_path: pathlib.Path) -> None:
         """weights=[3,-1], met=[T,F] → raw=3, reward=1.0."""
-        info = self._info([_cr(weight=3.0, met=True), _cr(weight=-1.0, met=False)], tmp_path)
+        info = self._info([cr(weight=3.0, met=True), cr(weight=-1.0, met=False)], tmp_path)
         assert info["raw_score"] == 3.0
         assert info["reward"] == 1.0
 
     def test_all_negative_denominator_zero(self, tmp_path: pathlib.Path) -> None:
         """weights=[-2,-3], met=[T,T] → raw=-5, reward=0.0 (no divide-by-zero)."""
-        info = self._info([_cr(weight=-2.0, met=True), _cr(weight=-3.0, met=True)], tmp_path)
+        info = self._info([cr(weight=-2.0, met=True), cr(weight=-3.0, met=True)], tmp_path)
         assert info["raw_score"] == -5.0
         assert info["reward"] == 0.0
 
@@ -537,13 +505,13 @@ class TestScoring:
 
     def test_errored_positive_criterion(self, tmp_path: pathlib.Path) -> None:
         """weights=[3,2], met=[T,None] → raw=3, reward=3/5=0.6."""
-        info = self._info([_cr(weight=3.0, met=True), _cr(weight=2.0, met=None)], tmp_path)
+        info = self._info([cr(weight=3.0, met=True), cr(weight=2.0, met=None)], tmp_path)
         assert info["raw_score"] == 3.0
         assert info["reward"] == 0.6
 
     def test_errored_negative_criterion(self, tmp_path: pathlib.Path) -> None:
         """weights=[3,-2], met=[T,None] → raw=3, reward=3/3=1.0."""
-        info = self._info([_cr(weight=3.0, met=True), _cr(weight=-2.0, met=None)], tmp_path)
+        info = self._info([cr(weight=3.0, met=True), cr(weight=-2.0, met=None)], tmp_path)
         assert info["raw_score"] == 3.0
         assert info["reward"] == 1.0
 
@@ -551,7 +519,7 @@ class TestScoring:
 
     def test_info_json_contains_reward_and_raw_score(self, tmp_path: pathlib.Path) -> None:
         """info.json must contain both reward and raw_score fields."""
-        info = self._info([_cr(weight=2.0, met=True), _cr(weight=3.0, met=False)], tmp_path)
+        info = self._info([cr(weight=2.0, met=True), cr(weight=3.0, met=False)], tmp_path)
         assert "reward" in info
         assert "raw_score" in info
         assert isinstance(info["reward"], float)
@@ -559,7 +527,7 @@ class TestScoring:
 
     def test_info_json_contains_minimum_and_maximum_score(self, tmp_path: pathlib.Path) -> None:
         info = self._info(
-            [_cr(weight=10.0, met=True), _cr(weight=5.0, met=False), _cr(weight=-3.0, met=True)], tmp_path
+            [cr(weight=10.0, met=True), cr(weight=5.0, met=False), cr(weight=-3.0, met=True)], tmp_path
         )
         assert info["minimum_score"] == -3.0
         assert info["maximum_score"] == 15.0
@@ -603,7 +571,7 @@ class TestOutputFilePermissions:
             return subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
 
         mock_run.side_effect = _capture
-        judge_input = _make_batch_input(tmp_path, n=1)
+        judge_input = make_batch_input(tmp_path, n=1)
 
         evaluate_all_criteria(judge_input, sandbox_user="sandbox", trace_path=str(tmp_path / "trace.txt"))
 
@@ -646,7 +614,7 @@ class TestOutputFilePermissions:
             return subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
 
         mock_run.side_effect = _capture_and_check_permissions
-        judge_input = _make_batch_input(tmp_path, n=1)
+        judge_input = make_batch_input(tmp_path, n=1)
         evaluate_all_criteria(judge_input, sandbox_user="sandbox", trace_path=str(tmp_path / "trace.txt"))
 
         assert captured.get("exists"), (
@@ -1172,3 +1140,191 @@ class TestCloneWorkspace:
             assert not (cloned / "dir_link").is_file()
         finally:
             shutil.rmtree(clone_dir, ignore_errors=True)
+
+    def test_symlink_loop_is_skipped_not_fatal(self, tmp_path: pathlib.Path) -> None:
+        """Circular symlinks in the workspace must be skipped, not crash the clone."""
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        (workspace / "good.txt").write_text("ok")
+        # Create a symlink loop: a -> b -> a
+        (workspace / "loop_a").symlink_to(workspace / "loop_b")
+        (workspace / "loop_b").symlink_to(workspace / "loop_a")
+
+        clone_dir = _clone_workspace(str(workspace))
+        try:
+            cloned = pathlib.Path(clone_dir)
+            assert (cloned / "good.txt").read_text() == "ok"
+            assert not (cloned / "loop_a").exists()
+            assert not (cloned / "loop_b").exists()
+        finally:
+            shutil.rmtree(clone_dir, ignore_errors=True)
+
+
+class TestBatchRetryNegativeWeights:
+    """Issue 9: batch mode + retries + negative weights combined."""
+
+    @patch("gandalf.orchestrator.resolve_judge_guidance", return_value="")
+    @patch("gandalf.orchestrator.resolve_judge_prompt", return_value=None)
+    @patch("gandalf.orchestrator.load_trajectory_final_output", return_value="done")
+    @patch("gandalf.orchestrator.load_rubric")
+    @patch("gandalf.orchestrator.load_config")
+    @patch("gandalf.orchestrator.evaluate_all_criteria")
+    def test_batch_retry_with_negative_weights(
+        self,
+        mock_eval_all: Any,
+        mock_config: Any,
+        mock_rubric: Any,
+        mock_trajectory: Any,  # noqa: ARG002
+        mock_prompt: Any,  # noqa: ARG002
+        mock_guidance: Any,  # noqa: ARG002
+        tmp_path: pathlib.Path,
+    ) -> None:
+        """Batch retry with negative weights: errored negative-weight criterion
+        resolves on retry and the penalty is correctly applied."""
+
+        output_dir = str(tmp_path / "output")
+        os.makedirs(output_dir, exist_ok=True)
+
+        mock_config.return_value = GraderConfig(
+            instructions="test",
+            rubric_path="/rubric.json",
+            workdir=str(tmp_path),
+            trajectory_path="/logs/trajectory.json",
+            sandbox_user="sandbox",
+            output_dir=output_dir,
+            judge_retries=1,
+            mode="batch",
+        )
+        mock_rubric.return_value = [
+            RubricItem(criterion="correct output", weight=3.0),
+            RubricItem(criterion="no hardcoded values", weight=-1.0),
+            RubricItem(criterion="has tests", weight=2.0),
+        ]
+
+        # Initial: c0 passes, c1 (negative) errors, c2 passes
+        initial_verdicts = [
+            Verdict(met=True, reasoning="ok"),
+            Verdict(met=None, reasoning="timeout"),
+            Verdict(met=True, reasoning="ok"),
+        ]
+        # Retry: c1 (negative) met — penalty applies
+        retry_verdicts = [
+            Verdict(met=True, reasoning="hardcoded detected"),
+        ]
+        mock_eval_all.side_effect = [
+            (initial_verdicts, LLMUsage(cost_usd=0.1)),
+            (retry_verdicts, LLMUsage(cost_usd=0.02)),
+        ]
+
+        with patch("sys.argv", ["prog", "--config", "dummy.toml"]):
+            main()
+
+        info = json.loads((tmp_path / "output" / "info.json").read_text())
+        assert info["errored_criterion_count"] == 0
+        # raw = 3 + (-1) + 2 = 4, max_positive = 5, reward = 4/5 = 0.8
+        assert info["raw_score"] == 4.0
+        assert info["reward"] == 0.8
+
+        reward = json.loads((tmp_path / "output" / "reward.json").read_text())
+        assert reward["reward"] == 0.8
+
+
+class TestRetryJudgePromptPassthrough:
+    """Issue 10: verify resolve_judge_prompt flows through to retry calls."""
+
+    @patch("gandalf.orchestrator.resolve_judge_guidance", return_value="")
+    @patch("gandalf.orchestrator.resolve_judge_prompt", return_value="CUSTOM {{ criterion }}")
+    @patch("gandalf.orchestrator.load_trajectory_final_output", return_value="done")
+    @patch("gandalf.orchestrator.load_rubric")
+    @patch("gandalf.orchestrator.load_config")
+    @patch("gandalf.orchestrator.evaluate_criterion")
+    def test_sequential_retry_passes_judge_prompt(
+        self,
+        mock_eval: Any,
+        mock_config: Any,
+        mock_rubric: Any,
+        mock_trajectory: Any,  # noqa: ARG002
+        mock_prompt: Any,  # noqa: ARG002
+        mock_guidance: Any,  # noqa: ARG002
+        tmp_path: pathlib.Path,
+    ) -> None:
+        """Custom judge_prompt must be forwarded to retry evaluate_criterion calls."""
+
+        output_dir = str(tmp_path / "output")
+        os.makedirs(output_dir, exist_ok=True)
+
+        mock_config.return_value = GraderConfig(
+            instructions="test",
+            rubric_path="/rubric.json",
+            workdir=str(tmp_path),
+            trajectory_path="/logs/trajectory.json",
+            sandbox_user="sandbox",
+            output_dir=output_dir,
+            judge_retries=1,
+            mode="sequential",
+        )
+        mock_rubric.return_value = [RubricItem(criterion="c1", weight=1.0)]
+
+        # First call errors, retry succeeds
+        mock_eval.side_effect = [
+            (Verdict(met=None, reasoning="timeout"), LLMUsage()),
+            (Verdict(met=True, reasoning="ok"), LLMUsage()),
+        ]
+
+        with patch("sys.argv", ["prog", "--config", "dummy.toml"]):
+            main()
+
+        # Both the initial call and the retry call should have judge_prompt set
+        assert mock_eval.call_count == 2
+        for call in mock_eval.call_args_list:
+            judge_input = call[0][0]
+            assert judge_input.judge_prompt == "CUSTOM {{ criterion }}"
+
+    @patch("gandalf.orchestrator.resolve_judge_guidance", return_value="")
+    @patch("gandalf.orchestrator.resolve_judge_prompt", return_value="BATCH CUSTOM {{ criteria }}")
+    @patch("gandalf.orchestrator.load_trajectory_final_output", return_value="done")
+    @patch("gandalf.orchestrator.load_rubric")
+    @patch("gandalf.orchestrator.load_config")
+    @patch("gandalf.orchestrator.evaluate_all_criteria")
+    def test_batch_retry_passes_judge_prompt(
+        self,
+        mock_eval_all: Any,
+        mock_config: Any,
+        mock_rubric: Any,
+        mock_trajectory: Any,  # noqa: ARG002
+        mock_prompt: Any,  # noqa: ARG002
+        mock_guidance: Any,  # noqa: ARG002
+        tmp_path: pathlib.Path,
+    ) -> None:
+        """Custom judge_prompt must be forwarded to retry evaluate_all_criteria calls."""
+
+        output_dir = str(tmp_path / "output")
+        os.makedirs(output_dir, exist_ok=True)
+
+        mock_config.return_value = GraderConfig(
+            instructions="test",
+            rubric_path="/rubric.json",
+            workdir=str(tmp_path),
+            trajectory_path="/logs/trajectory.json",
+            sandbox_user="sandbox",
+            output_dir=output_dir,
+            judge_retries=1,
+            mode="batch",
+        )
+        mock_rubric.return_value = [
+            RubricItem(criterion="c1", weight=1.0),
+            RubricItem(criterion="c2", weight=1.0),
+        ]
+
+        mock_eval_all.side_effect = [
+            ([Verdict(met=True, reasoning="ok"), Verdict(met=None, reasoning="err")], LLMUsage()),
+            ([Verdict(met=True, reasoning="ok retry")], LLMUsage()),
+        ]
+
+        with patch("sys.argv", ["prog", "--config", "dummy.toml"]):
+            main()
+
+        assert mock_eval_all.call_count == 2
+        for call in mock_eval_all.call_args_list:
+            judge_input = call[0][0]
+            assert judge_input.judge_prompt == "BATCH CUSTOM {{ criteria }}"
