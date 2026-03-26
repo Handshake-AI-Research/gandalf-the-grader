@@ -16,10 +16,10 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
 dependencies = [
-    "openhands-sdk>=1.11.2",
-    "openhands-tools>=1.11.2",
-    "pydantic>=2.12.5",
-    "litellm>=1.82.0,!=1.82.7,!=1.82.8",
+    "litellm>=1.82.0,<2",
+    "openhands-sdk>=1.11.2,<2",
+    "openhands-tools>=1.11.2,<2",
+    "pydantic>=2.12.5,<3",
 ]
 dynamic = ["optional-dependencies"]
 
