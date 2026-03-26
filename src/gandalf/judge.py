@@ -89,11 +89,6 @@ def build_batch_judge_prompt(
     )
 
 
-# ---------------------------------------------------------------------------
-# Verdict readers
-# ---------------------------------------------------------------------------
-
-
 def read_verdict(verdict_path: str) -> Verdict:
     """Read and validate the verdict file written by the judge agent."""
     try:
@@ -169,11 +164,6 @@ def read_batch_verdict(verdict_path: str, n_criteria: int) -> list[Verdict]:
         )
     else:
         return results
-
-
-# ---------------------------------------------------------------------------
-# Agent session helpers
-# ---------------------------------------------------------------------------
 
 
 def make_verdict_path(prefix: str = "verdict_", directory: str | None = None) -> str:
@@ -253,11 +243,6 @@ def run_agent_session(
         )
     except Exception:  # noqa: BLE001
         return LLMUsage()
-
-
-# ---------------------------------------------------------------------------
-# Entry points
-# ---------------------------------------------------------------------------
 
 
 def run_judge(input_path: str, output_path: str) -> None:
