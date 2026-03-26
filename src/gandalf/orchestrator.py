@@ -36,6 +36,7 @@ from gandalf.models import (
     load_rubric,
 )
 
+
 def load_trajectory_final_output(path: str) -> str:
     """Load an ATIF trajectory file and extract the final agent message."""
     with open(path) as f:
@@ -53,6 +54,7 @@ def load_trajectory_final_output(path: str) -> str:
                 break
 
     return final_output
+
 
 # Environment variables forwarded to the inner judge subprocess (via sudo).
 # Only these are passed — everything else is stripped to avoid leaking secrets
