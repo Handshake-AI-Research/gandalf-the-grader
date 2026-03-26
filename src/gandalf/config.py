@@ -2,7 +2,7 @@
 
 import tomllib
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, TypeAdapter, model_validator
 
@@ -80,34 +80,32 @@ class GraderConfig(BaseModel):
         return self
 
 
-class JudgeInput(BaseModel):
-    """Input passed to the inner judge for a single criterion evaluation."""
+class _BaseJudgeInput(BaseModel):
+    """Shared fields for all judge input types."""
 
     model: str
     instructions: str
     final_output: str
-    criterion: str
     workdir: str
     mcp_servers: list[MCPServer] = Field(default_factory=list)
     judge_guidance: str = ""
     judge_prompt: str | None = None
 
 
-class BatchJudgeInput(BaseModel):
+class JudgeInput(_BaseJudgeInput):
+    """Input passed to the inner judge for a single criterion evaluation."""
+
+    criterion: str
+
+
+class BatchJudgeInput(_BaseJudgeInput):
     """Input passed to the inner judge for batch (all-criteria) evaluation.
 
     Weights are intentionally omitted from criteria so the judge evaluates
     each criterion on its own merits.  Indices are derived from position.
     """
 
-    model: str
-    instructions: str
-    final_output: str
     criteria: list[str]
-    workdir: str
-    mcp_servers: list[MCPServer] = Field(default_factory=list)
-    judge_guidance: str = ""
-    judge_prompt: str | None = None
 
 
 class LLMUsage(BaseModel):
@@ -118,6 +116,15 @@ class LLMUsage(BaseModel):
     completion_tokens: int = 0
     cache_read_tokens: int = 0
 
+    def __add__(self, other: "LLMUsage") -> "LLMUsage":
+        """Sum two LLMUsage instances field-by-field."""
+        return LLMUsage(
+            cost_usd=self.cost_usd + other.cost_usd,
+            prompt_tokens=self.prompt_tokens + other.prompt_tokens,
+            completion_tokens=self.completion_tokens + other.completion_tokens,
+            cache_read_tokens=self.cache_read_tokens + other.cache_read_tokens,
+        )
+
 
 class Verdict(BaseModel):
     """Verdict returned by the inner judge."""
@@ -125,6 +132,16 @@ class Verdict(BaseModel):
     met: bool | None
     reasoning: str
     evidence: list[str] = Field(default_factory=list)
+
+    @classmethod
+    def from_raw(cls, data: dict[str, Any]) -> "Verdict":
+        """Create a Verdict from a raw JSON-parsed dict, normalizing types."""
+        raw_met = data.get("met")
+        return cls(
+            met=bool(raw_met) if raw_met is not None else None,
+            reasoning=str(data.get("reasoning", "No reasoning provided.")),
+            evidence=list(data.get("evidence", [])),
+        )
 
 
 class CriterionResult(BaseModel):

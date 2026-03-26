@@ -89,6 +89,18 @@ def _resolve_optional_file(
         return f.read()
 
 
+def _resolve_config_value(
+    inline: str | None,
+    config_path: str | None,
+    env_var: str,
+    config_label: str,
+) -> str | None:
+    """Resolve a config value: inline content → config path → env var → ``None``."""
+    path = config_path or os.environ.get(env_var)
+    source = f"{config_label} in grader config" if config_path else f"{env_var} env var"
+    return _resolve_optional_file(inline, path, source)
+
+
 def resolve_judge_prompt(config: GraderConfig) -> str | None:
     """Resolve the custom judge prompt template (inline, path, or env var).
 
@@ -98,12 +110,11 @@ def resolve_judge_prompt(config: GraderConfig) -> str | None:
       3. GRADER_JUDGE_PROMPT_PATH env var
       4. No custom template (returns None, uses built-in)
     """
-    path = config.judge_prompt_path or os.environ.get("GRADER_JUDGE_PROMPT_PATH")
-    source = "judge_prompt_path in grader config" if config.judge_prompt_path else "GRADER_JUDGE_PROMPT_PATH env var"
-    return _resolve_optional_file(
+    return _resolve_config_value(
         config.judge_prompt,
-        path,
-        source,
+        config.judge_prompt_path,
+        "GRADER_JUDGE_PROMPT_PATH",
+        "judge_prompt_path",
     )
 
 
@@ -116,16 +127,15 @@ def resolve_judge_guidance(config: GraderConfig) -> str:
       3. GRADER_JUDGE_GUIDANCE_PATH env var
       4. No guidance (empty string)
     """
-    path = config.judge_guidance_path or os.environ.get("GRADER_JUDGE_GUIDANCE_PATH")
-    source = (
-        "judge_guidance_path in grader config" if config.judge_guidance_path else "GRADER_JUDGE_GUIDANCE_PATH env var"
+    return (
+        _resolve_config_value(
+            config.judge_guidance,
+            config.judge_guidance_path,
+            "GRADER_JUDGE_GUIDANCE_PATH",
+            "judge_guidance_path",
+        )
+        or ""
     )
-    result = _resolve_optional_file(
-        config.judge_guidance,
-        path,
-        source,
-    )
-    return result or ""
 
 
 def _clone_workspace(src: str) -> str:
@@ -292,16 +302,6 @@ def _save_trace(trace_path: str, stdout: str, stderr: str, returncode: int) -> N
         f.write(stderr)
 
 
-def _merge_usage(a: LLMUsage, b: LLMUsage) -> LLMUsage:
-    """Sum two LLMUsage instances field-by-field."""
-    return LLMUsage(
-        cost_usd=a.cost_usd + b.cost_usd,
-        prompt_tokens=a.prompt_tokens + b.prompt_tokens,
-        completion_tokens=a.completion_tokens + b.completion_tokens,
-        cache_read_tokens=a.cache_read_tokens + b.cache_read_tokens,
-    )
-
-
 def _format_status(*, met: bool | None) -> str:
     """Format criterion evaluation status for display."""
     if met is True:
@@ -353,7 +353,7 @@ def _run_sequential(
             trace_path=trace_path,
             timeout=config.judge_timeout,
         )
-        total_usage = _merge_usage(total_usage, usage)
+        total_usage = total_usage + usage
         results.append(_verdict_to_result(item, verdicts[0]))
         print(f"  -> {_format_status(met=verdicts[0].met)}: {verdicts[0].reasoning[:120]}")  # noqa: T201
     return results, total_usage
@@ -506,7 +506,7 @@ def main() -> None:
             trace_suffix=f"_retry{attempt + 1}",
         )
         results = _apply_retries(results, retry_results, errored)
-        llm_usage = _merge_usage(llm_usage, retry_usage)
+        llm_usage = llm_usage + retry_usage
 
     # 4. ALWAYS write info.json (even on hard fail)
     final_errored = _get_errored_indices(results)
