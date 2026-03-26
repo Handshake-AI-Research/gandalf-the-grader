@@ -1,4 +1,4 @@
-"""Configuration models for the grader."""
+"""Data models and configuration loaders for the grader."""
 
 import tomllib
 from pathlib import Path
@@ -142,6 +142,11 @@ class Verdict(BaseModel):
             reasoning=str(data.get("reasoning", "No reasoning provided.")),
             evidence=list(data.get("evidence", [])),
         )
+
+    @classmethod
+    def errors(cls, n: int, reason: str) -> list["Verdict"]:
+        """Return *n* error verdicts (met=None) that all share the same reason."""
+        return [cls(met=None, reasoning=reason) for _ in range(n)]
 
 
 class CriterionResult(BaseModel):

@@ -25,8 +25,7 @@ from openhands.tools.file_editor import FileEditorTool
 from openhands.tools.terminal import TerminalTool
 from pydantic import TypeAdapter
 
-from gandalf.common import fail_verdicts
-from gandalf.config import BatchJudgeInput, JudgeInput, LLMUsage, MCPServer, Verdict
+from gandalf.models import BatchJudgeInput, JudgeInput, LLMUsage, MCPServer, Verdict
 
 TEMPLATES_DIR = Path(__file__).parent / "templates"
 
@@ -122,14 +121,14 @@ def read_batch_verdict(verdict_path: str, n_criteria: int) -> list[Verdict]:
         with open(verdict_path) as f:
             content = f.read().strip()
         if not content:
-            return fail_verdicts(
+            return Verdict.errors(
                 n_criteria,
                 "Judge agent wrote an empty verdict file.",
             )
 
         verdicts_raw = json.loads(content)
         if not isinstance(verdicts_raw, list):
-            return fail_verdicts(
+            return Verdict.errors(
                 n_criteria,
                 f"Expected JSON array, got {type(verdicts_raw).__name__}",
             )
@@ -159,12 +158,12 @@ def read_batch_verdict(verdict_path: str, n_criteria: int) -> list[Verdict]:
                 )
 
     except FileNotFoundError:
-        return fail_verdicts(
+        return Verdict.errors(
             n_criteria,
             "Judge agent did not write a verdict file.",
         )
     except json.JSONDecodeError as e:
-        return fail_verdicts(
+        return Verdict.errors(
             n_criteria,
             f"Judge agent wrote invalid JSON: {e}",
         )
@@ -323,7 +322,7 @@ def run_judge_batch(input_path: str, output_path: str) -> None:
         llm_usage = run_agent_session(judge_input.model, judge_input.mcp_servers, judge_input.workdir, prompt)
         verdicts = read_batch_verdict(verdict_path, n_criteria)
     except Exception as e:  # noqa: BLE001
-        verdicts = fail_verdicts(
+        verdicts = Verdict.errors(
             n_criteria,
             f"Judge execution error: {e}",
         )

@@ -3,7 +3,7 @@
 import pathlib
 from typing import Any
 
-from gandalf.config import (
+from gandalf.models import (
     BatchJudgeInput,
     CriterionResult,
     GraderConfig,

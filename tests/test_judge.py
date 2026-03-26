@@ -9,7 +9,6 @@ from unittest.mock import patch
 
 import pytest
 
-from gandalf.config import LLMUsage
 from gandalf.judge import (
     build_batch_judge_prompt,
     build_judge_prompt,
@@ -19,6 +18,7 @@ from gandalf.judge import (
     run_judge,
     run_judge_batch,
 )
+from gandalf.models import LLMUsage
 from tests.conftest import MOCK_USAGE
 
 

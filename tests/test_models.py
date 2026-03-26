@@ -1,4 +1,4 @@
-"""Tests for gandalf.config."""
+"""Tests for gandalf.models."""
 
 import os
 import pathlib
@@ -7,7 +7,7 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 
-from gandalf.config import (
+from gandalf.models import (
     BatchJudgeInput,
     CriterionResult,
     EvaluationInfo,

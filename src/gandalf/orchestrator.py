@@ -23,8 +23,7 @@ import tempfile
 
 from pydantic import TypeAdapter
 
-from gandalf.common import fail_verdicts
-from gandalf.config import (
+from gandalf.models import (
     BatchJudgeInput,
     CriterionResult,
     EvaluationInfo,
@@ -208,7 +207,7 @@ def run_judge(
     n = len(judge_input.criteria) if isinstance(judge_input, BatchJudgeInput) else 1
 
     def fail(msg: str) -> tuple[list[Verdict], LLMUsage]:
-        return fail_verdicts(n, msg), LLMUsage()
+        return Verdict.errors(n, msg), LLMUsage()
 
     try:
         clone_dir = clone_workspace(judge_input.workdir)
