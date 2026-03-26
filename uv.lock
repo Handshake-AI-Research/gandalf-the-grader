@@ -900,10 +900,10 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "litellm", specifier = "==1.82.0" },
-    { name = "openhands-sdk", specifier = "==1.11.5" },
-    { name = "openhands-tools", specifier = "==1.11.5" },
-    { name = "pydantic", specifier = "==2.12.5" },
+    { name = "litellm", specifier = ">=1.82.0,!=1.82.7,!=1.82.8" },
+    { name = "openhands-sdk", specifier = ">=1.11.2" },
+    { name = "openhands-tools", specifier = ">=1.11.2" },
+    { name = "pydantic", specifier = ">=2.12.5" },
 ]
 
 [package.metadata.requires-dev]
