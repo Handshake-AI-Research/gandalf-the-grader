@@ -105,12 +105,7 @@ def _read_verdict(verdict_path: str) -> Verdict:
         data = json.loads(content)
         if "met" not in data:
             return Verdict(met=None, reasoning=f"Verdict missing 'met' field: {content[:200]}")
-        raw_met = data["met"]
-        return Verdict(
-            met=bool(raw_met) if raw_met is not None else None,
-            reasoning=str(data.get("reasoning", "No reasoning provided.")),
-            evidence=list(data.get("evidence", [])),
-        )
+        return Verdict.from_raw(data)
     except FileNotFoundError:
         return Verdict(met=None, reasoning="Judge agent did not write a verdict file.")
     except json.JSONDecodeError as e:
@@ -149,12 +144,7 @@ def _read_batch_verdict(verdict_path: str, n_criteria: int) -> list[Verdict]:
             except (ValueError, TypeError):
                 continue
             if 0 <= idx < n_criteria:
-                raw_met = v.get("met")
-                by_index[idx] = Verdict(
-                    met=bool(raw_met) if raw_met is not None else None,
-                    reasoning=str(v.get("reasoning", "No reasoning provided.")),
-                    evidence=list(v.get("evidence", [])),
-                )
+                by_index[idx] = Verdict.from_raw(v)
 
         results: list[Verdict] = []
         for i in range(n_criteria):
