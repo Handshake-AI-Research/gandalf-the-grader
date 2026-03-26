@@ -363,7 +363,7 @@ output_dir = "/logs/grader"
 class TestMutualExclusivity:
     """Verify that inline and path variants cannot both be set."""
 
-    def _base_kwargs(self) -> dict[str, Any]:
+    def base_kwargs(self) -> dict[str, Any]:
         return {
             "instructions": "test",
             "rubric_path": "/rubric.json",
@@ -374,68 +374,68 @@ class TestMutualExclusivity:
         }
 
     def test_rubric_inline_only(self) -> None:
-        kw = self._base_kwargs()
+        kw = self.base_kwargs()
         del kw["rubric_path"]
         cfg = GraderConfig(**kw, rubric=[RubricItem(criterion="c", weight=1.0)])
         assert cfg.rubric is not None
         assert cfg.rubric_path is None
 
     def test_rubric_path_only(self) -> None:
-        cfg = GraderConfig(**self._base_kwargs())
+        cfg = GraderConfig(**self.base_kwargs())
         assert cfg.rubric_path == "/rubric.json"
         assert cfg.rubric is None
 
     def test_rubric_both_raises(self) -> None:
         with pytest.raises(ValidationError, match="rubric"):
             GraderConfig(
-                **self._base_kwargs(),
+                **self.base_kwargs(),
                 rubric=[RubricItem(criterion="c", weight=1.0)],
             )
 
     def test_rubric_neither_raises(self) -> None:
-        kw = self._base_kwargs()
+        kw = self.base_kwargs()
         del kw["rubric_path"]
         with pytest.raises(ValidationError, match="rubric"):
             GraderConfig(**kw)
 
     def test_judge_guidance_inline_only(self) -> None:
-        cfg = GraderConfig(**self._base_kwargs(), judge_guidance="inline text")
+        cfg = GraderConfig(**self.base_kwargs(), judge_guidance="inline text")
         assert cfg.judge_guidance == "inline text"
         assert cfg.judge_guidance_path is None
 
     def test_judge_guidance_path_only(self) -> None:
-        cfg = GraderConfig(**self._base_kwargs(), judge_guidance_path="/some/file.md")
+        cfg = GraderConfig(**self.base_kwargs(), judge_guidance_path="/some/file.md")
         assert cfg.judge_guidance_path == "/some/file.md"
         assert cfg.judge_guidance is None
 
     def test_judge_guidance_both_raises(self) -> None:
         with pytest.raises(ValidationError, match="judge_guidance"):
             GraderConfig(
-                **self._base_kwargs(),
+                **self.base_kwargs(),
                 judge_guidance="inline",
                 judge_guidance_path="/some/file.md",
             )
 
     def test_judge_prompt_inline_only(self) -> None:
-        cfg = GraderConfig(**self._base_kwargs(), judge_prompt="template text")
+        cfg = GraderConfig(**self.base_kwargs(), judge_prompt="template text")
         assert cfg.judge_prompt == "template text"
         assert cfg.judge_prompt_path is None
 
     def test_judge_prompt_path_only(self) -> None:
-        cfg = GraderConfig(**self._base_kwargs(), judge_prompt_path="/some/template.j2")
+        cfg = GraderConfig(**self.base_kwargs(), judge_prompt_path="/some/template.j2")
         assert cfg.judge_prompt_path == "/some/template.j2"
         assert cfg.judge_prompt is None
 
     def test_judge_prompt_both_raises(self) -> None:
         with pytest.raises(ValidationError, match="judge_prompt"):
             GraderConfig(
-                **self._base_kwargs(),
+                **self.base_kwargs(),
                 judge_prompt="inline",
                 judge_prompt_path="/some/template.j2",
             )
 
     def test_neither_set_is_valid(self) -> None:
-        cfg = GraderConfig(**self._base_kwargs())
+        cfg = GraderConfig(**self.base_kwargs())
         assert cfg.judge_guidance is None
         assert cfg.judge_guidance_path is None
         assert cfg.judge_prompt is None
