@@ -11,7 +11,7 @@ from unittest.mock import patch
 
 import pytest
 
-from gandalf.config import (
+from gandalf.models import (
     CriterionResult,
     GraderConfig,
     JudgeInput,
