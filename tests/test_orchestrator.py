@@ -20,14 +20,14 @@ from gandalf.config import (
     Verdict,
 )
 from gandalf.orchestrator import (
-    _JUDGE_ENV_ALLOWLIST,
-    _clone_workspace,
-    _judge_env_vars,
-    _run_judge,
-    _write_info,
+    JUDGE_ENV_ALLOWLIST,
+    clone_workspace,
+    judge_env_vars,
     main,
     resolve_judge_guidance,
     resolve_judge_prompt,
+    run_judge,
+    write_info,
 )
 from tests.conftest import cr, make_batch_input, make_config
 
@@ -200,7 +200,7 @@ class TestJudgeEnvVars:
         monkeypatch.setenv("PATH", "/usr/bin")
         monkeypatch.setenv("SECRET_TOKEN", "should-not-leak")
         monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "should-not-leak")
-        result = _judge_env_vars()
+        result = judge_env_vars()
         keys = {item.split("=", 1)[0] for item in result}
         assert "LLM_API_KEY" in keys
         assert "PATH" in keys
@@ -210,47 +210,47 @@ class TestJudgeEnvVars:
     def test_empty_values_are_skipped(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("LLM_API_KEY", "")
         monkeypatch.setenv("LLM_BASE_URL", "https://api.example.com")
-        result = _judge_env_vars()
+        result = judge_env_vars()
         keys = {item.split("=", 1)[0] for item in result}
         assert "LLM_API_KEY" not in keys
         assert "LLM_BASE_URL" in keys
 
     def test_missing_vars_are_silently_skipped(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        for key in _JUDGE_ENV_ALLOWLIST:
+        for key in JUDGE_ENV_ALLOWLIST:
             monkeypatch.delenv(key, raising=False)
-        assert _judge_env_vars() == []
+        assert judge_env_vars() == []
 
     def test_all_allowlisted_vars_forwarded_when_present(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        for key in _JUDGE_ENV_ALLOWLIST:
+        for key in JUDGE_ENV_ALLOWLIST:
             monkeypatch.setenv(key, f"val-{key}")
-        result = _judge_env_vars()
+        result = judge_env_vars()
         keys = {item.split("=", 1)[0] for item in result}
-        assert keys == _JUDGE_ENV_ALLOWLIST
+        assert keys == JUDGE_ENV_ALLOWLIST
 
 
-def _run_ok(output_path: str, content: Any) -> subprocess.CompletedProcess[str]:
+def run_ok(output_path: str, content: Any) -> subprocess.CompletedProcess[str]:
     """Return a subprocess.CompletedProcess that succeeds and writes *content* to output_path."""
     pathlib.Path(output_path).write_text(json.dumps(content))
     return subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
 
 
-def _make_run_writing(content: Any) -> Callable[..., subprocess.CompletedProcess[str]]:
+def make_run_writing(content: Any) -> Callable[..., subprocess.CompletedProcess[str]]:
     """Return a mock_run side_effect that writes *content* to the --output path in the cmd."""
 
-    def _side_effect(cmd: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[str]:
+    def side_effect(cmd: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[str]:
         for i, arg in enumerate(cmd):
             if arg == "--output" and i + 1 < len(cmd):
                 pathlib.Path(cmd[i + 1]).write_text(json.dumps(content))
                 break
         return subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
 
-    return _side_effect
+    return side_effect
 
 
 class TestEvaluateAllCriteria:
     """Tests for evaluate_all_criteria IPC contract: dict, list, invalid shapes, failures."""
 
-    @patch("gandalf.orchestrator._clone_workspace")
+    @patch("gandalf.orchestrator.clone_workspace")
     @patch("gandalf.orchestrator.subprocess.run")
     def test_new_dict_shape(self, mock_run: Any, mock_clone: Any, tmp_path: pathlib.Path) -> None:
         """New object format: {verdicts: [...], llm_usage: {...}}."""
@@ -263,18 +263,18 @@ class TestEvaluateAllCriteria:
             "llm_usage": {"cost_usd": 0.1, "prompt_tokens": 500},
         }
 
-        mock_run.side_effect = _make_run_writing(output_content)
+        mock_run.side_effect = make_run_writing(output_content)
         judge_input = make_batch_input(tmp_path, n=2)
         trace_path = str(tmp_path / "trace.txt")
 
-        verdicts, usage = _run_judge(judge_input, sandbox_user="sandbox", trace_path=trace_path)
+        verdicts, usage = run_judge(judge_input, sandbox_user="sandbox", trace_path=trace_path)
 
         assert len(verdicts) == 2
         assert verdicts[0].met is True
         assert verdicts[1].met is False
         assert usage.cost_usd == 0.1
 
-    @patch("gandalf.orchestrator._clone_workspace")
+    @patch("gandalf.orchestrator.clone_workspace")
     @patch("gandalf.orchestrator.subprocess.run")
     def test_nonzero_exit_returns_fail_all(self, mock_run: Any, mock_clone: Any, tmp_path: pathlib.Path) -> None:
         """Non-zero exit code from subprocess returns fail-all with empty usage."""
@@ -284,14 +284,14 @@ class TestEvaluateAllCriteria:
         judge_input = make_batch_input(tmp_path, n=2)
         trace_path = str(tmp_path / "trace.txt")
 
-        verdicts, usage = _run_judge(judge_input, sandbox_user="sandbox", trace_path=trace_path)
+        verdicts, usage = run_judge(judge_input, sandbox_user="sandbox", trace_path=trace_path)
 
         assert len(verdicts) == 2
         assert all(v.met is None for v in verdicts)
         assert "exit 1" in verdicts[0].reasoning
         assert usage == LLMUsage()
 
-    @patch("gandalf.orchestrator._clone_workspace")
+    @patch("gandalf.orchestrator.clone_workspace")
     @patch("gandalf.orchestrator.subprocess.run")
     def test_timeout_returns_fail_all(self, mock_run: Any, mock_clone: Any, tmp_path: pathlib.Path) -> None:
         """Subprocess timeout returns fail-all with empty usage."""
@@ -301,38 +301,38 @@ class TestEvaluateAllCriteria:
         judge_input = make_batch_input(tmp_path, n=2)
         trace_path = str(tmp_path / "trace.txt")
 
-        verdicts, usage = _run_judge(judge_input, sandbox_user="sandbox", trace_path=trace_path)
+        verdicts, usage = run_judge(judge_input, sandbox_user="sandbox", trace_path=trace_path)
 
         assert len(verdicts) == 2
         assert all(v.met is None for v in verdicts)
         assert "timed out" in verdicts[0].reasoning.lower()
         assert usage == LLMUsage()
 
-    @patch("gandalf.orchestrator._clone_workspace")
+    @patch("gandalf.orchestrator.clone_workspace")
     @patch("gandalf.orchestrator.subprocess.run")
     def test_invalid_json_in_output_file(self, mock_run: Any, mock_clone: Any, tmp_path: pathlib.Path) -> None:
         """Non-JSON content in output file returns fail-all."""
         mock_clone.return_value = str(tmp_path)
 
-        def _write_invalid(cmd: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[str]:
+        def write_invalid(cmd: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[str]:
             for i, arg in enumerate(cmd):
                 if arg == "--output" and i + 1 < len(cmd):
                     pathlib.Path(cmd[i + 1]).write_text("not valid json {{{")
                     break
             return subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
 
-        mock_run.side_effect = _write_invalid
+        mock_run.side_effect = write_invalid
 
         judge_input = make_batch_input(tmp_path, n=1)
         trace_path = str(tmp_path / "trace.txt")
 
-        verdicts, usage = _run_judge(judge_input, sandbox_user="sandbox", trace_path=trace_path)
+        verdicts, usage = run_judge(judge_input, sandbox_user="sandbox", trace_path=trace_path)
 
         assert len(verdicts) == 1
         assert verdicts[0].met is None
         assert usage == LLMUsage()
 
-    @patch("gandalf.orchestrator._clone_workspace")
+    @patch("gandalf.orchestrator.clone_workspace")
     @patch("gandalf.orchestrator.subprocess.run")
     def test_empty_output_file(self, mock_run: Any, mock_clone: Any, tmp_path: pathlib.Path) -> None:
         """If the judge wrote nothing to the output file, return fail-all."""
@@ -343,7 +343,7 @@ class TestEvaluateAllCriteria:
         judge_input = make_batch_input(tmp_path, n=2)
         trace_path = str(tmp_path / "trace.txt")
 
-        verdicts, usage = _run_judge(judge_input, sandbox_user="sandbox", trace_path=trace_path)
+        verdicts, usage = run_judge(judge_input, sandbox_user="sandbox", trace_path=trace_path)
 
         assert len(verdicts) == 2
         assert all(v.met is None for v in verdicts)
@@ -351,7 +351,7 @@ class TestEvaluateAllCriteria:
 
 
 @pytest.fixture
-def _fake_judge(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> pathlib.Path:
+def fake_judge(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> pathlib.Path:
     """Create a fake ``gandalf-the-grader-judge`` on PATH.
 
     The script reads --input/--output args and writes a valid verdict to the
@@ -394,7 +394,7 @@ with open(args.output, "w") as f:
 class TestSandboxUserNone:
     """When sandbox_user is None the judge runs as the ambient user (no sudo)."""
 
-    @pytest.mark.usefixtures("_fake_judge")
+    @pytest.mark.usefixtures("fake_judge")
     def test_evaluate_criterion_no_sudo(self, tmp_path: pathlib.Path) -> None:
         workdir = tmp_path / "workspace"
         workdir.mkdir()
@@ -409,12 +409,12 @@ class TestSandboxUserNone:
         )
         trace_path = str(tmp_path / "trace.txt")
 
-        verdicts, _usage = _run_judge(judge_input, sandbox_user=None, trace_path=trace_path)
+        verdicts, _usage = run_judge(judge_input, sandbox_user=None, trace_path=trace_path)
 
         assert verdicts[0].met is True
         assert verdicts[0].reasoning == "ok"
 
-    @pytest.mark.usefixtures("_fake_judge")
+    @pytest.mark.usefixtures("fake_judge")
     def test_evaluate_all_criteria_no_sudo(self, tmp_path: pathlib.Path) -> None:
         workdir = tmp_path / "workspace"
         workdir.mkdir()
@@ -424,7 +424,7 @@ class TestSandboxUserNone:
         judge_input = judge_input.model_copy(update={"workdir": str(workdir)})
         trace_path = str(tmp_path / "trace.txt")
 
-        verdicts, usage = _run_judge(judge_input, sandbox_user=None, trace_path=trace_path)
+        verdicts, usage = run_judge(judge_input, sandbox_user=None, trace_path=trace_path)
 
         assert len(verdicts) == 2
         assert all(v.met is True for v in verdicts)
@@ -432,17 +432,17 @@ class TestSandboxUserNone:
 
 
 class TestScoring:
-    """Tests for _write_info scoring: raw_score, reward, and bounds.
+    """Tests for write_info scoring: raw_score, reward, and bounds.
 
     Each test asserts both raw_score and reward together so the full
     scoring pipeline is verified in one place per scenario.
     """
 
-    def _info(self, results: list[CriterionResult], tmp_path: pathlib.Path) -> dict[str, Any]:
-        """Run _write_info and return parsed info.json."""
+    def info(self, results: list[CriterionResult], tmp_path: pathlib.Path) -> dict[str, Any]:
+        """Run write_info and return parsed info.json."""
         config = make_config(output_dir=str(tmp_path))
         errored = sum(1 for r in results if r.met is None)
-        _write_info(config, results, LLMUsage(), errored)
+        write_info(config, results, LLMUsage(), errored)
         with open(tmp_path / "info.json") as f:
             result: dict[str, Any] = json.load(f)
             return result
@@ -451,7 +451,7 @@ class TestScoring:
 
     def test_all_positive_all_met(self, tmp_path: pathlib.Path) -> None:
         """weights=[2,3], met=[T,T] → raw=5, reward=1.0, min=0, max=5."""
-        info = self._info([cr(weight=2.0, met=True), cr(weight=3.0, met=True)], tmp_path)
+        info = self.info([cr(weight=2.0, met=True), cr(weight=3.0, met=True)], tmp_path)
         assert info["raw_score"] == 5.0
         assert info["reward"] == 1.0
         assert info["minimum_score"] == 0.0
@@ -459,55 +459,55 @@ class TestScoring:
 
     def test_all_positive_partial_met(self, tmp_path: pathlib.Path) -> None:
         """weights=[2,3], met=[T,F] → raw=2, reward=0.4."""
-        info = self._info([cr(weight=2.0, met=True), cr(weight=3.0, met=False)], tmp_path)
+        info = self.info([cr(weight=2.0, met=True), cr(weight=3.0, met=False)], tmp_path)
         assert info["raw_score"] == 2.0
         assert info["reward"] == 0.4
 
     def test_all_positive_none_met(self, tmp_path: pathlib.Path) -> None:
         """weights=[2,3], met=[F,F] → raw=0, reward=0.0."""
-        info = self._info([cr(weight=2.0, met=False), cr(weight=3.0, met=False)], tmp_path)
+        info = self.info([cr(weight=2.0, met=False), cr(weight=3.0, met=False)], tmp_path)
         assert info["raw_score"] == 0.0
         assert info["reward"] == 0.0
 
     def test_mixed_negative_penalty_applied(self, tmp_path: pathlib.Path) -> None:
         """weights=[3,-1], met=[T,T] → raw=2, reward=2/3."""
-        info = self._info([cr(weight=3.0, met=True), cr(weight=-1.0, met=True)], tmp_path)
+        info = self.info([cr(weight=3.0, met=True), cr(weight=-1.0, met=True)], tmp_path)
         assert info["raw_score"] == 2.0
         assert info["reward"] == 0.6667
 
     def test_mixed_negative_drives_below_zero_clipped(self, tmp_path: pathlib.Path) -> None:
         """weights=[1,-3], met=[F,T] → raw=-3, reward=0.0 (clip lower bound)."""
-        info = self._info([cr(weight=1.0, met=False), cr(weight=-3.0, met=True)], tmp_path)
+        info = self.info([cr(weight=1.0, met=False), cr(weight=-3.0, met=True)], tmp_path)
         assert info["raw_score"] == -3.0
         assert info["reward"] == 0.0
 
     def test_negative_not_met_no_penalty(self, tmp_path: pathlib.Path) -> None:
         """weights=[3,-1], met=[T,F] → raw=3, reward=1.0."""
-        info = self._info([cr(weight=3.0, met=True), cr(weight=-1.0, met=False)], tmp_path)
+        info = self.info([cr(weight=3.0, met=True), cr(weight=-1.0, met=False)], tmp_path)
         assert info["raw_score"] == 3.0
         assert info["reward"] == 1.0
 
     def test_all_negative_denominator_zero(self, tmp_path: pathlib.Path) -> None:
         """weights=[-2,-3], met=[T,T] → raw=-5, reward=0.0 (no divide-by-zero)."""
-        info = self._info([cr(weight=-2.0, met=True), cr(weight=-3.0, met=True)], tmp_path)
+        info = self.info([cr(weight=-2.0, met=True), cr(weight=-3.0, met=True)], tmp_path)
         assert info["raw_score"] == -5.0
         assert info["reward"] == 0.0
 
     def test_empty_rubric(self, tmp_path: pathlib.Path) -> None:
         """No criteria → raw=0, reward=0."""
-        info = self._info([], tmp_path)
+        info = self.info([], tmp_path)
         assert info["raw_score"] == 0.0
         assert info["reward"] == 0.0
 
     def test_errored_positive_criterion(self, tmp_path: pathlib.Path) -> None:
         """weights=[3,2], met=[T,None] → raw=3, reward=3/5=0.6."""
-        info = self._info([cr(weight=3.0, met=True), cr(weight=2.0, met=None)], tmp_path)
+        info = self.info([cr(weight=3.0, met=True), cr(weight=2.0, met=None)], tmp_path)
         assert info["raw_score"] == 3.0
         assert info["reward"] == 0.6
 
     def test_errored_negative_criterion(self, tmp_path: pathlib.Path) -> None:
         """weights=[3,-2], met=[T,None] → raw=3, reward=3/3=1.0."""
-        info = self._info([cr(weight=3.0, met=True), cr(weight=-2.0, met=None)], tmp_path)
+        info = self.info([cr(weight=3.0, met=True), cr(weight=-2.0, met=None)], tmp_path)
         assert info["raw_score"] == 3.0
         assert info["reward"] == 1.0
 
@@ -515,14 +515,14 @@ class TestScoring:
 
     def test_info_json_contains_reward_and_raw_score(self, tmp_path: pathlib.Path) -> None:
         """info.json must contain both reward and raw_score fields."""
-        info = self._info([cr(weight=2.0, met=True), cr(weight=3.0, met=False)], tmp_path)
+        info = self.info([cr(weight=2.0, met=True), cr(weight=3.0, met=False)], tmp_path)
         assert "reward" in info
         assert "raw_score" in info
         assert isinstance(info["reward"], float)
         assert isinstance(info["raw_score"], (int, float))
 
     def test_info_json_contains_minimum_and_maximum_score(self, tmp_path: pathlib.Path) -> None:
-        info = self._info([cr(weight=10.0, met=True), cr(weight=5.0, met=False), cr(weight=-3.0, met=True)], tmp_path)
+        info = self.info([cr(weight=10.0, met=True), cr(weight=5.0, met=False), cr(weight=-3.0, met=True)], tmp_path)
         assert info["minimum_score"] == -3.0
         assert info["maximum_score"] == 15.0
 
@@ -537,14 +537,14 @@ class TestOutputFilePermissions:
     existing file, not *create* one in a restricted directory.
     """
 
-    @patch("gandalf.orchestrator._clone_workspace")
+    @patch("gandalf.orchestrator.clone_workspace")
     @patch("gandalf.orchestrator.subprocess.run")
     def test_output_file_exists_before_subprocess(self, mock_run: Any, mock_clone: Any, tmp_path: pathlib.Path) -> None:
         """Output file must be pre-created so sandbox_user can write it without /tmp access."""
         mock_clone.return_value = str(tmp_path)
         captured_cmd: dict[str, Any] = {}
 
-        def _capture(cmd: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[str]:
+        def capture(cmd: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[str]:
             output_path = cmd[cmd.index("--output") + 1]
             captured_cmd["output_path"] = output_path
             captured_cmd["existed_before_run"] = pathlib.Path(output_path).exists()
@@ -564,10 +564,10 @@ class TestOutputFilePermissions:
             )
             return subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
 
-        mock_run.side_effect = _capture
+        mock_run.side_effect = capture
         judge_input = make_batch_input(tmp_path, n=1)
 
-        _run_judge(judge_input, sandbox_user="sandbox", trace_path=str(tmp_path / "trace.txt"))
+        run_judge(judge_input, sandbox_user="sandbox", trace_path=str(tmp_path / "trace.txt"))
 
         assert "output_path" in captured_cmd, "subprocess was not called"
         assert captured_cmd.get("existed_before_run"), (
@@ -575,7 +575,7 @@ class TestOutputFilePermissions:
             "sandbox_user would need to create it in /tmp (may not be world-writable)"
         )
 
-    @patch("gandalf.orchestrator._clone_workspace")
+    @patch("gandalf.orchestrator.clone_workspace")
     @patch("gandalf.orchestrator.subprocess.run")
     def test_output_file_is_world_writable(self, mock_run: Any, mock_clone: Any, tmp_path: pathlib.Path) -> None:
         """Pre-created output file must have world-write so sandbox_user can overwrite it.
@@ -586,7 +586,7 @@ class TestOutputFilePermissions:
         mock_clone.return_value = str(tmp_path)
         captured: dict[str, Any] = {}
 
-        def _capture_and_check_permissions(cmd: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[str]:
+        def capture_and_check_permissions(cmd: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[str]:
             output_path = cmd[cmd.index("--output") + 1]
             captured["path"] = output_path
             captured["exists"] = pathlib.Path(output_path).exists()
@@ -607,9 +607,9 @@ class TestOutputFilePermissions:
             )
             return subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
 
-        mock_run.side_effect = _capture_and_check_permissions
+        mock_run.side_effect = capture_and_check_permissions
         judge_input = make_batch_input(tmp_path, n=1)
-        _run_judge(judge_input, sandbox_user="sandbox", trace_path=str(tmp_path / "trace.txt"))
+        run_judge(judge_input, sandbox_user="sandbox", trace_path=str(tmp_path / "trace.txt"))
 
         assert captured.get("exists"), (
             "Output file was NOT pre-created before subprocess.run — "
@@ -629,7 +629,7 @@ class TestRetryLogic:
     @patch("gandalf.orchestrator.load_trajectory_final_output", return_value="done")
     @patch("gandalf.orchestrator.load_rubric")
     @patch("gandalf.orchestrator.load_config")
-    @patch("gandalf.orchestrator._run_judge")
+    @patch("gandalf.orchestrator.run_judge")
     def test_sequential_retry_resolves_errored_criterion(
         self,
         mock_eval: Any,
@@ -682,7 +682,7 @@ class TestRetryLogic:
     @patch("gandalf.orchestrator.load_trajectory_final_output", return_value="done")
     @patch("gandalf.orchestrator.load_rubric")
     @patch("gandalf.orchestrator.load_config")
-    @patch("gandalf.orchestrator._run_judge")
+    @patch("gandalf.orchestrator.run_judge")
     def test_batch_retry_resolves_errored_criteria(
         self,
         mock_eval_all: Any,
@@ -741,7 +741,7 @@ class TestRetryLogic:
     @patch("gandalf.orchestrator.load_trajectory_final_output", return_value="done")
     @patch("gandalf.orchestrator.load_rubric")
     @patch("gandalf.orchestrator.load_config")
-    @patch("gandalf.orchestrator._run_judge")
+    @patch("gandalf.orchestrator.run_judge")
     def test_judge_retries_zero_disables_retry(
         self,
         mock_eval: Any,
@@ -782,7 +782,7 @@ class TestRetryLogic:
     @patch("gandalf.orchestrator.load_trajectory_final_output", return_value="done")
     @patch("gandalf.orchestrator.load_rubric")
     @patch("gandalf.orchestrator.load_config")
-    @patch("gandalf.orchestrator._run_judge")
+    @patch("gandalf.orchestrator.run_judge")
     def test_hard_fail_writes_info_not_reward(
         self,
         mock_eval: Any,
@@ -824,7 +824,7 @@ class TestRetryLogic:
     @patch("gandalf.orchestrator.load_trajectory_final_output", return_value="done")
     @patch("gandalf.orchestrator.load_rubric")
     @patch("gandalf.orchestrator.load_config")
-    @patch("gandalf.orchestrator._run_judge")
+    @patch("gandalf.orchestrator.run_judge")
     def test_all_resolved_after_retry(
         self,
         mock_eval: Any,
@@ -873,7 +873,7 @@ class TestRetryLogic:
     @patch("gandalf.orchestrator.load_trajectory_final_output", return_value="done")
     @patch("gandalf.orchestrator.load_rubric")
     @patch("gandalf.orchestrator.load_config")
-    @patch("gandalf.orchestrator._run_judge")
+    @patch("gandalf.orchestrator.run_judge")
     def test_reward_json_with_negative_weights(
         self,
         mock_eval: Any,
@@ -923,7 +923,7 @@ class TestRetryLogic:
 
 
 class TestCloneWorkspace:
-    """Tests for _clone_workspace resilience to unreadable files."""
+    """Tests for clone_workspace resilience to unreadable files."""
 
     def test_readable_files_are_cloned(self, tmp_path: pathlib.Path) -> None:
         workspace = tmp_path / "workspace"
@@ -932,7 +932,7 @@ class TestCloneWorkspace:
         (workspace / "subdir").mkdir()
         (workspace / "subdir" / "nested.txt").write_text("world")
 
-        clone_dir = _clone_workspace(str(workspace))
+        clone_dir = clone_workspace(str(workspace))
         try:
             assert (pathlib.Path(clone_dir) / "file.txt").read_text() == "hello"
             assert (pathlib.Path(clone_dir) / "subdir" / "nested.txt").read_text() == "world"
@@ -949,7 +949,7 @@ class TestCloneWorkspace:
         restricted.chmod(0o000)
 
         try:
-            clone_dir = _clone_workspace(str(workspace))
+            clone_dir = clone_workspace(str(workspace))
             cloned = pathlib.Path(clone_dir)
             assert (cloned / "readable.txt").read_text() == "ok"
             assert not (cloned / "restricted.txt").exists()
@@ -965,7 +965,7 @@ class TestCloneWorkspace:
         restricted.chmod(0o000)
 
         try:
-            clone_dir = _clone_workspace(str(workspace))
+            clone_dir = clone_workspace(str(workspace))
             stderr = capsys.readouterr().err
             assert "skipped 1 unreadable path(s)" in stderr
             assert "noperm.txt" in stderr
@@ -985,7 +985,7 @@ class TestCloneWorkspace:
         restricted_dir.chmod(0o000)
 
         try:
-            clone_dir = _clone_workspace(str(workspace))
+            clone_dir = clone_workspace(str(workspace))
             cloned = pathlib.Path(clone_dir)
             assert (cloned / "readable.txt").read_text() == "ok"
             # The restricted directory's contents should not appear
@@ -1002,7 +1002,7 @@ class TestCloneWorkspace:
         restricted_dir.chmod(0o000)
 
         try:
-            clone_dir = _clone_workspace(str(workspace))
+            clone_dir = clone_workspace(str(workspace))
             stderr = capsys.readouterr().err
             assert "skipped 1 unreadable path(s)" in stderr
             assert ".cache" in stderr
@@ -1015,7 +1015,7 @@ class TestCloneWorkspace:
         workspace.mkdir()
         (workspace / "file.txt").write_text("data")
 
-        clone_dir = _clone_workspace(str(workspace))
+        clone_dir = clone_workspace(str(workspace))
         try:
             cloned = pathlib.Path(clone_dir)
             assert os.stat(clone_dir).st_mode & 0o070 == 0o070
@@ -1042,7 +1042,7 @@ class TestCloneWorkspace:
         (workspace / "subdir").mkdir()
         (workspace / "subdir" / "nested.txt").write_text("world")
 
-        clone_dir = _clone_workspace(str(workspace))
+        clone_dir = clone_workspace(str(workspace))
         try:
             clone = pathlib.Path(clone_dir)
 
@@ -1076,7 +1076,7 @@ class TestCloneWorkspace:
         data = workspace / "data.txt"
         data.write_text("plain")
 
-        clone_dir = _clone_workspace(str(workspace))
+        clone_dir = clone_workspace(str(workspace))
         try:
             cloned = pathlib.Path(clone_dir)
             cloned_script_mode = (cloned / "run.sh").stat().st_mode
@@ -1104,7 +1104,7 @@ class TestCloneWorkspace:
         (workspace / "good.txt").write_text("ok")
         (workspace / "broken_link").symlink_to("/nonexistent/target")
 
-        clone_dir = _clone_workspace(str(workspace))
+        clone_dir = clone_workspace(str(workspace))
         try:
             cloned = pathlib.Path(clone_dir)
             assert (cloned / "good.txt").read_text() == "ok"
@@ -1126,7 +1126,7 @@ class TestCloneWorkspace:
         (workspace / "good.txt").write_text("ok")
         (workspace / "dir_link").symlink_to(real_dir)
 
-        clone_dir = _clone_workspace(str(workspace))
+        clone_dir = clone_workspace(str(workspace))
         try:
             cloned = pathlib.Path(clone_dir)
             assert (cloned / "good.txt").read_text() == "ok"
@@ -1144,7 +1144,7 @@ class TestCloneWorkspace:
         (workspace / "loop_a").symlink_to(workspace / "loop_b")
         (workspace / "loop_b").symlink_to(workspace / "loop_a")
 
-        clone_dir = _clone_workspace(str(workspace))
+        clone_dir = clone_workspace(str(workspace))
         try:
             cloned = pathlib.Path(clone_dir)
             assert (cloned / "good.txt").read_text() == "ok"
@@ -1162,7 +1162,7 @@ class TestBatchRetryNegativeWeights:
     @patch("gandalf.orchestrator.load_trajectory_final_output", return_value="done")
     @patch("gandalf.orchestrator.load_rubric")
     @patch("gandalf.orchestrator.load_config")
-    @patch("gandalf.orchestrator._run_judge")
+    @patch("gandalf.orchestrator.run_judge")
     def test_batch_retry_with_negative_weights(
         self,
         mock_eval_all: Any,
@@ -1231,7 +1231,7 @@ class TestRetryJudgePromptPassthrough:
     @patch("gandalf.orchestrator.load_trajectory_final_output", return_value="done")
     @patch("gandalf.orchestrator.load_rubric")
     @patch("gandalf.orchestrator.load_config")
-    @patch("gandalf.orchestrator._run_judge")
+    @patch("gandalf.orchestrator.run_judge")
     def test_sequential_retry_passes_judge_prompt(
         self,
         mock_eval: Any,
@@ -1279,7 +1279,7 @@ class TestRetryJudgePromptPassthrough:
     @patch("gandalf.orchestrator.load_trajectory_final_output", return_value="done")
     @patch("gandalf.orchestrator.load_rubric")
     @patch("gandalf.orchestrator.load_config")
-    @patch("gandalf.orchestrator._run_judge")
+    @patch("gandalf.orchestrator.run_judge")
     def test_batch_retry_passes_judge_prompt(
         self,
         mock_eval_all: Any,

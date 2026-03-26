@@ -28,10 +28,10 @@ from pydantic import TypeAdapter
 from gandalf.common import fail_verdicts
 from gandalf.config import BatchJudgeInput, JudgeInput, LLMUsage, MCPServer, Verdict
 
-_TEMPLATES_DIR = Path(__file__).parent / "templates"
+TEMPLATES_DIR = Path(__file__).parent / "templates"
 
 
-def _render_template(
+def render_template(
     template_name: str,
     judge_prompt: str | None,
     **variables: Any,
@@ -42,7 +42,7 @@ def _render_template(
     If *judge_prompt* is provided (a raw Jinja2 template string),
     it is used instead of the built-in template identified by *template_name*.
     """
-    template_str = judge_prompt if judge_prompt is not None else (_TEMPLATES_DIR / template_name).read_text()
+    template_str = judge_prompt if judge_prompt is not None else (TEMPLATES_DIR / template_name).read_text()
     return jinja2.Template(template_str).render(**variables)
 
 
@@ -55,7 +55,7 @@ def build_judge_prompt(
     judge_prompt: str | None = None,
 ) -> str:
     """Build the user message sent to kick off a single-criterion judge session."""
-    return _render_template(
+    return render_template(
         "judge_single.j2",
         judge_prompt,
         instructions=instructions,
@@ -79,7 +79,7 @@ def build_batch_judge_prompt(
     Evaluates all criteria in one session, writing a JSON array of verdicts
     instead of a single object.
     """
-    return _render_template(
+    return render_template(
         "judge_batch.j2",
         judge_prompt,
         instructions=instructions,
@@ -95,7 +95,7 @@ def build_batch_judge_prompt(
 # ---------------------------------------------------------------------------
 
 
-def _read_verdict(verdict_path: str) -> Verdict:
+def read_verdict(verdict_path: str) -> Verdict:
     """Read and validate the verdict file written by the judge agent."""
     try:
         with open(verdict_path) as f:
@@ -112,7 +112,7 @@ def _read_verdict(verdict_path: str) -> Verdict:
         return Verdict(met=None, reasoning=f"Judge agent wrote invalid JSON: {e}")
 
 
-def _read_batch_verdict(verdict_path: str, n_criteria: int) -> list[Verdict]:
+def read_batch_verdict(verdict_path: str, n_criteria: int) -> list[Verdict]:
     """Read and validate the batch verdict file written by the judge agent.
 
     Returns a list of Verdicts, one per criterion index.  Missing
@@ -177,7 +177,7 @@ def _read_batch_verdict(verdict_path: str, n_criteria: int) -> list[Verdict]:
 # ---------------------------------------------------------------------------
 
 
-def _make_verdict_path(prefix: str = "verdict_", directory: str | None = None) -> str:
+def make_verdict_path(prefix: str = "verdict_", directory: str | None = None) -> str:
     """Generate a unique path for the judge to write verdicts to.
 
     Unlike mkstemp, this does NOT pre-create the file — allowing the agent
@@ -192,7 +192,7 @@ def _make_verdict_path(prefix: str = "verdict_", directory: str | None = None) -
     return os.path.join(base, f"{prefix}{secrets.token_hex(8)}.json")
 
 
-def _run_agent_session(
+def run_agent_session(
     model: str,
     mcp_servers: list[MCPServer],
     workdir: str,
@@ -266,7 +266,7 @@ def run_judge(input_path: str, output_path: str) -> None:
     with open(input_path) as f:
         judge_input = JudgeInput.model_validate_json(f.read())
 
-    verdict_path = _make_verdict_path(prefix="verdict_", directory=judge_input.workdir)
+    verdict_path = make_verdict_path(prefix="verdict_", directory=judge_input.workdir)
 
     prompt = build_judge_prompt(
         instructions=judge_input.instructions,
@@ -279,8 +279,8 @@ def run_judge(input_path: str, output_path: str) -> None:
 
     llm_usage = LLMUsage()
     try:
-        llm_usage = _run_agent_session(judge_input.model, judge_input.mcp_servers, judge_input.workdir, prompt)
-        verdict = _read_verdict(verdict_path)
+        llm_usage = run_agent_session(judge_input.model, judge_input.mcp_servers, judge_input.workdir, prompt)
+        verdict = read_verdict(verdict_path)
     except Exception as e:  # noqa: BLE001
         verdict = Verdict(met=None, reasoning=f"Judge execution error: {e}")
     finally:
@@ -307,7 +307,7 @@ def run_judge_batch(input_path: str, output_path: str) -> None:
 
     n_criteria = len(judge_input.criteria)
 
-    verdict_path = _make_verdict_path(prefix="verdict_batch_", directory=judge_input.workdir)
+    verdict_path = make_verdict_path(prefix="verdict_batch_", directory=judge_input.workdir)
 
     prompt = build_batch_judge_prompt(
         instructions=judge_input.instructions,
@@ -320,8 +320,8 @@ def run_judge_batch(input_path: str, output_path: str) -> None:
 
     llm_usage = LLMUsage()
     try:
-        llm_usage = _run_agent_session(judge_input.model, judge_input.mcp_servers, judge_input.workdir, prompt)
-        verdicts = _read_batch_verdict(verdict_path, n_criteria)
+        llm_usage = run_agent_session(judge_input.model, judge_input.mcp_servers, judge_input.workdir, prompt)
+        verdicts = read_batch_verdict(verdict_path, n_criteria)
     except Exception as e:  # noqa: BLE001
         verdicts = fail_verdicts(
             n_criteria,

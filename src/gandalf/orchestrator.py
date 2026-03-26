@@ -41,7 +41,7 @@ from gandalf.trajectory import load_trajectory_final_output
 # Environment variables forwarded to the inner judge subprocess (via sudo).
 # Only these are passed — everything else is stripped to avoid leaking secrets
 # or host-specific state into the sandbox.
-_JUDGE_ENV_ALLOWLIST = frozenset(
+JUDGE_ENV_ALLOWLIST = frozenset(
     {
         "PATH",
         "LLM_API_KEY",
@@ -59,12 +59,12 @@ _JUDGE_ENV_ALLOWLIST = frozenset(
 )
 
 
-def _judge_env_vars() -> list[str]:
+def judge_env_vars() -> list[str]:
     """Build the ``KEY=VALUE`` list for the judge subprocess environment."""
-    return [f"{k}={v}" for k, v in os.environ.items() if k in _JUDGE_ENV_ALLOWLIST and v]
+    return [f"{k}={v}" for k, v in os.environ.items() if k in JUDGE_ENV_ALLOWLIST and v]
 
 
-def _resolve_optional_file(
+def resolve_optional_file(
     inline: str | None,
     path: str | None,
     label: str,
@@ -89,7 +89,7 @@ def _resolve_optional_file(
         return f.read()
 
 
-def _resolve_config_value(
+def resolve_config_value(
     inline: str | None,
     config_path: str | None,
     env_var: str,
@@ -98,7 +98,7 @@ def _resolve_config_value(
     """Resolve a config value: inline content → config path → env var → ``None``."""
     path = config_path or os.environ.get(env_var)
     source = f"{config_label} in grader config" if config_path else f"{env_var} env var"
-    return _resolve_optional_file(inline, path, source)
+    return resolve_optional_file(inline, path, source)
 
 
 def resolve_judge_prompt(config: GraderConfig) -> str | None:
@@ -110,7 +110,7 @@ def resolve_judge_prompt(config: GraderConfig) -> str | None:
       3. GRADER_JUDGE_PROMPT_PATH env var
       4. No custom template (returns None, uses built-in)
     """
-    return _resolve_config_value(
+    return resolve_config_value(
         config.judge_prompt,
         config.judge_prompt_path,
         "GRADER_JUDGE_PROMPT_PATH",
@@ -128,7 +128,7 @@ def resolve_judge_guidance(config: GraderConfig) -> str:
       4. No guidance (empty string)
     """
     return (
-        _resolve_config_value(
+        resolve_config_value(
             config.judge_guidance,
             config.judge_guidance_path,
             "GRADER_JUDGE_GUIDANCE_PATH",
@@ -138,7 +138,7 @@ def resolve_judge_guidance(config: GraderConfig) -> str:
     )
 
 
-def _clone_workspace(src: str) -> str:
+def clone_workspace(src: str) -> str:
     """Clone workspace into a temp directory accessible to the sandbox user.
 
     Walks the source tree once, skipping unreadable directories and files with
@@ -155,10 +155,10 @@ def _clone_workspace(src: str) -> str:
     os.chmod(clone_dir, 0o777)  # noqa: S103
     skipped: list[str] = []
 
-    def _on_walk_error(err: OSError) -> None:
+    def on_walk_error(err: OSError) -> None:
         skipped.append(err.filename or str(err))
 
-    for dirpath, _dirnames, filenames in os.walk(src, onerror=_on_walk_error):
+    for dirpath, _dirnames, filenames in os.walk(src, onerror=on_walk_error):
         rel = os.path.relpath(dirpath, src)
         dst_dir = os.path.join(clone_dir, rel)
         os.makedirs(dst_dir, exist_ok=True)
@@ -192,7 +192,7 @@ def _clone_workspace(src: str) -> str:
     return clone_dir
 
 
-def _run_judge(
+def run_judge(
     judge_input: JudgeInput | BatchJudgeInput,
     sandbox_user: str | None,
     trace_path: str,
@@ -207,13 +207,13 @@ def _run_judge(
     batch = isinstance(judge_input, BatchJudgeInput)
     n = len(judge_input.criteria) if isinstance(judge_input, BatchJudgeInput) else 1
 
-    def _fail(msg: str) -> tuple[list[Verdict], LLMUsage]:
+    def fail(msg: str) -> tuple[list[Verdict], LLMUsage]:
         return fail_verdicts(n, msg), LLMUsage()
 
     try:
-        clone_dir = _clone_workspace(judge_input.workdir)
+        clone_dir = clone_workspace(judge_input.workdir)
     except Exception as e:  # noqa: BLE001
-        return _fail(f"Failed to clone workspace: {e}")
+        return fail(f"Failed to clone workspace: {e}")
 
     cloned_input = judge_input.model_copy(update={"workdir": clone_dir})
 
@@ -242,7 +242,7 @@ def _run_judge(
 
     try:
         os.chmod(input_path, 0o644)
-        env_vars = [f"HOME={clone_dir}", *_judge_env_vars()]
+        env_vars = [f"HOME={clone_dir}", *judge_env_vars()]
 
         cmd = []
         if sandbox_user is not None:
@@ -268,19 +268,19 @@ def _run_judge(
             cwd=clone_dir,
         )
 
-        _save_trace(trace_path, result.stdout, result.stderr, result.returncode)
+        save_trace(trace_path, result.stdout, result.stderr, result.returncode)
 
         if result.returncode != 0:
-            return _fail(f"Judge process failed (exit {result.returncode}): {result.stderr[:500]}")
+            return fail(f"Judge process failed (exit {result.returncode}): {result.stderr[:500]}")
 
         with open(output_path) as f:
             data = json.load(f)
 
     except subprocess.TimeoutExpired:
-        _save_trace(trace_path, "", "Judge execution timed out.", -1)
-        return _fail("Judge execution timed out.")
+        save_trace(trace_path, "", "Judge execution timed out.", -1)
+        return fail("Judge execution timed out.")
     except (json.JSONDecodeError, FileNotFoundError) as e:
-        return _fail(f"Failed to read judge output: {e}")
+        return fail(f"Failed to read judge output: {e}")
     else:
         if batch:
             verdicts = TypeAdapter(list[Verdict]).validate_python(data["verdicts"])
@@ -292,7 +292,7 @@ def _run_judge(
         shutil.rmtree(clone_dir, ignore_errors=True)
 
 
-def _save_trace(trace_path: str, stdout: str, stderr: str, returncode: int) -> None:
+def save_trace(trace_path: str, stdout: str, stderr: str, returncode: int) -> None:
     """Write the judge's stdout/stderr to a trace file."""
     with contextlib.suppress(OSError), open(trace_path, "w") as f:
         f.write(f"exit_code: {returncode}\n")
@@ -302,7 +302,7 @@ def _save_trace(trace_path: str, stdout: str, stderr: str, returncode: int) -> N
         f.write(stderr)
 
 
-def _format_status(*, met: bool | None) -> str:
+def format_status(*, met: bool | None) -> str:
     """Format criterion evaluation status for display."""
     if met is True:
         return "MET"
@@ -311,7 +311,7 @@ def _format_status(*, met: bool | None) -> str:
     return "UNMET"
 
 
-def _verdict_to_result(item: RubricItem, verdict: Verdict) -> CriterionResult:
+def verdict_to_result(item: RubricItem, verdict: Verdict) -> CriterionResult:
     """Convert a Verdict into a CriterionResult for the given rubric item."""
     return CriterionResult(
         criterion=item.criterion,
@@ -322,7 +322,7 @@ def _verdict_to_result(item: RubricItem, verdict: Verdict) -> CriterionResult:
     )
 
 
-def _run_sequential(
+def run_sequential(
     config: GraderConfig,
     rubric: list[RubricItem],
     final_output: str,
@@ -347,19 +347,19 @@ def _run_sequential(
             judge_prompt=judge_prompt,
         )
         trace_path = os.path.join(config.output_dir, f"judge_trace_{i}{trace_suffix}.txt")
-        verdicts, usage = _run_judge(
+        verdicts, usage = run_judge(
             judge_input,
             sandbox_user=config.sandbox_user,
             trace_path=trace_path,
             timeout=config.judge_timeout,
         )
         total_usage = total_usage + usage
-        results.append(_verdict_to_result(item, verdicts[0]))
-        print(f"  -> {_format_status(met=verdicts[0].met)}: {verdicts[0].reasoning[:120]}")  # noqa: T201
+        results.append(verdict_to_result(item, verdicts[0]))
+        print(f"  -> {format_status(met=verdicts[0].met)}: {verdicts[0].reasoning[:120]}")  # noqa: T201
     return results, total_usage
 
 
-def _run_batch(
+def run_batch(
     config: GraderConfig,
     rubric: list[RubricItem],
     final_output: str,
@@ -387,7 +387,7 @@ def _run_batch(
         judge_prompt=judge_prompt,
     )
     trace_path = os.path.join(config.output_dir, f"judge_trace_batch{trace_suffix}.txt")
-    verdicts, usage = _run_judge(
+    verdicts, usage = run_judge(
         judge_input,
         sandbox_user=config.sandbox_user,
         trace_path=trace_path,
@@ -397,17 +397,17 @@ def _run_batch(
     results: list[CriterionResult] = []
     for i, item in enumerate(rubric):
         v = verdicts[i] if i < len(verdicts) else Verdict(met=None, reasoning="No reasoning provided.")
-        results.append(_verdict_to_result(item, v))
-        print(f"  [{i + 1}/{n}] {_format_status(met=v.met)}: {v.reasoning[:120]}")  # noqa: T201
+        results.append(verdict_to_result(item, v))
+        print(f"  [{i + 1}/{n}] {format_status(met=v.met)}: {v.reasoning[:120]}")  # noqa: T201
     return results, usage
 
 
-def _get_errored_indices(results: list[CriterionResult]) -> list[int]:
+def get_errored_indices(results: list[CriterionResult]) -> list[int]:
     """Return indices of criteria where met is None (infrastructure error)."""
     return [i for i, r in enumerate(results) if r.met is None]
 
 
-def _apply_retries(
+def apply_retries(
     results: list[CriterionResult],
     retry_results: list[CriterionResult],
     errored_indices: list[int],
@@ -417,7 +417,7 @@ def _apply_retries(
     return [retry_map.get(i, r) for i, r in enumerate(results)]
 
 
-def _write_info(
+def write_info(
     config: GraderConfig,
     results: list[CriterionResult],
     llm_usage: LLMUsage,
@@ -482,17 +482,17 @@ def main() -> None:
 
     os.makedirs(config.output_dir, exist_ok=True)
 
-    run = _run_batch if config.mode == "batch" else _run_sequential
+    run = run_batch if config.mode == "batch" else run_sequential
 
     # 1. Initial evaluation
     results, llm_usage = run(config, rubric, final_output, judge_guidance, judge_prompt)
 
     # 2. Record initial error count for observability
-    initial_errored = len(_get_errored_indices(results))
+    initial_errored = len(get_errored_indices(results))
 
     # 3. Retry loop
     for attempt in range(config.judge_retries):
-        errored = _get_errored_indices(results)
+        errored = get_errored_indices(results)
         if not errored:
             break
         print(f"\n[retry {attempt + 1}/{config.judge_retries}] Retrying {len(errored)} errored criteria...")  # noqa: T201
@@ -505,13 +505,13 @@ def main() -> None:
             judge_prompt,
             trace_suffix=f"_retry{attempt + 1}",
         )
-        results = _apply_retries(results, retry_results, errored)
+        results = apply_retries(results, retry_results, errored)
         llm_usage = llm_usage + retry_usage
 
     # 4. ALWAYS write info.json (even on hard fail)
-    final_errored = _get_errored_indices(results)
+    final_errored = get_errored_indices(results)
     errored_count = len(final_errored)
-    reward, raw_score = _write_info(config, results, llm_usage, errored_count)
+    reward, raw_score = write_info(config, results, llm_usage, errored_count)
 
     # 5. If any criteria still errored: do NOT write reward.json, exit 1
     if final_errored:
