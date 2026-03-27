@@ -1320,10 +1320,10 @@ class TestBatchConcurrent:
     @patch("gandalf_grader.__main__.load_rubric")
     @patch("gandalf_grader.__main__.load_config")
     @patch("gandalf_grader.__main__.evaluate_all_criteria")
-    def test_main_dispatches_batch_splits(
+    def test_main_dispatches_batch_concurrent(
         self, mock_eval_all, mock_config, mock_rubric, mock_trajectory, mock_guidance, tmp_path
     ):
-        """main() dispatches to _run_batch_concurrent when batch_splits > 1."""
+        """main() dispatches to _run_batch_concurrent when max_concurrency > 1."""
         output_dir = str(tmp_path / "output")
         os.makedirs(output_dir, exist_ok=True)
 
@@ -1365,10 +1365,10 @@ class TestBatchConcurrent:
     @patch("gandalf_grader.__main__.load_rubric")
     @patch("gandalf_grader.__main__.load_config")
     @patch("gandalf_grader.__main__.evaluate_all_criteria")
-    def test_retry_after_batch_splits(
+    def test_retry_after_batch_concurrent(
         self, mock_eval_all, mock_config, mock_rubric, mock_trajectory, mock_guidance, tmp_path
     ):
-        """Retry logic works correctly on results produced by batch splits."""
+        """Retry logic works correctly on results produced by batch concurrent splits."""
         output_dir = str(tmp_path / "output")
         os.makedirs(output_dir, exist_ok=True)
 
