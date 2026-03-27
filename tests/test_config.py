@@ -314,3 +314,46 @@ class TestPydanticModels:
         assert restored.model == ji.model
         assert restored.final_output == ji.final_output
         assert len(restored.mcp_servers) == 1
+
+    def test_verifier_config_batch_splits_default(self):
+        cfg = VerifierConfig(
+            instructions="test",
+            rubric_path="/rubric.json",
+            workdir="/workspace",
+            trajectory_path="/logs/trajectory.json",
+            sandbox_user="sandbox",
+        )
+        assert cfg.batch_splits == 1
+
+    def test_verifier_config_batch_splits_explicit(self):
+        cfg = VerifierConfig(
+            instructions="test",
+            rubric_path="/rubric.json",
+            workdir="/workspace",
+            trajectory_path="/logs/trajectory.json",
+            sandbox_user="sandbox",
+            batch_splits=2,
+        )
+        assert cfg.batch_splits == 2
+
+    def test_verifier_config_batch_splits_rejects_zero(self):
+        with pytest.raises(ValidationError):
+            VerifierConfig(
+                instructions="test",
+                rubric_path="/rubric.json",
+                workdir="/workspace",
+                trajectory_path="/logs/trajectory.json",
+                sandbox_user="sandbox",
+                batch_splits=0,
+            )
+
+    def test_verifier_config_batch_splits_rejects_negative(self):
+        with pytest.raises(ValidationError):
+            VerifierConfig(
+                instructions="test",
+                rubric_path="/rubric.json",
+                workdir="/workspace",
+                trajectory_path="/logs/trajectory.json",
+                sandbox_user="sandbox",
+                batch_splits=-1,
+            )

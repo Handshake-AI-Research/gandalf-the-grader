@@ -13,6 +13,7 @@ from gandalf_grader.__main__ import (
     _JUDGE_ENV_ALLOWLIST,
     _clone_workspace,
     _judge_env_vars,
+    _run_batch_splits,
     _write_info,
     evaluate_all_criteria,
     evaluate_criteria,
@@ -1038,3 +1039,621 @@ class TestCloneWorkspace:
             assert not (cloned / "dir_link").is_file()
         finally:
             shutil.rmtree(clone_dir, ignore_errors=True)
+
+
+class TestBatchSplits:
+    """Tests for _run_batch_splits — parallel positional splitting of batch evaluation."""
+
+    def _make_rubric(self, n: int) -> list[RubricItem]:
+        return [RubricItem(criteria=f"criterion {i}", weight=1.0) for i in range(n)]
+
+    @patch("gandalf_grader.__main__.evaluate_all_criteria")
+    def test_splits_2_even(self, mock_eval_all, tmp_path):
+        """4 criteria split into 2 chunks of 2, results merged in order."""
+        config = _make_config(
+            workdir=str(tmp_path),
+            output_dir=str(tmp_path / "output"),
+            mode="batch",
+            batch_splits=2,
+        )
+        os.makedirs(config.output_dir, exist_ok=True)
+        rubric = self._make_rubric(4)
+
+        def _side_effect(judge_input, **kwargs):
+            verdicts = [
+                {"index": c.index, "met": True, "reasoning": f"ok {c.index}", "evidence": []}
+                for c in judge_input.criteria
+            ]
+            usage = {"cost_usd": 0.1, "prompt_tokens": 100, "completion_tokens": 50, "cache_read_tokens": 10}
+            return verdicts, usage
+
+        mock_eval_all.side_effect = _side_effect
+
+        results, usage = _run_batch_splits(config, rubric, "done", "")
+
+        assert len(results) == 4
+        # Verify order preserved
+        for i, r in enumerate(results):
+            assert r.criteria == f"criterion {i}"
+            assert r.met is True
+            assert r.reasoning == f"ok {i}"
+
+        # 2 splits, each with usage
+        assert usage["cost_usd"] == pytest.approx(0.2)
+        assert usage["prompt_tokens"] == 200
+        assert usage["completion_tokens"] == 100
+        assert usage["cache_read_tokens"] == 20
+
+        # Verify evaluate_all_criteria was called twice (one per split)
+        assert mock_eval_all.call_count == 2
+
+    @patch("gandalf_grader.__main__.evaluate_all_criteria")
+    def test_splits_3_uneven(self, mock_eval_all, tmp_path):
+        """7 criteria split into chunks of [3, 3, 1]."""
+        config = _make_config(
+            workdir=str(tmp_path),
+            output_dir=str(tmp_path / "output"),
+            mode="batch",
+            batch_splits=3,
+        )
+        os.makedirs(config.output_dir, exist_ok=True)
+        rubric = self._make_rubric(7)
+
+        def _side_effect(judge_input, **kwargs):
+            verdicts = [
+                {"index": c.index, "met": True, "reasoning": f"ok {c.index}", "evidence": []}
+                for c in judge_input.criteria
+            ]
+            return verdicts, {"cost_usd": 0.1}
+
+        mock_eval_all.side_effect = _side_effect
+
+        results, usage = _run_batch_splits(config, rubric, "done", "")
+
+        assert len(results) == 7
+        for i, r in enumerate(results):
+            assert r.criteria == f"criterion {i}"
+
+        assert mock_eval_all.call_count == 3
+        assert usage["cost_usd"] == pytest.approx(0.3)
+
+    @patch("gandalf_grader.__main__.evaluate_all_criteria")
+    def test_splits_exceeds_rubric_size(self, mock_eval_all, tmp_path):
+        """splits=5 with 3 criteria → 3 chunks of 1 each."""
+        config = _make_config(
+            workdir=str(tmp_path),
+            output_dir=str(tmp_path / "output"),
+            mode="batch",
+            batch_splits=5,
+        )
+        os.makedirs(config.output_dir, exist_ok=True)
+        rubric = self._make_rubric(3)
+
+        def _side_effect(judge_input, **kwargs):
+            verdicts = [
+                {"index": c.index, "met": True, "reasoning": f"ok {c.index}", "evidence": []}
+                for c in judge_input.criteria
+            ]
+            return verdicts, {"cost_usd": 0.05}
+
+        mock_eval_all.side_effect = _side_effect
+
+        results, usage = _run_batch_splits(config, rubric, "done", "")
+
+        assert len(results) == 3
+        assert mock_eval_all.call_count == 3
+        assert usage["cost_usd"] == pytest.approx(0.15)
+
+    @patch("gandalf_grader.__main__.evaluate_all_criteria")
+    def test_trace_file_naming(self, mock_eval_all, tmp_path):
+        """Each split gets a unique trace path."""
+        config = _make_config(
+            workdir=str(tmp_path),
+            output_dir=str(tmp_path / "output"),
+            mode="batch",
+            batch_splits=2,
+        )
+        os.makedirs(config.output_dir, exist_ok=True)
+        rubric = self._make_rubric(4)
+
+        trace_paths = []
+
+        def _side_effect(judge_input, sandbox_user, trace_path, timeout):
+            trace_paths.append(trace_path)
+            verdicts = [
+                {"index": c.index, "met": True, "reasoning": "ok", "evidence": []}
+                for c in judge_input.criteria
+            ]
+            return verdicts, {}
+
+        mock_eval_all.side_effect = _side_effect
+
+        _run_batch_splits(config, rubric, "done", "")
+
+        assert len(trace_paths) == 2
+        assert trace_paths[0] != trace_paths[1]
+        # Order may vary due to parallel execution
+        trace_basenames = sorted(os.path.basename(p) for p in trace_paths)
+        assert trace_basenames[0] == "judge_trace_batch_split0.txt"
+        assert trace_basenames[1] == "judge_trace_batch_split1.txt"
+
+    @patch("gandalf_grader.__main__.evaluate_all_criteria")
+    def test_errored_criteria_in_split(self, mock_eval_all, tmp_path):
+        """Errors in one split are properly reflected in merged results."""
+        config = _make_config(
+            workdir=str(tmp_path),
+            output_dir=str(tmp_path / "output"),
+            mode="batch",
+            batch_splits=2,
+        )
+        os.makedirs(config.output_dir, exist_ok=True)
+        rubric = self._make_rubric(4)
+
+        def _side_effect(judge_input, **kwargs):
+            criteria = judge_input.criteria
+            indices = {c.index for c in criteria}
+            if indices == {0, 1}:
+                # First split: both pass
+                verdicts = [
+                    {"index": c.index, "met": True, "reasoning": "ok", "evidence": []}
+                    for c in criteria
+                ]
+            else:
+                # Second split: first criterion errors, second passes
+                verdicts = [
+                    {"index": criteria[0].index, "met": None, "reasoning": "timeout", "evidence": []},
+                    {"index": criteria[1].index, "met": True, "reasoning": "ok", "evidence": []},
+                ]
+            return verdicts, {"cost_usd": 0.1}
+
+        mock_eval_all.side_effect = _side_effect
+
+        results, _ = _run_batch_splits(config, rubric, "done", "")
+
+        assert results[0].met is True
+        assert results[1].met is True
+        assert results[2].met is None  # errored in second split
+        assert results[3].met is True
+
+    @patch("gandalf_grader.__main__.evaluate_all_criteria")
+    def test_timeout_per_split(self, mock_eval_all, tmp_path):
+        """Each split's timeout is based on its chunk size, not total rubric."""
+        config = _make_config(
+            workdir=str(tmp_path),
+            output_dir=str(tmp_path / "output"),
+            mode="batch",
+            batch_splits=2,
+            judge_timeout=100,
+        )
+        os.makedirs(config.output_dir, exist_ok=True)
+        rubric = self._make_rubric(4)  # 2 per split
+
+        timeouts = []
+
+        def _side_effect(judge_input, sandbox_user, trace_path, timeout):
+            timeouts.append(timeout)
+            verdicts = [
+                {"index": c.index, "met": True, "reasoning": "ok", "evidence": []}
+                for c in judge_input.criteria
+            ]
+            return verdicts, {}
+
+        mock_eval_all.side_effect = _side_effect
+
+        _run_batch_splits(config, rubric, "done", "")
+
+        # Each split has 2 criteria → timeout = 100 * 2 = 200
+        assert all(t == 200 for t in timeouts)
+
+    @patch("gandalf_grader.__main__.evaluate_all_criteria")
+    def test_batch_timeout_cap_per_split(self, mock_eval_all, tmp_path):
+        """batch_timeout caps each split's timeout independently."""
+        config = _make_config(
+            workdir=str(tmp_path),
+            output_dir=str(tmp_path / "output"),
+            mode="batch",
+            batch_splits=2,
+            judge_timeout=100,
+            batch_timeout=150,
+        )
+        os.makedirs(config.output_dir, exist_ok=True)
+        rubric = self._make_rubric(4)
+
+        timeouts = []
+
+        def _side_effect(judge_input, sandbox_user, trace_path, timeout):
+            timeouts.append(timeout)
+            verdicts = [
+                {"index": c.index, "met": True, "reasoning": "ok", "evidence": []}
+                for c in judge_input.criteria
+            ]
+            return verdicts, {}
+
+        mock_eval_all.side_effect = _side_effect
+
+        _run_batch_splits(config, rubric, "done", "")
+
+        # 2 criteria * 100s = 200, capped to 150
+        assert all(t == 150 for t in timeouts)
+
+    @patch("gandalf_grader.__main__.resolve_judge_guidance", return_value="")
+    @patch("gandalf_grader.__main__.load_trajectory_final_output", return_value="done")
+    @patch("gandalf_grader.__main__.load_rubric")
+    @patch("gandalf_grader.__main__.load_config")
+    @patch("gandalf_grader.__main__.evaluate_all_criteria")
+    def test_main_dispatches_batch_splits(
+        self, mock_eval_all, mock_config, mock_rubric, mock_trajectory, mock_guidance, tmp_path
+    ):
+        """main() dispatches to _run_batch_splits when batch_splits > 1."""
+        output_dir = str(tmp_path / "output")
+        os.makedirs(output_dir, exist_ok=True)
+
+        mock_config.return_value = VerifierConfig(
+            instructions="test",
+            rubric_path="/rubric.json",
+            workdir=str(tmp_path),
+            trajectory_path="/logs/trajectory.json",
+            sandbox_user="sandbox",
+            output_dir=output_dir,
+            mode="batch",
+            batch_splits=2,
+        )
+        mock_rubric.return_value = self._make_rubric(4)
+
+        def _side_effect(judge_input, **kwargs):
+            verdicts = [
+                {"index": c.index, "met": True, "reasoning": "ok", "evidence": []}
+                for c in judge_input.criteria
+            ]
+            return verdicts, {"cost_usd": 0.1, "prompt_tokens": 100, "completion_tokens": 50, "cache_read_tokens": 0}
+
+        mock_eval_all.side_effect = _side_effect
+
+        from gandalf_grader.__main__ import main
+
+        with patch("sys.argv", ["prog", "--config", "dummy.toml"]):
+            main()
+
+        info = json.loads((tmp_path / "output" / "info.json").read_text())
+        assert len(info["criteria_results"]) == 4
+        assert all(r["met"] is True for r in info["criteria_results"])
+
+        reward = json.loads((tmp_path / "output" / "reward.json").read_text())
+        assert reward["reward"] == 1.0
+
+    @patch("gandalf_grader.__main__.resolve_judge_guidance", return_value="")
+    @patch("gandalf_grader.__main__.load_trajectory_final_output", return_value="done")
+    @patch("gandalf_grader.__main__.load_rubric")
+    @patch("gandalf_grader.__main__.load_config")
+    @patch("gandalf_grader.__main__.evaluate_all_criteria")
+    def test_cli_splits_override(
+        self, mock_eval_all, mock_config, mock_rubric, mock_trajectory, mock_guidance, tmp_path
+    ):
+        """--splits CLI arg overrides config.batch_splits."""
+        output_dir = str(tmp_path / "output")
+        os.makedirs(output_dir, exist_ok=True)
+
+        mock_config.return_value = VerifierConfig(
+            instructions="test",
+            rubric_path="/rubric.json",
+            workdir=str(tmp_path),
+            trajectory_path="/logs/trajectory.json",
+            sandbox_user="sandbox",
+            output_dir=output_dir,
+            mode="batch",
+            batch_splits=1,  # Config says 1 (no splitting)
+        )
+        mock_rubric.return_value = self._make_rubric(4)
+
+        def _side_effect(judge_input, **kwargs):
+            verdicts = [
+                {"index": c.index, "met": True, "reasoning": "ok", "evidence": []}
+                for c in judge_input.criteria
+            ]
+            return verdicts, {"cost_usd": 0.1, "prompt_tokens": 50, "completion_tokens": 25, "cache_read_tokens": 0}
+
+        mock_eval_all.side_effect = _side_effect
+
+        from gandalf_grader.__main__ import main
+
+        # --splits 2 overrides config.batch_splits=1
+        with patch("sys.argv", ["prog", "--config", "dummy.toml", "--splits", "2"]):
+            main()
+
+        # Should have called evaluate_all_criteria twice (2 splits)
+        assert mock_eval_all.call_count == 2
+
+    @patch("gandalf_grader.__main__.resolve_judge_guidance", return_value="")
+    @patch("gandalf_grader.__main__.load_trajectory_final_output", return_value="done")
+    @patch("gandalf_grader.__main__.load_rubric")
+    @patch("gandalf_grader.__main__.load_config")
+    @patch("gandalf_grader.__main__.evaluate_all_criteria")
+    def test_retry_after_batch_splits(
+        self, mock_eval_all, mock_config, mock_rubric, mock_trajectory, mock_guidance, tmp_path
+    ):
+        """Retry logic works correctly on results produced by batch splits."""
+        output_dir = str(tmp_path / "output")
+        os.makedirs(output_dir, exist_ok=True)
+
+        mock_config.return_value = VerifierConfig(
+            instructions="test",
+            rubric_path="/rubric.json",
+            workdir=str(tmp_path),
+            trajectory_path="/logs/trajectory.json",
+            sandbox_user="sandbox",
+            output_dir=output_dir,
+            mode="batch",
+            batch_splits=2,
+            judge_retries=1,
+        )
+        mock_rubric.return_value = self._make_rubric(4)
+
+        call_count = [0]
+
+        def _side_effect(judge_input, **kwargs):
+            idx = call_count[0]
+            call_count[0] += 1
+            if idx == 0:
+                # Split 0: both pass
+                verdicts = [
+                    {"index": c.index, "met": True, "reasoning": "ok", "evidence": []}
+                    for c in judge_input.criteria
+                ]
+            elif idx == 1:
+                # Split 1: one error
+                verdicts = [
+                    {"index": judge_input.criteria[0].index, "met": None, "reasoning": "timeout", "evidence": []},
+                    {"index": judge_input.criteria[1].index, "met": True, "reasoning": "ok", "evidence": []},
+                ]
+            else:
+                # Retry: the errored criterion resolves
+                verdicts = [
+                    {"index": 0, "met": True, "reasoning": "ok on retry", "evidence": []},
+                ]
+            return verdicts, {"cost_usd": 0.05}
+
+        mock_eval_all.side_effect = _side_effect
+
+        from gandalf_grader.__main__ import main
+
+        with patch("sys.argv", ["prog", "--config", "dummy.toml"]):
+            main()
+
+        info = json.loads((tmp_path / "output" / "info.json").read_text())
+        assert all(r["met"] is True for r in info["criteria_results"])
+        assert info["errored_criteria_count"] == 0
+
+        reward = json.loads((tmp_path / "output" / "reward.json").read_text())
+        assert reward["reward"] == 1.0
+
+    # -- Error scenario tests (no partial scores) --
+
+    @patch("gandalf_grader.__main__.evaluate_all_criteria")
+    def test_one_split_crashes_criteria_errored(self, mock_eval_all, tmp_path):
+        """When one split's subprocess crashes, its criteria get met=None."""
+        config = _make_config(
+            workdir=str(tmp_path),
+            output_dir=str(tmp_path / "output"),
+            mode="batch",
+            batch_splits=2,
+        )
+        os.makedirs(config.output_dir, exist_ok=True)
+        rubric = self._make_rubric(4)
+
+        def _side_effect(judge_input, **kwargs):
+            indices = {c.index for c in judge_input.criteria}
+            if indices == {0, 1}:
+                verdicts = [
+                    {"index": c.index, "met": True, "reasoning": "ok", "evidence": []}
+                    for c in judge_input.criteria
+                ]
+                return verdicts, {"cost_usd": 0.1}
+            else:
+                verdicts = [
+                    {"index": c.index, "met": None, "reasoning": "Judge process failed (exit 1)", "evidence": []}
+                    for c in judge_input.criteria
+                ]
+                return verdicts, {}
+
+        mock_eval_all.side_effect = _side_effect
+
+        results, _ = _run_batch_splits(config, rubric, "done", "")
+
+        assert results[0].met is True
+        assert results[1].met is True
+        assert results[2].met is None
+        assert results[3].met is None
+
+    @patch("gandalf_grader.__main__.evaluate_all_criteria")
+    def test_one_split_times_out(self, mock_eval_all, tmp_path):
+        """When one split times out, its criteria get met=None."""
+        config = _make_config(
+            workdir=str(tmp_path),
+            output_dir=str(tmp_path / "output"),
+            mode="batch",
+            batch_splits=2,
+        )
+        os.makedirs(config.output_dir, exist_ok=True)
+        rubric = self._make_rubric(4)
+
+        def _side_effect(judge_input, **kwargs):
+            indices = {c.index for c in judge_input.criteria}
+            if indices == {0, 1}:
+                verdicts = [
+                    {"index": c.index, "met": True, "reasoning": "ok", "evidence": []}
+                    for c in judge_input.criteria
+                ]
+                return verdicts, {"cost_usd": 0.1}
+            else:
+                verdicts = [
+                    {"index": c.index, "met": None, "reasoning": "Judge execution timed out.", "evidence": []}
+                    for c in judge_input.criteria
+                ]
+                return verdicts, {}
+
+        mock_eval_all.side_effect = _side_effect
+
+        results, _ = _run_batch_splits(config, rubric, "done", "")
+
+        assert results[2].met is None
+        assert "timed out" in results[2].reasoning
+
+    @patch("gandalf_grader.__main__.evaluate_all_criteria")
+    def test_all_splits_fail(self, mock_eval_all, tmp_path):
+        """When all splits fail, every criterion has met=None."""
+        config = _make_config(
+            workdir=str(tmp_path),
+            output_dir=str(tmp_path / "output"),
+            mode="batch",
+            batch_splits=2,
+        )
+        os.makedirs(config.output_dir, exist_ok=True)
+        rubric = self._make_rubric(4)
+
+        def _side_effect(judge_input, **kwargs):
+            verdicts = [
+                {"index": c.index, "met": None, "reasoning": "crash", "evidence": []}
+                for c in judge_input.criteria
+            ]
+            return verdicts, {}
+
+        mock_eval_all.side_effect = _side_effect
+
+        results, _ = _run_batch_splits(config, rubric, "done", "")
+
+        assert all(r.met is None for r in results)
+
+    @patch("gandalf_grader.__main__.resolve_judge_guidance", return_value="")
+    @patch("gandalf_grader.__main__.load_trajectory_final_output", return_value="done")
+    @patch("gandalf_grader.__main__.load_rubric")
+    @patch("gandalf_grader.__main__.load_config")
+    @patch("gandalf_grader.__main__.evaluate_all_criteria")
+    def test_no_partial_scores_when_split_fails(
+        self, mock_eval_all, mock_config, mock_rubric, mock_trajectory, mock_guidance, tmp_path
+    ):
+        """Critical: when one split fails and retries are exhausted, reward.json must NOT be written.
+
+        Regression test for the bug in auto_split_rubric.py where failed batches
+        were silently excluded from scoring, producing misleading partial scores.
+        See: https://joinhandshake.slack.com/archives/C0A9LSJRZ09/p1774474260805669
+        """
+        output_dir = str(tmp_path / "output")
+        os.makedirs(output_dir, exist_ok=True)
+
+        mock_config.return_value = VerifierConfig(
+            instructions="test",
+            rubric_path="/rubric.json",
+            workdir=str(tmp_path),
+            trajectory_path="/logs/trajectory.json",
+            sandbox_user="sandbox",
+            output_dir=output_dir,
+            mode="batch",
+            batch_splits=2,
+            judge_retries=1,
+        )
+        mock_rubric.return_value = self._make_rubric(4)
+
+        def _side_effect(judge_input, **kwargs):
+            criteria = judge_input.criteria
+            # Identify by criteria text — "criterion 2" and "criterion 3" always fail
+            has_failing = any("criterion 2" in c.criteria or "criterion 3" in c.criteria for c in criteria)
+
+            if has_failing:
+                return (
+                    [{"index": c.index, "met": None, "reasoning": "persistent failure", "evidence": []} for c in criteria],
+                    {"cost_usd": 0.05},
+                )
+            else:
+                return (
+                    [{"index": c.index, "met": True, "reasoning": "ok", "evidence": []} for c in criteria],
+                    {"cost_usd": 0.1},
+                )
+
+        mock_eval_all.side_effect = _side_effect
+
+        from gandalf_grader.__main__ import main
+
+        with patch("sys.argv", ["prog", "--config", "dummy.toml"]):
+            with pytest.raises(SystemExit) as exc_info:
+                main()
+            assert exc_info.value.code == 1
+
+        # reward.json must NOT exist — no partial scores
+        assert not (tmp_path / "output" / "reward.json").exists()
+
+        # info.json MUST exist with ALL criteria (not just the successful split)
+        info = json.loads((tmp_path / "output" / "info.json").read_text())
+        assert len(info["criteria_results"]) == 4
+        assert info["criteria_results"][0]["met"] is True
+        assert info["criteria_results"][1]["met"] is True
+        assert info["criteria_results"][2]["met"] is None
+        assert info["criteria_results"][3]["met"] is None
+        assert info["errored_criteria_count"] == 2
+
+    @patch("gandalf_grader.__main__.evaluate_all_criteria")
+    def test_split_future_raises_exception(self, mock_eval_all, tmp_path):
+        """When evaluate_all_criteria raises an unhandled exception, all criteria fail gracefully."""
+        config = _make_config(
+            workdir=str(tmp_path),
+            output_dir=str(tmp_path / "output"),
+            mode="batch",
+            batch_splits=2,
+        )
+        os.makedirs(config.output_dir, exist_ok=True)
+        rubric = self._make_rubric(4)
+
+        def _side_effect(judge_input, **kwargs):
+            indices = {c.index for c in judge_input.criteria}
+            if indices == {0, 1}:
+                verdicts = [
+                    {"index": c.index, "met": True, "reasoning": "ok", "evidence": []}
+                    for c in judge_input.criteria
+                ]
+                return verdicts, {"cost_usd": 0.1}
+            else:
+                raise RuntimeError("unexpected internal error")
+
+        mock_eval_all.side_effect = _side_effect
+
+        results, _ = _run_batch_splits(config, rubric, "done", "")
+
+        # All criteria should be marked as errored (not just the failed split)
+        assert all(r.met is None for r in results)
+        assert "Batch split failed" in results[0].reasoning
+
+    @patch("gandalf_grader.__main__.evaluate_all_criteria")
+    def test_split_returns_fewer_verdicts(self, mock_eval_all, tmp_path):
+        """When a split returns fewer verdicts than criteria, missing ones get met=None."""
+        config = _make_config(
+            workdir=str(tmp_path),
+            output_dir=str(tmp_path / "output"),
+            mode="batch",
+            batch_splits=2,
+        )
+        os.makedirs(config.output_dir, exist_ok=True)
+        rubric = self._make_rubric(4)
+
+        def _side_effect(judge_input, **kwargs):
+            indices = {c.index for c in judge_input.criteria}
+            if indices == {0, 1}:
+                # First split (criteria 0, 1): returns both verdicts
+                verdicts = [
+                    {"index": c.index, "met": True, "reasoning": "ok", "evidence": []}
+                    for c in judge_input.criteria
+                ]
+                return verdicts, {}
+            else:
+                # Second split (criteria 2, 3): only returns 1 verdict for 2 criteria
+                verdicts = [
+                    {"index": judge_input.criteria[0].index, "met": True, "reasoning": "ok", "evidence": []},
+                ]
+                return verdicts, {}
+
+        mock_eval_all.side_effect = _side_effect
+
+        results, _ = _run_batch_splits(config, rubric, "done", "")
+
+        assert results[0].met is True   # split 0, verdict present
+        assert results[1].met is True   # split 0, verdict present
+        assert results[2].met is True   # split 1, position 0 — verdict present
+        assert results[3].met is None   # split 1, position 1 — no verdict, defaults to met=None

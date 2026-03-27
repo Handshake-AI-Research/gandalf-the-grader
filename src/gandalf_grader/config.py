@@ -33,6 +33,10 @@ class VerifierConfig(BaseModel):
     judge_timeout is the per-criterion budget in seconds, regardless of mode.
     In batch mode the effective timeout is ``judge_timeout * N_criteria``,
     optionally capped by batch_timeout.
+
+    batch_splits controls how many positional chunks to split criteria into
+    when mode="batch".  Each chunk is evaluated as a separate batch session
+    in parallel.  Default is 1 (no splitting).
     """
 
     model: str = "google/gemini-2.5-flash"
@@ -47,6 +51,7 @@ class VerifierConfig(BaseModel):
     judge_guidance_path: str | None = None
     batch_timeout: int | None = None
     mode: Literal["sequential", "batch"] = "sequential"
+    batch_splits: int = Field(default=1, ge=1)
     judge_retries: int = 1
 
 
