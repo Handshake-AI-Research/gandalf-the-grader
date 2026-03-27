@@ -572,8 +572,10 @@ def _run_batch_splits(
                 for key in ("cost_usd", "prompt_tokens", "completion_tokens", "cache_read_tokens"):
                     total_usage[key] = total_usage.get(key, 0) + usage.get(key, 0)
         except Exception as exc:
-            # If any split raises an unexpected error, fail all criteria so
-            # the hard-fail path in main() writes info.json but not reward.json.
+            # If any split raises an unexpected error, cancel remaining work
+            # and fail all criteria so the hard-fail path in main() writes
+            # info.json but not reward.json.
+            executor.shutdown(wait=True, cancel_futures=True)
             print(f"[batch-splits] Split failed unexpectedly: {exc}", file=sys.stderr)
             return (
                 [
@@ -786,6 +788,9 @@ def main() -> None:
         ),
     )
     args = parser.parse_args()
+
+    if args.splits is not None and args.splits < 1:
+        parser.error("--splits must be >= 1")
 
     config = load_config(args.config)
 

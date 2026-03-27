@@ -1047,6 +1047,46 @@ class TestBatchSplits:
     def _make_rubric(self, n: int) -> list[RubricItem]:
         return [RubricItem(criteria=f"criterion {i}", weight=1.0) for i in range(n)]
 
+    @patch("gandalf_grader.__main__._run_batch")
+    @patch("gandalf_grader.__main__.resolve_judge_guidance", return_value="")
+    @patch("gandalf_grader.__main__.load_trajectory_final_output", return_value="done")
+    @patch("gandalf_grader.__main__.load_rubric")
+    @patch("gandalf_grader.__main__.load_config")
+    def test_splits_1_dispatches_to_run_batch(
+        self, mock_config, mock_rubric, mock_trajectory, mock_guidance, mock_run_batch, tmp_path
+    ):
+        """batch_splits=1 dispatches to _run_batch, not _run_batch_splits."""
+        output_dir = str(tmp_path / "output")
+        os.makedirs(output_dir, exist_ok=True)
+
+        mock_config.return_value = VerifierConfig(
+            instructions="test",
+            rubric_path="/rubric.json",
+            workdir=str(tmp_path),
+            trajectory_path="/logs/trajectory.json",
+            sandbox_user="sandbox",
+            output_dir=output_dir,
+            mode="batch",
+            batch_splits=1,
+        )
+        rubric = self._make_rubric(2)
+        mock_rubric.return_value = rubric
+
+        mock_run_batch.return_value = (
+            [
+                CriteriaResult(criteria="criterion 0", weight=1.0, met=True, reasoning="ok"),
+                CriteriaResult(criteria="criterion 1", weight=1.0, met=True, reasoning="ok"),
+            ],
+            {"cost_usd": 0.1, "prompt_tokens": 100, "completion_tokens": 50, "cache_read_tokens": 0},
+        )
+
+        from gandalf_grader.__main__ import main
+
+        with patch("sys.argv", ["prog", "--config", "dummy.toml"]):
+            main()
+
+        mock_run_batch.assert_called_once()
+
     @patch("gandalf_grader.__main__.evaluate_all_criteria")
     def test_splits_2_even(self, mock_eval_all, tmp_path):
         """4 criteria split into 2 chunks of 2, results merged in order."""
@@ -1362,6 +1402,24 @@ class TestBatchSplits:
 
         # Should have called evaluate_all_criteria twice (2 splits)
         assert mock_eval_all.call_count == 2
+
+    def test_cli_splits_rejects_zero(self):
+        """--splits 0 is rejected by argparse."""
+        from gandalf_grader.__main__ import main
+
+        with patch("sys.argv", ["prog", "--config", "dummy.toml", "--splits", "0"]):
+            with pytest.raises(SystemExit) as exc_info:
+                main()
+            assert exc_info.value.code == 2  # argparse error exit code
+
+    def test_cli_splits_rejects_negative(self):
+        """--splits -1 is rejected by argparse."""
+        from gandalf_grader.__main__ import main
+
+        with patch("sys.argv", ["prog", "--config", "dummy.toml", "--splits", "-1"]):
+            with pytest.raises(SystemExit) as exc_info:
+                main()
+            assert exc_info.value.code == 2
 
     @patch("gandalf_grader.__main__.resolve_judge_guidance", return_value="")
     @patch("gandalf_grader.__main__.load_trajectory_final_output", return_value="done")
