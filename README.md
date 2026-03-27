@@ -25,6 +25,11 @@ Two evaluation modes are supported (configured via `mode` in the TOML config):
 
 When `max_concurrency` > 1, multiple judge sessions run in parallel. For batch mode this splits criteria into positional chunks; for individual mode it runs multiple criterion evaluations concurrently.
 
+```toml
+mode = "batch"
+max_concurrency = 2   # split criteria into 2 chunks, evaluate in parallel
+```
+
 ## Installation
 
 ```bash
@@ -81,6 +86,7 @@ gandalf-grader --config /tests/verifier.toml
 | `judge_timeout` | No | `300` | Max seconds per judge invocation |
 | `mode` | No | `individual` | Evaluation mode: `individual` or `batch` |
 | `max_concurrency` | No | `None` | Max parallel judge sessions (None = no parallelism) |
+| `judge_retries` | No | `1` | Number of retry attempts for errored criteria |
 | `judge_guidance_path` | No | | Path to a markdown file with extra judge instructions |
 | `batch_timeout` | No | | Max total seconds for batch mode (caps `judge_timeout * N`) |
 
