@@ -88,7 +88,7 @@ gandalf-grader --config /tests/verifier.toml
 | `max_concurrency` | No | `None` | Max parallel judge sessions (None = no parallelism) |
 | `judge_retries` | No | `1` | Number of retry attempts for errored criteria |
 | `judge_guidance_path` | No | | Path to a markdown file with extra judge instructions |
-| `batch_timeout` | No | | Max total seconds for batch mode (caps `judge_timeout * N`) |
+| `batch_timeout` | No | | Max seconds per batch session (caps `judge_timeout * N_criteria_in_session`) |
 
 MCP servers can be configured as TOML array of tables:
 

@@ -40,8 +40,11 @@ class VerifierConfig(BaseModel):
     criterion evaluations in parallel.
 
     judge_timeout is the per-criterion budget in seconds, regardless of mode.
-    In batch mode the effective timeout is ``judge_timeout * N_criteria``,
-    optionally capped by batch_timeout.
+    In batch mode the effective timeout per session is
+    ``judge_timeout * N_criteria_in_session``, optionally capped by
+    batch_timeout.  When max_concurrency > 1, N_criteria_in_session is the
+    chunk size (not the full rubric), and batch_timeout applies to each
+    chunk independently.
     """
 
     model: str = "google/gemini-2.5-flash"
