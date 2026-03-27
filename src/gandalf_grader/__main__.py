@@ -430,7 +430,7 @@ def _run_individual(
     print(f"[individual] Evaluating {n} criteria with max_concurrency={concurrency}")
     indexed_results: list[tuple[int, CriteriaResult]] = []
 
-    with ThreadPoolExecutor(max_workers=concurrency) as executor:
+    with ThreadPoolExecutor(max_workers=min(concurrency, n)) as executor:
         futures = [
             executor.submit(_eval_one, i, item)
             for i, item in enumerate(rubric)
@@ -521,6 +521,8 @@ def _run_batch_concurrent(
     """
     concurrency = config.max_concurrency or 1
     n = len(rubric)
+    if n == 0:
+        return [], {}
     chunk_size = math.ceil(n / concurrency)
     chunks: list[list[tuple[int, RubricItem]]] = []
     for start in range(0, n, chunk_size):
@@ -602,9 +604,11 @@ def _run_batch_concurrent(
                 for key in ("cost_usd", "prompt_tokens", "completion_tokens", "cache_read_tokens"):
                     total_usage[key] = total_usage.get(key, 0) + usage.get(key, 0)
         except Exception as exc:
-            # If any split raises an unexpected error, cancel remaining work
-            # and fail all criteria so the hard-fail path in main() writes
-            # info.json but not reward.json.
+            # All-or-nothing: if any split raises, we fail *all* criteria so
+            # the hard-fail path in main() writes info.json but not reward.json.
+            # We intentionally discard partial results from successful splits
+            # rather than returning a mix of real and error results.  Reset
+            # usage to stay consistent with the all-error result set.
             executor.shutdown(wait=True, cancel_futures=True)
             print(f"[batch-concurrent] Split failed unexpectedly: {exc}", file=sys.stderr)
             return (
@@ -617,7 +621,7 @@ def _run_batch_concurrent(
                     )
                     for item in rubric
                 ],
-                total_usage,
+                {},
             )
 
     # Sort back to original rubric order

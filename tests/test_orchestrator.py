@@ -1086,6 +1086,21 @@ class TestBatchConcurrent:
 
         mock_run_batch.assert_called_once()
 
+    def test_empty_rubric(self, tmp_path):
+        """Empty rubric returns empty results without crashing."""
+        config = _make_config(
+            workdir=str(tmp_path),
+            output_dir=str(tmp_path / "output"),
+            mode="batch",
+            max_concurrency=2,
+        )
+        os.makedirs(config.output_dir, exist_ok=True)
+
+        results, usage = _run_batch_concurrent(config, [], "done", "")
+
+        assert results == []
+        assert usage == {}
+
     @patch("gandalf_grader.__main__.evaluate_all_criteria")
     def test_splits_2_even(self, mock_eval_all, tmp_path):
         """4 criteria split into 2 chunks of 2, results merged in order."""
@@ -1612,11 +1627,13 @@ class TestBatchConcurrent:
 
         mock_eval_all.side_effect = _side_effect
 
-        results, _ = _run_batch_concurrent(config, rubric, "done", "")
+        results, usage = _run_batch_concurrent(config, rubric, "done", "")
 
         # All criteria should be marked as errored (not just the failed split)
         assert all(r.met is None for r in results)
         assert "Batch split failed" in results[0].reasoning
+        # Usage must be reset to stay consistent with all-error results
+        assert usage == {}
 
     @patch("gandalf_grader.__main__.evaluate_all_criteria")
     def test_split_returns_fewer_verdicts(self, mock_eval_all, tmp_path):
