@@ -13,7 +13,7 @@ from gandalf_grader.__main__ import (
     _JUDGE_ENV_ALLOWLIST,
     _clone_workspace,
     _judge_env_vars,
-    _run_batch_splits,
+    _run_batch_concurrent,
     _write_info,
     evaluate_all_criteria,
     evaluate_criteria,
@@ -568,7 +568,7 @@ class TestRetryLogic:
             sandbox_user="sandbox",
             output_dir=output_dir,
             judge_retries=1,
-            mode="sequential",
+            mode="individual",
         )
         mock_rubric.return_value = [
             RubricItem(criteria="c1", weight=1.0),
@@ -674,7 +674,7 @@ class TestRetryLogic:
             sandbox_user="sandbox",
             output_dir=output_dir,
             judge_retries=0,
-            mode="sequential",
+            mode="individual",
         )
         mock_rubric.return_value = [RubricItem(criteria="c1", weight=1.0)]
         mock_eval.return_value = {"met": None, "reasoning": "timeout"}
@@ -712,7 +712,7 @@ class TestRetryLogic:
             sandbox_user="sandbox",
             output_dir=output_dir,
             judge_retries=1,
-            mode="sequential",
+            mode="individual",
         )
         mock_rubric.return_value = [RubricItem(criteria="c1", weight=1.0)]
         mock_eval.return_value = {"met": None, "reasoning": "always fails"}
@@ -751,7 +751,7 @@ class TestRetryLogic:
             sandbox_user="sandbox",
             output_dir=output_dir,
             judge_retries=1,
-            mode="sequential",
+            mode="individual",
         )
         mock_rubric.return_value = [
             RubricItem(criteria="c1", weight=1.0),
@@ -798,7 +798,7 @@ class TestRetryLogic:
             sandbox_user="sandbox",
             output_dir=output_dir,
             judge_retries=0,
-            mode="sequential",
+            mode="individual",
         )
         mock_rubric.return_value = [
             RubricItem(criteria="correct output", weight=3.0),
@@ -1041,8 +1041,8 @@ class TestCloneWorkspace:
             shutil.rmtree(clone_dir, ignore_errors=True)
 
 
-class TestBatchSplits:
-    """Tests for _run_batch_splits — parallel positional splitting of batch evaluation."""
+class TestBatchConcurrent:
+    """Tests for _run_batch_concurrent — parallel positional splitting of batch evaluation."""
 
     def _make_rubric(self, n: int) -> list[RubricItem]:
         return [RubricItem(criteria=f"criterion {i}", weight=1.0) for i in range(n)]
@@ -1055,7 +1055,7 @@ class TestBatchSplits:
     def test_splits_1_dispatches_to_run_batch(
         self, mock_config, mock_rubric, mock_trajectory, mock_guidance, mock_run_batch, tmp_path
     ):
-        """batch_splits=1 dispatches to _run_batch, not _run_batch_splits."""
+        """max_concurrency=None (default) dispatches to _run_batch, not _run_batch_concurrent."""
         output_dir = str(tmp_path / "output")
         os.makedirs(output_dir, exist_ok=True)
 
@@ -1067,7 +1067,6 @@ class TestBatchSplits:
             sandbox_user="sandbox",
             output_dir=output_dir,
             mode="batch",
-            batch_splits=1,
         )
         rubric = self._make_rubric(2)
         mock_rubric.return_value = rubric
@@ -1094,7 +1093,7 @@ class TestBatchSplits:
             workdir=str(tmp_path),
             output_dir=str(tmp_path / "output"),
             mode="batch",
-            batch_splits=2,
+            max_concurrency=2,
         )
         os.makedirs(config.output_dir, exist_ok=True)
         rubric = self._make_rubric(4)
@@ -1109,7 +1108,7 @@ class TestBatchSplits:
 
         mock_eval_all.side_effect = _side_effect
 
-        results, usage = _run_batch_splits(config, rubric, "done", "")
+        results, usage = _run_batch_concurrent(config, rubric, "done", "")
 
         assert len(results) == 4
         # Verify order preserved
@@ -1134,7 +1133,7 @@ class TestBatchSplits:
             workdir=str(tmp_path),
             output_dir=str(tmp_path / "output"),
             mode="batch",
-            batch_splits=3,
+            max_concurrency=3,
         )
         os.makedirs(config.output_dir, exist_ok=True)
         rubric = self._make_rubric(7)
@@ -1148,7 +1147,7 @@ class TestBatchSplits:
 
         mock_eval_all.side_effect = _side_effect
 
-        results, usage = _run_batch_splits(config, rubric, "done", "")
+        results, usage = _run_batch_concurrent(config, rubric, "done", "")
 
         assert len(results) == 7
         for i, r in enumerate(results):
@@ -1164,7 +1163,7 @@ class TestBatchSplits:
             workdir=str(tmp_path),
             output_dir=str(tmp_path / "output"),
             mode="batch",
-            batch_splits=5,
+            max_concurrency=5,
         )
         os.makedirs(config.output_dir, exist_ok=True)
         rubric = self._make_rubric(3)
@@ -1178,7 +1177,7 @@ class TestBatchSplits:
 
         mock_eval_all.side_effect = _side_effect
 
-        results, usage = _run_batch_splits(config, rubric, "done", "")
+        results, usage = _run_batch_concurrent(config, rubric, "done", "")
 
         assert len(results) == 3
         assert mock_eval_all.call_count == 3
@@ -1191,7 +1190,7 @@ class TestBatchSplits:
             workdir=str(tmp_path),
             output_dir=str(tmp_path / "output"),
             mode="batch",
-            batch_splits=2,
+            max_concurrency=2,
         )
         os.makedirs(config.output_dir, exist_ok=True)
         rubric = self._make_rubric(4)
@@ -1208,7 +1207,7 @@ class TestBatchSplits:
 
         mock_eval_all.side_effect = _side_effect
 
-        _run_batch_splits(config, rubric, "done", "")
+        _run_batch_concurrent(config, rubric, "done", "")
 
         assert len(trace_paths) == 2
         assert trace_paths[0] != trace_paths[1]
@@ -1224,7 +1223,7 @@ class TestBatchSplits:
             workdir=str(tmp_path),
             output_dir=str(tmp_path / "output"),
             mode="batch",
-            batch_splits=2,
+            max_concurrency=2,
         )
         os.makedirs(config.output_dir, exist_ok=True)
         rubric = self._make_rubric(4)
@@ -1248,7 +1247,7 @@ class TestBatchSplits:
 
         mock_eval_all.side_effect = _side_effect
 
-        results, _ = _run_batch_splits(config, rubric, "done", "")
+        results, _ = _run_batch_concurrent(config, rubric, "done", "")
 
         assert results[0].met is True
         assert results[1].met is True
@@ -1262,7 +1261,7 @@ class TestBatchSplits:
             workdir=str(tmp_path),
             output_dir=str(tmp_path / "output"),
             mode="batch",
-            batch_splits=2,
+            max_concurrency=2,
             judge_timeout=100,
         )
         os.makedirs(config.output_dir, exist_ok=True)
@@ -1280,7 +1279,7 @@ class TestBatchSplits:
 
         mock_eval_all.side_effect = _side_effect
 
-        _run_batch_splits(config, rubric, "done", "")
+        _run_batch_concurrent(config, rubric, "done", "")
 
         # Each split has 2 criteria → timeout = 100 * 2 = 200
         assert all(t == 200 for t in timeouts)
@@ -1292,7 +1291,7 @@ class TestBatchSplits:
             workdir=str(tmp_path),
             output_dir=str(tmp_path / "output"),
             mode="batch",
-            batch_splits=2,
+            max_concurrency=2,
             judge_timeout=100,
             batch_timeout=150,
         )
@@ -1311,7 +1310,7 @@ class TestBatchSplits:
 
         mock_eval_all.side_effect = _side_effect
 
-        _run_batch_splits(config, rubric, "done", "")
+        _run_batch_concurrent(config, rubric, "done", "")
 
         # 2 criteria * 100s = 200, capped to 150
         assert all(t == 150 for t in timeouts)
@@ -1324,7 +1323,7 @@ class TestBatchSplits:
     def test_main_dispatches_batch_splits(
         self, mock_eval_all, mock_config, mock_rubric, mock_trajectory, mock_guidance, tmp_path
     ):
-        """main() dispatches to _run_batch_splits when batch_splits > 1."""
+        """main() dispatches to _run_batch_concurrent when batch_splits > 1."""
         output_dir = str(tmp_path / "output")
         os.makedirs(output_dir, exist_ok=True)
 
@@ -1336,7 +1335,7 @@ class TestBatchSplits:
             sandbox_user="sandbox",
             output_dir=output_dir,
             mode="batch",
-            batch_splits=2,
+            max_concurrency=2,
         )
         mock_rubric.return_value = self._make_rubric(4)
 
@@ -1366,66 +1365,6 @@ class TestBatchSplits:
     @patch("gandalf_grader.__main__.load_rubric")
     @patch("gandalf_grader.__main__.load_config")
     @patch("gandalf_grader.__main__.evaluate_all_criteria")
-    def test_cli_splits_override(
-        self, mock_eval_all, mock_config, mock_rubric, mock_trajectory, mock_guidance, tmp_path
-    ):
-        """--splits CLI arg overrides config.batch_splits."""
-        output_dir = str(tmp_path / "output")
-        os.makedirs(output_dir, exist_ok=True)
-
-        mock_config.return_value = VerifierConfig(
-            instructions="test",
-            rubric_path="/rubric.json",
-            workdir=str(tmp_path),
-            trajectory_path="/logs/trajectory.json",
-            sandbox_user="sandbox",
-            output_dir=output_dir,
-            mode="batch",
-            batch_splits=1,  # Config says 1 (no splitting)
-        )
-        mock_rubric.return_value = self._make_rubric(4)
-
-        def _side_effect(judge_input, **kwargs):
-            verdicts = [
-                {"index": c.index, "met": True, "reasoning": "ok", "evidence": []}
-                for c in judge_input.criteria
-            ]
-            return verdicts, {"cost_usd": 0.1, "prompt_tokens": 50, "completion_tokens": 25, "cache_read_tokens": 0}
-
-        mock_eval_all.side_effect = _side_effect
-
-        from gandalf_grader.__main__ import main
-
-        # --splits 2 overrides config.batch_splits=1
-        with patch("sys.argv", ["prog", "--config", "dummy.toml", "--splits", "2"]):
-            main()
-
-        # Should have called evaluate_all_criteria twice (2 splits)
-        assert mock_eval_all.call_count == 2
-
-    def test_cli_splits_rejects_zero(self):
-        """--splits 0 is rejected by argparse."""
-        from gandalf_grader.__main__ import main
-
-        with patch("sys.argv", ["prog", "--config", "dummy.toml", "--splits", "0"]):
-            with pytest.raises(SystemExit) as exc_info:
-                main()
-            assert exc_info.value.code == 2  # argparse error exit code
-
-    def test_cli_splits_rejects_negative(self):
-        """--splits -1 is rejected by argparse."""
-        from gandalf_grader.__main__ import main
-
-        with patch("sys.argv", ["prog", "--config", "dummy.toml", "--splits", "-1"]):
-            with pytest.raises(SystemExit) as exc_info:
-                main()
-            assert exc_info.value.code == 2
-
-    @patch("gandalf_grader.__main__.resolve_judge_guidance", return_value="")
-    @patch("gandalf_grader.__main__.load_trajectory_final_output", return_value="done")
-    @patch("gandalf_grader.__main__.load_rubric")
-    @patch("gandalf_grader.__main__.load_config")
-    @patch("gandalf_grader.__main__.evaluate_all_criteria")
     def test_retry_after_batch_splits(
         self, mock_eval_all, mock_config, mock_rubric, mock_trajectory, mock_guidance, tmp_path
     ):
@@ -1441,7 +1380,7 @@ class TestBatchSplits:
             sandbox_user="sandbox",
             output_dir=output_dir,
             mode="batch",
-            batch_splits=2,
+            max_concurrency=2,
             judge_retries=1,
         )
         mock_rubric.return_value = self._make_rubric(4)
@@ -1493,7 +1432,7 @@ class TestBatchSplits:
             workdir=str(tmp_path),
             output_dir=str(tmp_path / "output"),
             mode="batch",
-            batch_splits=2,
+            max_concurrency=2,
         )
         os.makedirs(config.output_dir, exist_ok=True)
         rubric = self._make_rubric(4)
@@ -1515,7 +1454,7 @@ class TestBatchSplits:
 
         mock_eval_all.side_effect = _side_effect
 
-        results, _ = _run_batch_splits(config, rubric, "done", "")
+        results, _ = _run_batch_concurrent(config, rubric, "done", "")
 
         assert results[0].met is True
         assert results[1].met is True
@@ -1529,7 +1468,7 @@ class TestBatchSplits:
             workdir=str(tmp_path),
             output_dir=str(tmp_path / "output"),
             mode="batch",
-            batch_splits=2,
+            max_concurrency=2,
         )
         os.makedirs(config.output_dir, exist_ok=True)
         rubric = self._make_rubric(4)
@@ -1551,7 +1490,7 @@ class TestBatchSplits:
 
         mock_eval_all.side_effect = _side_effect
 
-        results, _ = _run_batch_splits(config, rubric, "done", "")
+        results, _ = _run_batch_concurrent(config, rubric, "done", "")
 
         assert results[2].met is None
         assert "timed out" in results[2].reasoning
@@ -1563,7 +1502,7 @@ class TestBatchSplits:
             workdir=str(tmp_path),
             output_dir=str(tmp_path / "output"),
             mode="batch",
-            batch_splits=2,
+            max_concurrency=2,
         )
         os.makedirs(config.output_dir, exist_ok=True)
         rubric = self._make_rubric(4)
@@ -1577,7 +1516,7 @@ class TestBatchSplits:
 
         mock_eval_all.side_effect = _side_effect
 
-        results, _ = _run_batch_splits(config, rubric, "done", "")
+        results, _ = _run_batch_concurrent(config, rubric, "done", "")
 
         assert all(r.met is None for r in results)
 
@@ -1606,7 +1545,7 @@ class TestBatchSplits:
             sandbox_user="sandbox",
             output_dir=output_dir,
             mode="batch",
-            batch_splits=2,
+            max_concurrency=2,
             judge_retries=1,
         )
         mock_rubric.return_value = self._make_rubric(4)
@@ -1655,7 +1594,7 @@ class TestBatchSplits:
             workdir=str(tmp_path),
             output_dir=str(tmp_path / "output"),
             mode="batch",
-            batch_splits=2,
+            max_concurrency=2,
         )
         os.makedirs(config.output_dir, exist_ok=True)
         rubric = self._make_rubric(4)
@@ -1673,7 +1612,7 @@ class TestBatchSplits:
 
         mock_eval_all.side_effect = _side_effect
 
-        results, _ = _run_batch_splits(config, rubric, "done", "")
+        results, _ = _run_batch_concurrent(config, rubric, "done", "")
 
         # All criteria should be marked as errored (not just the failed split)
         assert all(r.met is None for r in results)
@@ -1686,7 +1625,7 @@ class TestBatchSplits:
             workdir=str(tmp_path),
             output_dir=str(tmp_path / "output"),
             mode="batch",
-            batch_splits=2,
+            max_concurrency=2,
         )
         os.makedirs(config.output_dir, exist_ok=True)
         rubric = self._make_rubric(4)
@@ -1709,7 +1648,7 @@ class TestBatchSplits:
 
         mock_eval_all.side_effect = _side_effect
 
-        results, _ = _run_batch_splits(config, rubric, "done", "")
+        results, _ = _run_batch_concurrent(config, rubric, "done", "")
 
         assert results[0].met is True   # split 0, verdict present
         assert results[1].met is True   # split 0, verdict present

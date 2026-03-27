@@ -4,10 +4,12 @@ Runs as the verifier user and spawns the inner judge as the sandbox user
 (via sudo) to evaluate rubric criteria using an OpenHands agent-as-judge.
 
 Supports two evaluation modes (configured via ``mode`` in the TOML config):
-  - **sequential** (default): one agent session per rubric criterion.
+  - **individual** (default): one agent session per rubric criterion.
   - **batch**: all criteria evaluated in a single agent session.
-    When ``batch_splits`` > 1, criteria are split into N positional chunks
-    and evaluated in parallel batch sessions.
+
+When ``max_concurrency`` > 1, multiple judge sessions run in parallel.
+For batch mode this splits criteria into positional chunks; for individual
+mode it runs multiple criterion evaluations concurrently.
 
 Produces:
   /logs/verifier/reward.json  - Reward file ([0,1] reward)
@@ -363,7 +365,7 @@ def _save_trace(trace_path: str, stdout: str, stderr: str, returncode: int) -> N
         f.write(stderr)
 
 
-def _run_sequential(
+def _run_individual(
     config: VerifierConfig,
     rubric: list[RubricItem],
     final_output: str,
@@ -371,13 +373,14 @@ def _run_sequential(
 ) -> tuple[list[CriteriaResult], dict[str, Any]]:
     """Evaluate each criterion in its own agent session.
 
-    Returns (results, llm_usage) where llm_usage is the aggregated
-    token/cost totals across all individual judge sessions.
+    When max_concurrency > 1, up to N criteria are evaluated in parallel
+    via a thread pool.  Results are always returned in rubric order.
     """
-    results: list[CriteriaResult] = []
-    total_usage: dict[str, float | int] = {}
-    for i, item in enumerate(rubric):
-        print(f"[{i + 1}/{len(rubric)}] Evaluating: {item.criteria[:80]}...")
+    n = len(rubric)
+    concurrency = config.max_concurrency or 1
+
+    def _eval_one(i: int, item: RubricItem) -> tuple[int, CriteriaResult, dict[str, Any]]:
+        print(f"[{i + 1}/{n}] Evaluating: {item.criteria[:80]}...")
 
         judge_input = JudgeInput(
             model=config.model,
@@ -398,9 +401,6 @@ def _run_sequential(
         )
 
         usage = verdict.get("llm_usage", {})
-        for key in ("cost_usd", "prompt_tokens", "completion_tokens", "cache_read_tokens"):
-            total_usage[key] = total_usage.get(key, 0) + usage.get(key, 0)
-
         result = CriteriaResult(
             criteria=item.criteria,
             weight=item.weight,
@@ -408,12 +408,41 @@ def _run_sequential(
             reasoning=verdict.get("reasoning", "No reasoning provided."),
             evidence=verdict.get("evidence", []),
         )
-        results.append(result)
 
         status = "MET" if result.met is True else ("ERROR" if result.met is None else "UNMET")
-        print(f"  -> {status}: {result.reasoning[:120]}")
+        print(f"  [{i + 1}/{n}] {status}: {result.reasoning[:120]}")
 
-    return results, total_usage
+        return i, result, usage
+
+    total_usage: dict[str, float | int] = {}
+
+    if concurrency == 1:
+        # Serial path — no thread pool overhead
+        results: list[CriteriaResult] = []
+        for i, item in enumerate(rubric):
+            _, result, usage = _eval_one(i, item)
+            results.append(result)
+            for key in ("cost_usd", "prompt_tokens", "completion_tokens", "cache_read_tokens"):
+                total_usage[key] = total_usage.get(key, 0) + usage.get(key, 0)
+        return results, total_usage
+
+    # Concurrent path
+    print(f"[individual] Evaluating {n} criteria with max_concurrency={concurrency}")
+    indexed_results: list[tuple[int, CriteriaResult]] = []
+
+    with ThreadPoolExecutor(max_workers=concurrency) as executor:
+        futures = [
+            executor.submit(_eval_one, i, item)
+            for i, item in enumerate(rubric)
+        ]
+        for future in futures:
+            i, result, usage = future.result()
+            indexed_results.append((i, result))
+            for key in ("cost_usd", "prompt_tokens", "completion_tokens", "cache_read_tokens"):
+                total_usage[key] = total_usage.get(key, 0) + usage.get(key, 0)
+
+    indexed_results.sort(key=lambda x: x[0])
+    return [r for _, r in indexed_results], total_usage
 
 
 def _run_batch(
@@ -478,7 +507,7 @@ def _run_batch(
     return results, llm_usage
 
 
-def _run_batch_splits(
+def _run_batch_concurrent(
     config: VerifierConfig,
     rubric: list[RubricItem],
     final_output: str,
@@ -490,14 +519,15 @@ def _run_batch_splits(
     via a thread pool (each thread blocks on subprocess.run).  Results are merged
     back in original rubric order.
     """
+    concurrency = config.max_concurrency or 1
     n = len(rubric)
-    chunk_size = math.ceil(n / config.batch_splits)
+    chunk_size = math.ceil(n / concurrency)
     chunks: list[list[tuple[int, RubricItem]]] = []
     for start in range(0, n, chunk_size):
         chunks.append([(i, rubric[i]) for i in range(start, min(start + chunk_size, n))])
 
     print(
-        f"[batch-splits] Splitting {n} criteria into {len(chunks)} chunks "
+        f"[batch-concurrent] Splitting {n} criteria into {len(chunks)} chunks "
         f"(sizes: {', '.join(str(len(c)) for c in chunks)})"
     )
 
@@ -576,7 +606,7 @@ def _run_batch_splits(
             # and fail all criteria so the hard-fail path in main() writes
             # info.json but not reward.json.
             executor.shutdown(wait=True, cancel_futures=True)
-            print(f"[batch-splits] Split failed unexpectedly: {exc}", file=sys.stderr)
+            print(f"[batch-concurrent] Split failed unexpectedly: {exc}", file=sys.stderr)
             return (
                 [
                     CriteriaResult(
@@ -602,7 +632,7 @@ def _get_errored_indices(results: list[CriteriaResult]) -> list[int]:
     return [i for i, r in enumerate(results) if r.met is None]
 
 
-def _retry_sequential(
+def _retry_individual(
     config: VerifierConfig,
     rubric: list[RubricItem],
     results: list[CriteriaResult],
@@ -768,36 +798,9 @@ def main() -> None:
     parser.add_argument(
         "--config", required=True, help="Path to verifier config TOML file"
     )
-    parser.add_argument(
-        "--mode",
-        choices=["sequential", "batch"],
-        default=None,
-        help=(
-            "Override the evaluation mode from config. "
-            "'sequential' runs each criterion separately; "
-            "'batch' evaluates all criteria in one agent session."
-        ),
-    )
-    parser.add_argument(
-        "--splits",
-        type=int,
-        default=None,
-        help=(
-            "Override batch_splits from config. When mode='batch' and splits > 1, "
-            "criteria are split into N positional chunks and evaluated in parallel."
-        ),
-    )
     args = parser.parse_args()
 
-    if args.splits is not None and args.splits < 1:
-        parser.error("--splits must be >= 1")
-
     config = load_config(args.config)
-
-    if args.mode is not None:
-        config.mode = args.mode
-    if args.splits is not None:
-        config.batch_splits = args.splits
 
     rubric = load_rubric(config.rubric_path)
     final_output = load_trajectory_final_output(config.trajectory_path)
@@ -805,14 +808,16 @@ def main() -> None:
 
     os.makedirs(config.output_dir, exist_ok=True)
 
+    concurrency = config.max_concurrency or 1
+
     # 1. Initial evaluation
     if config.mode == "batch":
-        if config.batch_splits > 1:
-            results, llm_usage = _run_batch_splits(config, rubric, final_output, judge_guidance)
+        if concurrency > 1:
+            results, llm_usage = _run_batch_concurrent(config, rubric, final_output, judge_guidance)
         else:
             results, llm_usage = _run_batch(config, rubric, final_output, judge_guidance)
     else:
-        results, llm_usage = _run_sequential(config, rubric, final_output, judge_guidance)
+        results, llm_usage = _run_individual(config, rubric, final_output, judge_guidance)
 
     # 2. Record initial error count for observability
     initial_errored = len(_get_errored_indices(results))
@@ -826,7 +831,7 @@ def main() -> None:
         if config.mode == "batch":
             _retry_batch(config, rubric, results, llm_usage, final_output, judge_guidance, errored)
         else:
-            _retry_sequential(config, rubric, results, llm_usage, final_output, judge_guidance, errored)
+            _retry_individual(config, rubric, results, llm_usage, final_output, judge_guidance, errored)
 
     # 4. ALWAYS write info.json (even on hard fail)
     final_errored = _get_errored_indices(results)
@@ -859,8 +864,8 @@ def main() -> None:
             f"{total_prompt} prompt + {total_completion} completion tokens)"
         )
     mode_str = config.mode
-    if config.mode == "batch" and config.batch_splits > 1:
-        mode_str += f" (splits={config.batch_splits})"
+    if concurrency > 1:
+        mode_str += f" (max_concurrency={concurrency})"
     print(f"Mode: {mode_str}")
     if initial_errored > 0:
         print(f"Retried: {initial_errored} criteria recovered after retry")

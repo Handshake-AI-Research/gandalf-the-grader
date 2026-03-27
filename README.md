@@ -18,10 +18,12 @@ The grader uses a two-process architecture:
 - **Outer orchestrator** (`gandalf-grader`) — runs as the verifier user, manages the evaluation loop, computes reward/raw scoring outputs, and writes output files.
 - **Inner judge** (`gandalf-grader-judge`) — runs as the sandbox user (via `sudo`), executes an [OpenHands](https://github.com/All-Hands-AI/OpenHands) agent-as-judge session that investigates the workspace and writes a verdict.
 
-Two evaluation modes are supported:
+Two evaluation modes are supported (configured via `mode` in the TOML config):
 
-- **Sequential** (default): one agent session per rubric criterion.
+- **Individual** (default): one agent session per rubric criterion.
 - **Batch**: all criteria evaluated in a single agent session.
+
+When `max_concurrency` > 1, multiple judge sessions run in parallel. For batch mode this splits criteria into positional chunks; for individual mode it runs multiple criterion evaluations concurrently.
 
 ## Installation
 
@@ -77,7 +79,8 @@ gandalf-grader --config /tests/verifier.toml
 | `trajectory_path` | Yes | | Path to ATIF trajectory JSON |
 | `output_dir` | No | `/logs/verifier` | Directory for output files |
 | `judge_timeout` | No | `300` | Max seconds per judge invocation |
-| `mode` | No | `sequential` | Evaluation mode: `sequential` or `batch` |
+| `mode` | No | `individual` | Evaluation mode: `individual` or `batch` |
+| `max_concurrency` | No | `None` | Max parallel judge sessions (None = no parallelism) |
 | `judge_guidance_path` | No | | Path to a markdown file with extra judge instructions |
 | `batch_timeout` | No | | Max total seconds for batch mode (caps `judge_timeout * N`) |
 

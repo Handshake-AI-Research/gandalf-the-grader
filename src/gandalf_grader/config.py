@@ -6,7 +6,7 @@ import tomllib
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, Field, TypeAdapter
+from pydantic import BaseModel, Field, TypeAdapter, field_validator
 
 
 class MCPServer(BaseModel):
@@ -24,19 +24,24 @@ class MCPServer(BaseModel):
 class VerifierConfig(BaseModel):
     """Top-level verifier configuration loaded from a TOML file.
 
-    mode controls how rubric criteria are evaluated:
-      - "sequential" (default): each criterion is evaluated in its own agent
-        session (one invocation of gandalf-grader-judge per criterion).
-      - "batch": all criteria are sent to a single agent session, which writes
-        a JSON array of verdicts in one go.
+    mode controls the *granularity* of rubric evaluation — how many criteria
+    are sent to each judge session:
+      - "individual" (default): one agent session per rubric criterion.
+      - "batch": all criteria evaluated in a single agent session.
+
+    max_concurrency controls the *parallelism* — how many judge sessions run
+    at the same time:
+      - None (default): no parallelism (1 session at a time).
+      - N (>= 1): up to N sessions in parallel.
+
+    These are orthogonal axes.  For batch mode, max_concurrency > 1 splits
+    criteria into N positional chunks, each evaluated as a separate batch
+    session.  For individual mode, max_concurrency > 1 runs N individual
+    criterion evaluations in parallel.
 
     judge_timeout is the per-criterion budget in seconds, regardless of mode.
     In batch mode the effective timeout is ``judge_timeout * N_criteria``,
     optionally capped by batch_timeout.
-
-    batch_splits controls how many positional chunks to split criteria into
-    when mode="batch".  Each chunk is evaluated as a separate batch session
-    in parallel.  Default is 1 (no splitting).
     """
 
     model: str = "google/gemini-2.5-flash"
@@ -50,9 +55,22 @@ class VerifierConfig(BaseModel):
     judge_timeout: int = 300
     judge_guidance_path: str | None = None
     batch_timeout: int | None = None
-    mode: Literal["sequential", "batch"] = "sequential"
-    batch_splits: int = Field(default=1, ge=1)
+    mode: Literal["individual", "batch"] = "individual"
+    max_concurrency: int | None = Field(default=None, ge=1)
     judge_retries: int = 1
+
+    @field_validator("mode", mode="before")
+    @classmethod
+    def _migrate_sequential(cls, v: str) -> str:
+        if v == "sequential":
+            import warnings
+            warnings.warn(
+                'mode="sequential" is deprecated, use mode="individual" instead',
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            return "individual"
+        return v
 
 
 class RubricItem(BaseModel):
