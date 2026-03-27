@@ -22,6 +22,7 @@ dependencies = [
     "openhands-tools>=1.11.2,<2",
     "pydantic>=2.12.5,<3",
 ]
+dynamic = ["optional-dependencies"]
 
 [project.urls]
 homepage = "https://github.com/Handshake-AI-Research/gandalf-the-grader"
@@ -33,7 +34,7 @@ gandalf-the-grader = "gandalf.orchestrator:main"
 gandalf-the-grader-judge = "gandalf.judge:main"
 
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling", "hatch-pinned-extra>=0.2.0,<0.3.0"]
 build-backend = "hatchling.build"
 
 [tool.hatch.version]
@@ -44,6 +45,12 @@ packages = ["src/gandalf"]
 
 [tool.hatch.envs.default]
 installer = "uv"
+
+[tool.hatch.metadata.hooks.pinned_extra]
+name = "pinned"
+
+[dependency-groups]
+dev = ["pytest>=8.0", "ruff>=0.15.0", "mypy>=1.19.0"]
 
 [[tool.hatch.envs.hatch-test.matrix]]
 python = ["3.12", "3.13", "3.14"]
