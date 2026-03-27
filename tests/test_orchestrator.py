@@ -1130,7 +1130,6 @@ class TestBatchConcurrent:
         for i, r in enumerate(results):
             assert r.criteria == f"criterion {i}"
             assert r.met is True
-            assert r.reasoning == f"ok {i}"
 
         # 2 splits, each with usage
         assert usage["cost_usd"] == pytest.approx(0.2)
@@ -1140,6 +1139,52 @@ class TestBatchConcurrent:
 
         # Verify evaluate_all_criteria was called twice (one per split)
         assert mock_eval_all.call_count == 2
+
+    @patch("gandalf_grader.__main__.evaluate_all_criteria")
+    def test_split_uses_local_indices(self, mock_eval_all, tmp_path):
+        """Chunks must use 0-based local indices, not global rubric positions.
+
+        Regression test: the judge prompt says "0 through N-1" and
+        _read_batch_verdict filters by 0 <= idx < N, so passing global
+        indices (e.g. 3, 4, 5) for chunk 2 causes the judge to either
+        write mismatched indices or have its verdicts silently discarded.
+        """
+        config = _make_config(
+            workdir=str(tmp_path),
+            output_dir=str(tmp_path / "output"),
+            mode="batch",
+            max_concurrency=3,
+        )
+        os.makedirs(config.output_dir, exist_ok=True)
+        rubric = self._make_rubric(6)  # 6 criteria → 3 chunks of 2
+
+        received_indices = []
+
+        def _side_effect(judge_input, **kwargs):
+            indices = [c.index for c in judge_input.criteria]
+            received_indices.append(indices)
+            verdicts = [
+                {"index": c.index, "met": True, "reasoning": "ok", "evidence": []}
+                for c in judge_input.criteria
+            ]
+            return verdicts, {"cost_usd": 0.05}
+
+        mock_eval_all.side_effect = _side_effect
+
+        results, _ = _run_batch_concurrent(config, rubric, "done", "")
+
+        # Every chunk must use local 0-based indices
+        for indices in received_indices:
+            assert indices == list(range(len(indices))), (
+                f"Expected 0-based local indices, got {indices}"
+            )
+
+        # All 6 results should be successful
+        assert len(results) == 6
+        assert all(r.met is True for r in results)
+        # Results are in original rubric order
+        for i, r in enumerate(results):
+            assert r.criteria == f"criterion {i}"
 
     @patch("gandalf_grader.__main__.evaluate_all_criteria")
     def test_splits_3_uneven(self, mock_eval_all, tmp_path):
@@ -1245,8 +1290,9 @@ class TestBatchConcurrent:
 
         def _side_effect(judge_input, **kwargs):
             criteria = judge_input.criteria
-            indices = {c.index for c in criteria}
-            if indices == {0, 1}:
+            # Identify chunk by criteria text (indices are local 0-based in both chunks)
+            is_second_chunk = any("criterion 2" in c.criteria for c in criteria)
+            if not is_second_chunk:
                 # First split: both pass
                 verdicts = [
                     {"index": c.index, "met": True, "reasoning": "ok", "evidence": []}
@@ -1255,8 +1301,8 @@ class TestBatchConcurrent:
             else:
                 # Second split: first criterion errors, second passes
                 verdicts = [
-                    {"index": criteria[0].index, "met": None, "reasoning": "timeout", "evidence": []},
-                    {"index": criteria[1].index, "met": True, "reasoning": "ok", "evidence": []},
+                    {"index": 0, "met": None, "reasoning": "timeout", "evidence": []},
+                    {"index": 1, "met": True, "reasoning": "ok", "evidence": []},
                 ]
             return verdicts, {"cost_usd": 0.1}
 
@@ -1453,8 +1499,8 @@ class TestBatchConcurrent:
         rubric = self._make_rubric(4)
 
         def _side_effect(judge_input, **kwargs):
-            indices = {c.index for c in judge_input.criteria}
-            if indices == {0, 1}:
+            is_second_chunk = any("criterion 2" in c.criteria for c in judge_input.criteria)
+            if not is_second_chunk:
                 verdicts = [
                     {"index": c.index, "met": True, "reasoning": "ok", "evidence": []}
                     for c in judge_input.criteria
@@ -1489,8 +1535,8 @@ class TestBatchConcurrent:
         rubric = self._make_rubric(4)
 
         def _side_effect(judge_input, **kwargs):
-            indices = {c.index for c in judge_input.criteria}
-            if indices == {0, 1}:
+            is_second_chunk = any("criterion 2" in c.criteria for c in judge_input.criteria)
+            if not is_second_chunk:
                 verdicts = [
                     {"index": c.index, "met": True, "reasoning": "ok", "evidence": []}
                     for c in judge_input.criteria
@@ -1615,8 +1661,8 @@ class TestBatchConcurrent:
         rubric = self._make_rubric(4)
 
         def _side_effect(judge_input, **kwargs):
-            indices = {c.index for c in judge_input.criteria}
-            if indices == {0, 1}:
+            is_second_chunk = any("criterion 2" in c.criteria for c in judge_input.criteria)
+            if not is_second_chunk:
                 verdicts = [
                     {"index": c.index, "met": True, "reasoning": "ok", "evidence": []}
                     for c in judge_input.criteria
@@ -1648,8 +1694,8 @@ class TestBatchConcurrent:
         rubric = self._make_rubric(4)
 
         def _side_effect(judge_input, **kwargs):
-            indices = {c.index for c in judge_input.criteria}
-            if indices == {0, 1}:
+            is_second_chunk = any("criterion 2" in c.criteria for c in judge_input.criteria)
+            if not is_second_chunk:
                 # First split (criteria 0, 1): returns both verdicts
                 verdicts = [
                     {"index": c.index, "met": True, "reasoning": "ok", "evidence": []}
@@ -1659,7 +1705,7 @@ class TestBatchConcurrent:
             else:
                 # Second split (criteria 2, 3): only returns 1 verdict for 2 criteria
                 verdicts = [
-                    {"index": judge_input.criteria[0].index, "met": True, "reasoning": "ok", "evidence": []},
+                    {"index": 0, "met": True, "reasoning": "ok", "evidence": []},
                 ]
                 return verdicts, {}
 

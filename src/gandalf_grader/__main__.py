@@ -534,9 +534,12 @@ def _run_batch_concurrent(
     )
 
     def _run_split(split_idx: int, chunk: list[tuple[int, RubricItem]]) -> tuple[list[tuple[int, CriteriaResult]], dict[str, Any]]:
+        # Use local 0-based indices for the judge — the prompt says
+        # "0 through N-1" and _read_batch_verdict filters by 0 <= idx < N.
+        # Global rubric indices are restored when building indexed_results.
         criteria_list = [
-            BatchCriterion(index=orig_idx, criteria=item.criteria)
-            for orig_idx, item in chunk
+            BatchCriterion(index=local_idx, criteria=item.criteria)
+            for local_idx, (_orig_idx, item) in enumerate(chunk)
         ]
 
         n_criteria = len(criteria_list)
