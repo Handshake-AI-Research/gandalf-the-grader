@@ -553,7 +553,9 @@ class TestBuildJudgePromptXMLTags:
         assert "<agent_final_output>" in prompt
         assert "<evaluation_criterion>" in prompt
         assert "<judge_instructions>" in prompt
-        assert "## " not in prompt
+        # Top-level sections use XML tags, not markdown headings.
+        # Sub-headings (###) within <judge_instructions> are allowed for phase structure.
+        assert "## " not in prompt.replace("### ", "")
 
     def test_batch_uses_xml_tags(self) -> None:
         criteria = ["c0", "c1"]
@@ -567,7 +569,7 @@ class TestBuildJudgePromptXMLTags:
         assert "<evaluation_criteria>\n  [0] c0\n  [1] c1\n</evaluation_criteria>" in prompt
         assert "<judge_instructions>" in prompt
         assert "0 through 1" in prompt
-        assert "## " not in prompt
+        assert "## " not in prompt.replace("### ", "")
 
     def test_single_guidance_uses_xml_tag(self) -> None:
         prompt = build_judge_prompt(
