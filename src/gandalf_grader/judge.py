@@ -60,10 +60,10 @@ was desirable.
 After your investigation, you MUST write your verdict as a JSON object to the file:
   {verdict_path}
 
-IMPORTANT: You must use the file_editor tool (create command) or the terminal tool \
-(e.g. cat <<'EOF' > {verdict_path}) to physically write the file to disk. \
-Do NOT simply print or display the JSON in your response — the verdict will only be \
-read from the file on disk.
+IMPORTANT: You MUST use the file_editor tool (create command) to write the file to disk. \
+Do NOT use the terminal tool (cat, echo, heredoc) to write the verdict — terminal escape \
+sequences will corrupt the JSON. Do NOT simply print or display the JSON in your response \
+— the verdict will only be read from the file on disk.
 
 The JSON object must have exactly these fields:
 - "met": true if the condition described in the criterion factually occurred or is \
@@ -139,10 +139,10 @@ was desirable.
 After your investigation, you MUST write your verdicts as a JSON array to the file:
   {verdict_path}
 
-IMPORTANT: You must use the file_editor tool (create command) or the terminal tool \
-(e.g. cat <<'EOF' > {verdict_path}) to physically write the file to disk. \
-Do NOT simply print or display the JSON in your response — the verdict will only be \
-read from the file on disk.
+IMPORTANT: You MUST use the file_editor tool (create command) to write the file to disk. \
+Do NOT use the terminal tool (cat, echo, heredoc) to write the verdict — terminal escape \
+sequences will corrupt the JSON. Do NOT simply print or display the JSON in your response \
+— the verdict will only be read from the file on disk.
 
 Each element in the array must have exactly these fields:
 - "index": the criterion index (integer, 0-based)
