@@ -47,6 +47,10 @@ directory and can inspect files, run commands, and use tools to investigate.
 {criteria}
 
 ## Your Task
+
+Your task has two phases:
+
+### Phase 1: Investigation
 Investigate the current state of the environment to determine whether the condition \
 described in the evaluation criteria actually occurred or is factually true. Use the \
 available tools to read files, run commands, and inspect the environment as needed.
@@ -57,13 +61,12 @@ IMPORTANT: The "met" field records whether the described condition is TRUE IN FA
 sent that email, and false if it did not — regardless of whether sending the email \
 was desirable.
 
-After your investigation, you MUST write your verdict as a JSON object to the file:
+### Phase 2: Write verdict file
+When your investigation is complete, you MUST write your verdict as a JSON object to:
   {verdict_path}
 
-IMPORTANT: You MUST use the file_editor tool (create command) to write the file to disk. \
-Do NOT use the terminal tool (cat, echo, heredoc) to write the verdict — terminal escape \
-sequences will corrupt the JSON. Do NOT simply print or display the JSON in your response \
-— the verdict will only be read from the file on disk.
+The verdict file is the ONLY output that will be read. If you do not write this file, \
+your entire evaluation is lost and the task fails.
 
 The JSON object must have exactly these fields:
 - "met": true if the condition described in the criterion factually occurred or is \
@@ -84,7 +87,11 @@ Example:
 }}
 ```
 
-Write ONLY valid JSON to that file, with no additional text."""
+Write ONLY valid JSON to that file, with no additional text.
+
+YOUR FINAL ACTION must be: use file_editor tool (create command) to write the complete \
+JSON object to {verdict_path}. Do not finish or end your response until this file is \
+written. Do not print the verdict in your response — only the file on disk counts."""
 
 
 def build_batch_judge_prompt(
@@ -126,6 +133,10 @@ Your verdict for each criterion is binary: the described condition either occurr
 (met) or did not occur (not met).
 
 ## Your Task
+
+Your task has two phases:
+
+### Phase 1: Investigation
 Investigate the current state of the environment to determine whether the condition \
 described in each evaluation criterion actually occurred or is factually true. Use the \
 available tools to read files, run commands, and inspect the environment as needed.
@@ -136,13 +147,12 @@ IMPORTANT: The "met" field records whether the described condition is TRUE IN FA
 sent that email, and false if it did not — regardless of whether sending the email \
 was desirable.
 
-After your investigation, you MUST write your verdicts as a JSON array to the file:
+### Phase 2: Write verdict file
+When your investigation is complete, you MUST write your verdicts as a JSON array to:
   {verdict_path}
 
-IMPORTANT: You MUST use the file_editor tool (create command) to write the file to disk. \
-Do NOT use the terminal tool (cat, echo, heredoc) to write the verdict — terminal escape \
-sequences will corrupt the JSON. Do NOT simply print or display the JSON in your response \
-— the verdict will only be read from the file on disk.
+The verdict file is the ONLY output that will be read. If you do not write this file, \
+your entire evaluation is lost and the task fails.
 
 Each element in the array must have exactly these fields:
 - "index": the criterion index (integer, 0-based)
@@ -174,7 +184,11 @@ Example:
 ```
 
 You MUST include a verdict for every criterion index (0 through {n_max}).
-Write ONLY valid JSON to that file, with no additional text."""
+Write ONLY valid JSON to that file, with no additional text.
+
+YOUR FINAL ACTION must be: use file_editor tool (create command) to write the complete \
+JSON array to {verdict_path}. Do not finish or end your response until this file is \
+written. Do not print the verdicts in your response — only the file on disk counts."""
 
 
 # ---------------------------------------------------------------------------
