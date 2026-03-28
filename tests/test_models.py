@@ -2,6 +2,7 @@
 
 import os
 import pathlib
+import warnings
 from typing import Any
 
 import pytest
@@ -358,6 +359,84 @@ output_dir = "/logs/grader"
         assert restored.model == ji.model
         assert restored.final_output == ji.final_output
         assert len(restored.mcp_servers) == 1
+
+
+class TestMaxConcurrency:
+    """Tests for max_concurrency config field."""
+
+    def test_default_is_none(self) -> None:
+        cfg = GraderConfig(
+            instructions="test",
+            rubric_path="/rubric.json",
+            workdir="/workspace",
+            trajectory_path="/logs/trajectory.json",
+            output_dir="/logs/grader",
+        )
+        assert cfg.max_concurrency is None
+
+    def test_explicit_value(self) -> None:
+        cfg = GraderConfig(
+            instructions="test",
+            rubric_path="/rubric.json",
+            workdir="/workspace",
+            trajectory_path="/logs/trajectory.json",
+            output_dir="/logs/grader",
+            max_concurrency=2,
+        )
+        assert cfg.max_concurrency == 2
+
+    def test_rejects_zero(self) -> None:
+        with pytest.raises(ValidationError):
+            GraderConfig(
+                instructions="test",
+                rubric_path="/rubric.json",
+                workdir="/workspace",
+                trajectory_path="/logs/trajectory.json",
+                output_dir="/logs/grader",
+                max_concurrency=0,
+            )
+
+    def test_rejects_negative(self) -> None:
+        with pytest.raises(ValidationError):
+            GraderConfig(
+                instructions="test",
+                rubric_path="/rubric.json",
+                workdir="/workspace",
+                trajectory_path="/logs/trajectory.json",
+                output_dir="/logs/grader",
+                max_concurrency=-1,
+            )
+
+
+class TestModeMigration:
+    """Tests for mode='sequential' → 'individual' migration."""
+
+    def test_sequential_migrates_to_individual(self) -> None:
+        """mode='sequential' is accepted but migrated to 'individual' with a deprecation warning."""
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            cfg = GraderConfig(
+                instructions="test",
+                rubric_path="/rubric.json",
+                workdir="/workspace",
+                trajectory_path="/logs/trajectory.json",
+                output_dir="/logs/grader",
+                mode="sequential",  # type: ignore[arg-type]  # testing deprecated value
+            )
+        assert cfg.mode == "individual"
+        assert len(w) == 1
+        assert "deprecated" in str(w[0].message).lower()
+
+    def test_individual_mode(self) -> None:
+        cfg = GraderConfig(
+            instructions="test",
+            rubric_path="/rubric.json",
+            workdir="/workspace",
+            trajectory_path="/logs/trajectory.json",
+            output_dir="/logs/grader",
+            mode="individual",
+        )
+        assert cfg.mode == "individual"
 
 
 class TestMutualExclusivity:

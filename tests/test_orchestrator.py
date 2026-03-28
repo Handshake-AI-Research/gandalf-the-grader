@@ -12,6 +12,7 @@ from unittest.mock import patch
 import pytest
 
 from gandalf.models import (
+    BatchJudgeInput,
     CriterionResult,
     GraderConfig,
     JudgeInput,
@@ -26,6 +27,7 @@ from gandalf.orchestrator import (
     main,
     resolve_judge_guidance,
     resolve_judge_prompt,
+    run_batch_concurrent,
     run_judge,
     write_info,
 )
@@ -652,7 +654,7 @@ class TestRetryLogic:
             sandbox_user="sandbox",
             output_dir=output_dir,
             judge_retries=1,
-            mode="sequential",
+            mode="individual",
         )
         mock_rubric.return_value = [
             RubricItem(criterion="c1", weight=1.0),
@@ -764,7 +766,7 @@ class TestRetryLogic:
             sandbox_user="sandbox",
             output_dir=output_dir,
             judge_retries=0,
-            mode="sequential",
+            mode="individual",
         )
         mock_rubric.return_value = [RubricItem(criterion="c1", weight=1.0)]
         mock_eval.return_value = ([Verdict(met=None, reasoning="timeout")], LLMUsage())
@@ -805,7 +807,7 @@ class TestRetryLogic:
             sandbox_user="sandbox",
             output_dir=output_dir,
             judge_retries=1,
-            mode="sequential",
+            mode="individual",
         )
         mock_rubric.return_value = [RubricItem(criterion="c1", weight=1.0)]
         mock_eval.return_value = ([Verdict(met=None, reasoning="always fails")], LLMUsage())
@@ -847,7 +849,7 @@ class TestRetryLogic:
             sandbox_user="sandbox",
             output_dir=output_dir,
             judge_retries=1,
-            mode="sequential",
+            mode="individual",
         )
         mock_rubric.return_value = [
             RubricItem(criterion="c1", weight=1.0),
@@ -897,7 +899,7 @@ class TestRetryLogic:
             sandbox_user="sandbox",
             output_dir=output_dir,
             judge_retries=0,
-            mode="sequential",
+            mode="individual",
         )
         mock_rubric.return_value = [
             RubricItem(criterion="correct output", weight=3.0),
@@ -1255,7 +1257,7 @@ class TestRetryJudgePromptPassthrough:
             sandbox_user="sandbox",
             output_dir=output_dir,
             judge_retries=1,
-            mode="sequential",
+            mode="individual",
         )
         mock_rubric.return_value = [RubricItem(criterion="c1", weight=1.0)]
 
@@ -1322,3 +1324,424 @@ class TestRetryJudgePromptPassthrough:
         for call in mock_eval_all.call_args_list:
             judge_input = call[0][0]
             assert judge_input.judge_prompt == "BATCH CUSTOM {{ criteria }}"
+
+
+class TestBatchConcurrent:
+    """Tests for run_batch_concurrent — parallel positional splitting of batch evaluation."""
+
+    def _make_rubric(self, n: int) -> list[RubricItem]:
+        return [RubricItem(criterion=f"criterion {i}", weight=1.0) for i in range(n)]
+
+    @patch("gandalf.orchestrator.run_batch")
+    @patch("gandalf.orchestrator.resolve_judge_guidance", return_value="")
+    @patch("gandalf.orchestrator.resolve_judge_prompt", return_value=None)
+    @patch("gandalf.orchestrator.load_trajectory_final_output", return_value="done")
+    @patch("gandalf.orchestrator.load_rubric")
+    @patch("gandalf.orchestrator.load_config")
+    def test_no_concurrency_dispatches_to_run_batch(
+        self,
+        mock_config: Any,
+        mock_rubric: Any,
+        mock_trajectory: Any,  # noqa: ARG002
+        mock_prompt: Any,  # noqa: ARG002
+        mock_guidance: Any,  # noqa: ARG002
+        mock_run_batch: Any,
+        tmp_path: pathlib.Path,
+    ) -> None:
+        """max_concurrency=None (default) dispatches to run_batch, not run_batch_concurrent."""
+        output_dir = str(tmp_path / "output")
+        os.makedirs(output_dir, exist_ok=True)
+
+        mock_config.return_value = GraderConfig(
+            instructions="test",
+            rubric_path="/rubric.json",
+            workdir=str(tmp_path),
+            trajectory_path="/logs/trajectory.json",
+            sandbox_user="sandbox",
+            output_dir=output_dir,
+            mode="batch",
+        )
+        rubric = self._make_rubric(2)
+        mock_rubric.return_value = rubric
+
+        mock_run_batch.return_value = (
+            [
+                CriterionResult(criterion="criterion 0", weight=1.0, met=True, reasoning="ok"),
+                CriterionResult(criterion="criterion 1", weight=1.0, met=True, reasoning="ok"),
+            ],
+            LLMUsage(cost_usd=0.1),
+        )
+
+        with patch("sys.argv", ["prog", "--config", "dummy.toml"]):
+            main()
+
+        mock_run_batch.assert_called_once()
+
+    def test_empty_rubric(self, tmp_path: pathlib.Path) -> None:
+        """Empty rubric returns empty results without crashing."""
+        config = make_config(
+            workdir=str(tmp_path),
+            output_dir=str(tmp_path / "output"),
+            mode="batch",
+            max_concurrency=2,
+        )
+        os.makedirs(config.output_dir, exist_ok=True)
+
+        results, usage = run_batch_concurrent(config, [], "done", "", None)
+
+        assert results == []
+        assert usage == LLMUsage()
+
+    @patch("gandalf.orchestrator.run_judge")
+    def test_splits_2_even(self, mock_run_judge: Any, tmp_path: pathlib.Path) -> None:
+        """4 criteria split into 2 chunks of 2, results merged in order."""
+        config = make_config(
+            workdir=str(tmp_path),
+            output_dir=str(tmp_path / "output"),
+            mode="batch",
+            max_concurrency=2,
+        )
+        os.makedirs(config.output_dir, exist_ok=True)
+        rubric = self._make_rubric(4)
+
+        def _side_effect(judge_input: BatchJudgeInput, **_kwargs: Any) -> tuple[list[Verdict], LLMUsage]:
+            verdicts = [Verdict(met=True, reasoning=f"ok {i}") for i in range(len(judge_input.criteria))]
+            usage = LLMUsage(cost_usd=0.1, prompt_tokens=100, completion_tokens=50, cache_read_tokens=10)
+            return verdicts, usage
+
+        mock_run_judge.side_effect = _side_effect
+
+        results, usage = run_batch_concurrent(config, rubric, "done", "", None)
+
+        assert len(results) == 4
+        # Verify order preserved
+        for i, r in enumerate(results):
+            assert r.criterion == f"criterion {i}"
+            assert r.met is True
+
+        # 2 splits, each with usage
+        assert usage.cost_usd == pytest.approx(0.2)
+        assert usage.prompt_tokens == 200
+        assert usage.completion_tokens == 100
+        assert usage.cache_read_tokens == 20
+
+        # Verify run_judge was called twice (one per split)
+        assert mock_run_judge.call_count == 2
+
+    @patch("gandalf.orchestrator.run_judge")
+    def test_split_uses_local_indices(self, mock_run_judge: Any, tmp_path: pathlib.Path) -> None:
+        """Chunks must use 0-based local indices, not global rubric positions.
+
+        Regression test: the judge prompt says "0 through N-1" and
+        read_batch_verdict filters by 0 <= idx < N, so passing global
+        indices (e.g. 3, 4, 5) for chunk 2 causes the judge to either
+        write mismatched indices or have its verdicts silently discarded.
+        """
+        config = make_config(
+            workdir=str(tmp_path),
+            output_dir=str(tmp_path / "output"),
+            mode="batch",
+            max_concurrency=3,
+        )
+        os.makedirs(config.output_dir, exist_ok=True)
+        rubric = self._make_rubric(6)  # 6 criteria → 3 chunks of 2
+
+        received_criteria_counts: list[int] = []
+
+        def _side_effect(judge_input: BatchJudgeInput, **_kwargs: Any) -> tuple[list[Verdict], LLMUsage]:
+            received_criteria_counts.append(len(judge_input.criteria))
+            verdicts = [Verdict(met=True, reasoning="ok") for _ in judge_input.criteria]
+            return verdicts, LLMUsage(cost_usd=0.05)
+
+        mock_run_judge.side_effect = _side_effect
+
+        results, _ = run_batch_concurrent(config, rubric, "done", "", None)
+
+        # Each chunk gets its own local criteria list
+        assert all(c == 2 for c in received_criteria_counts)
+
+        # All 6 results should be successful
+        assert len(results) == 6
+        assert all(r.met is True for r in results)
+        # Results are in original rubric order
+        for i, r in enumerate(results):
+            assert r.criterion == f"criterion {i}"
+
+    @patch("gandalf.orchestrator.run_judge")
+    def test_splits_3_uneven(self, mock_run_judge: Any, tmp_path: pathlib.Path) -> None:
+        """7 criteria split into chunks of [3, 3, 1]."""
+        config = make_config(
+            workdir=str(tmp_path),
+            output_dir=str(tmp_path / "output"),
+            mode="batch",
+            max_concurrency=3,
+        )
+        os.makedirs(config.output_dir, exist_ok=True)
+        rubric = self._make_rubric(7)
+
+        def _side_effect(judge_input: BatchJudgeInput, **_kwargs: Any) -> tuple[list[Verdict], LLMUsage]:
+            verdicts = [Verdict(met=True, reasoning=f"ok {i}") for i in range(len(judge_input.criteria))]
+            return verdicts, LLMUsage(cost_usd=0.1)
+
+        mock_run_judge.side_effect = _side_effect
+
+        results, usage = run_batch_concurrent(config, rubric, "done", "", None)
+
+        assert len(results) == 7
+        for i, r in enumerate(results):
+            assert r.criterion == f"criterion {i}"
+
+        assert mock_run_judge.call_count == 3
+        assert usage.cost_usd == pytest.approx(0.3)
+
+    @patch("gandalf.orchestrator.run_judge")
+    def test_splits_exceeds_rubric_size(self, mock_run_judge: Any, tmp_path: pathlib.Path) -> None:
+        """max_concurrency=5 with 3 criteria → 3 chunks of 1 each."""
+        config = make_config(
+            workdir=str(tmp_path),
+            output_dir=str(tmp_path / "output"),
+            mode="batch",
+            max_concurrency=5,
+        )
+        os.makedirs(config.output_dir, exist_ok=True)
+        rubric = self._make_rubric(3)
+
+        def _side_effect(judge_input: BatchJudgeInput, **_kwargs: Any) -> tuple[list[Verdict], LLMUsage]:
+            verdicts = [Verdict(met=True, reasoning=f"ok {i}") for i in range(len(judge_input.criteria))]
+            return verdicts, LLMUsage(cost_usd=0.05)
+
+        mock_run_judge.side_effect = _side_effect
+
+        results, usage = run_batch_concurrent(config, rubric, "done", "", None)
+
+        assert len(results) == 3
+        assert mock_run_judge.call_count == 3
+        assert usage.cost_usd == pytest.approx(0.15)
+
+    @patch("gandalf.orchestrator.run_judge")
+    def test_trace_file_naming(self, mock_run_judge: Any, tmp_path: pathlib.Path) -> None:
+        """Each split gets a unique trace path."""
+        config = make_config(
+            workdir=str(tmp_path),
+            output_dir=str(tmp_path / "output"),
+            mode="batch",
+            max_concurrency=2,
+        )
+        os.makedirs(config.output_dir, exist_ok=True)
+        rubric = self._make_rubric(4)
+
+        trace_paths: list[str] = []
+
+        def _side_effect(
+            judge_input: BatchJudgeInput, *, trace_path: str, **_kw: Any
+        ) -> tuple[list[Verdict], LLMUsage]:
+            trace_paths.append(trace_path)
+            verdicts = [Verdict(met=True, reasoning="ok") for _ in judge_input.criteria]
+            return verdicts, LLMUsage()
+
+        mock_run_judge.side_effect = _side_effect
+
+        run_batch_concurrent(config, rubric, "done", "", None)
+
+        assert len(trace_paths) == 2
+        assert trace_paths[0] != trace_paths[1]
+        # Order may vary due to parallel execution
+        trace_basenames = sorted(os.path.basename(p) for p in trace_paths)
+        assert trace_basenames[0] == "judge_trace_batch_split0.txt"
+        assert trace_basenames[1] == "judge_trace_batch_split1.txt"
+
+    @patch("gandalf.orchestrator.run_judge")
+    def test_errored_criteria_in_split(self, mock_run_judge: Any, tmp_path: pathlib.Path) -> None:
+        """Errors in one split are properly reflected in merged results."""
+        config = make_config(
+            workdir=str(tmp_path),
+            output_dir=str(tmp_path / "output"),
+            mode="batch",
+            max_concurrency=2,
+        )
+        os.makedirs(config.output_dir, exist_ok=True)
+        rubric = self._make_rubric(4)
+
+        def _side_effect(judge_input: BatchJudgeInput, **_kwargs: Any) -> tuple[list[Verdict], LLMUsage]:
+            # Identify chunk by criteria text — second chunk has "criterion 2"
+            is_second_chunk = any("criterion 2" in c for c in judge_input.criteria)
+            if not is_second_chunk:
+                # First split: both pass
+                return [Verdict(met=True, reasoning="ok") for _ in judge_input.criteria], LLMUsage(cost_usd=0.1)
+            # Second split: first criterion errors, second passes
+            return [
+                Verdict(met=None, reasoning="timeout"),
+                Verdict(met=True, reasoning="ok"),
+            ], LLMUsage(cost_usd=0.1)
+
+        mock_run_judge.side_effect = _side_effect
+
+        results, _ = run_batch_concurrent(config, rubric, "done", "", None)
+
+        assert results[0].met is True
+        assert results[1].met is True
+        assert results[2].met is None  # errored in second split
+        assert results[3].met is True
+
+    @patch("gandalf.orchestrator.run_judge")
+    def test_timeout_per_split(self, mock_run_judge: Any, tmp_path: pathlib.Path) -> None:
+        """Each split's timeout is based on its chunk size, not total rubric."""
+        config = make_config(
+            workdir=str(tmp_path),
+            output_dir=str(tmp_path / "output"),
+            mode="batch",
+            max_concurrency=2,
+            judge_timeout=100,
+        )
+        os.makedirs(config.output_dir, exist_ok=True)
+        rubric = self._make_rubric(4)  # 2 per split
+
+        timeouts: list[int] = []
+
+        def _side_effect(judge_input: BatchJudgeInput, *, timeout: int, **_kw: Any) -> tuple[list[Verdict], LLMUsage]:
+            timeouts.append(timeout)
+            verdicts = [Verdict(met=True, reasoning="ok") for _ in judge_input.criteria]
+            return verdicts, LLMUsage()
+
+        mock_run_judge.side_effect = _side_effect
+
+        run_batch_concurrent(config, rubric, "done", "", None)
+
+        # Each split has 2 criteria → timeout = 100 * 2 = 200
+        assert all(t == 200 for t in timeouts)
+
+    @patch("gandalf.orchestrator.run_judge")
+    def test_batch_timeout_cap_per_split(self, mock_run_judge: Any, tmp_path: pathlib.Path) -> None:
+        """batch_timeout caps each split's timeout independently."""
+        config = make_config(
+            workdir=str(tmp_path),
+            output_dir=str(tmp_path / "output"),
+            mode="batch",
+            max_concurrency=2,
+            judge_timeout=100,
+            batch_timeout=150,
+        )
+        os.makedirs(config.output_dir, exist_ok=True)
+        rubric = self._make_rubric(4)
+
+        timeouts: list[int] = []
+
+        def _side_effect(judge_input: BatchJudgeInput, *, timeout: int, **_kw: Any) -> tuple[list[Verdict], LLMUsage]:
+            timeouts.append(timeout)
+            verdicts = [Verdict(met=True, reasoning="ok") for _ in judge_input.criteria]
+            return verdicts, LLMUsage()
+
+        mock_run_judge.side_effect = _side_effect
+
+        run_batch_concurrent(config, rubric, "done", "", None)
+
+        # 2 criteria * 100s = 200, capped to 150
+        assert all(t == 150 for t in timeouts)
+
+    @patch("gandalf.orchestrator.resolve_judge_guidance", return_value="")
+    @patch("gandalf.orchestrator.resolve_judge_prompt", return_value=None)
+    @patch("gandalf.orchestrator.load_trajectory_final_output", return_value="done")
+    @patch("gandalf.orchestrator.load_rubric")
+    @patch("gandalf.orchestrator.load_config")
+    @patch("gandalf.orchestrator.run_judge")
+    def test_main_dispatches_batch_concurrent(
+        self,
+        mock_run_judge: Any,
+        mock_config: Any,
+        mock_rubric: Any,
+        mock_trajectory: Any,  # noqa: ARG002
+        mock_prompt: Any,  # noqa: ARG002
+        mock_guidance: Any,  # noqa: ARG002
+        tmp_path: pathlib.Path,
+    ) -> None:
+        """main() dispatches to run_batch_concurrent when max_concurrency > 1."""
+        output_dir = str(tmp_path / "output")
+        os.makedirs(output_dir, exist_ok=True)
+
+        mock_config.return_value = GraderConfig(
+            instructions="test",
+            rubric_path="/rubric.json",
+            workdir=str(tmp_path),
+            trajectory_path="/logs/trajectory.json",
+            sandbox_user="sandbox",
+            output_dir=output_dir,
+            mode="batch",
+            max_concurrency=2,
+        )
+        mock_rubric.return_value = self._make_rubric(4)
+
+        def _side_effect(judge_input: BatchJudgeInput, **_kwargs: Any) -> tuple[list[Verdict], LLMUsage]:
+            verdicts = [Verdict(met=True, reasoning="ok") for _ in judge_input.criteria]
+            return verdicts, LLMUsage(cost_usd=0.1, prompt_tokens=100, completion_tokens=50)
+
+        mock_run_judge.side_effect = _side_effect
+
+        with patch("sys.argv", ["prog", "--config", "dummy.toml"]):
+            main()
+
+        info = json.loads((tmp_path / "output" / "info.json").read_text())
+        assert len(info["criterion_results"]) == 4
+        assert all(r["met"] is True for r in info["criterion_results"])
+
+        reward = json.loads((tmp_path / "output" / "reward.json").read_text())
+        assert reward["reward"] == 1.0
+
+    @patch("gandalf.orchestrator.run_judge")
+    def test_split_future_raises_exception(self, mock_run_judge: Any, tmp_path: pathlib.Path) -> None:
+        """When run_judge raises an unhandled exception, all criteria fail gracefully."""
+        config = make_config(
+            workdir=str(tmp_path),
+            output_dir=str(tmp_path / "output"),
+            mode="batch",
+            max_concurrency=2,
+        )
+        os.makedirs(config.output_dir, exist_ok=True)
+        rubric = self._make_rubric(4)
+
+        def _side_effect(judge_input: BatchJudgeInput, **_kwargs: Any) -> tuple[list[Verdict], LLMUsage]:
+            # Second chunk has "criterion 2" — that one raises
+            is_second_chunk = any("criterion 2" in c for c in judge_input.criteria)
+            if not is_second_chunk:
+                return [Verdict(met=True, reasoning="ok") for _ in judge_input.criteria], LLMUsage(cost_usd=0.1)
+            msg = "unexpected internal error"
+            raise RuntimeError(msg)
+
+        mock_run_judge.side_effect = _side_effect
+
+        results, usage = run_batch_concurrent(config, rubric, "done", "", None)
+
+        # All criteria should be marked as errored (not just the failed split)
+        assert all(r.met is None for r in results)
+        assert "Batch split failed" in results[0].reasoning
+        # Usage must be reset to stay consistent with all-error results
+        assert usage == LLMUsage()
+
+    @patch("gandalf.orchestrator.run_judge")
+    def test_split_returns_fewer_verdicts(self, mock_run_judge: Any, tmp_path: pathlib.Path) -> None:
+        """When a split returns fewer verdicts than criteria, missing ones get met=None."""
+        config = make_config(
+            workdir=str(tmp_path),
+            output_dir=str(tmp_path / "output"),
+            mode="batch",
+            max_concurrency=2,
+        )
+        os.makedirs(config.output_dir, exist_ok=True)
+        rubric = self._make_rubric(4)
+
+        def _side_effect(judge_input: BatchJudgeInput, **_kwargs: Any) -> tuple[list[Verdict], LLMUsage]:
+            # Identify chunk by criteria text — second chunk has "criterion 2"
+            is_second_chunk = any("criterion 2" in c for c in judge_input.criteria)
+            if not is_second_chunk:
+                # First split: returns both verdicts
+                return [Verdict(met=True, reasoning="ok") for _ in judge_input.criteria], LLMUsage()
+            # Second split: only returns 1 verdict for 2 criteria
+            return [Verdict(met=True, reasoning="ok")], LLMUsage()
+
+        mock_run_judge.side_effect = _side_effect
+
+        results, _ = run_batch_concurrent(config, rubric, "done", "", None)
+
+        assert results[0].met is True  # split 0, verdict present
+        assert results[1].met is True  # split 0, verdict present
+        assert results[2].met is True  # split 1, position 0 — verdict present
+        assert results[3].met is None  # split 1, position 1 — no verdict, defaults to met=None

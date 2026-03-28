@@ -4,8 +4,12 @@ Runs as the grader user and spawns the inner judge as the sandbox user
 (via sudo) to evaluate rubric criteria using an OpenHands agent-as-judge.
 
 Supports two evaluation modes (configured via ``mode`` in the TOML config):
-  - **sequential** (default): one agent session per rubric criterion.
+  - **individual** (default): one agent session per rubric criterion.
   - **batch**: all criteria evaluated in a single agent session.
+
+When ``max_concurrency`` > 1, multiple judge sessions run in parallel.
+For batch mode this splits criteria into positional chunks; for individual
+mode it runs multiple criterion evaluations concurrently.
 
 Produces (in ``output_dir``):
   reward.json  - Reward file ([0,1] reward)
@@ -15,11 +19,13 @@ Produces (in ``output_dir``):
 import argparse
 import contextlib
 import json
+import math
 import os
 import shutil
 import subprocess
 import sys
 import tempfile
+from concurrent.futures import ThreadPoolExecutor
 
 from pydantic import TypeAdapter
 
@@ -340,7 +346,7 @@ def verdict_to_result(item: RubricItem, verdict: Verdict) -> CriterionResult:
     )
 
 
-def run_sequential(
+def run_individual(
     config: GraderConfig,
     rubric: list[RubricItem],
     final_output: str,
@@ -348,11 +354,15 @@ def run_sequential(
     judge_prompt: str | None,
     trace_suffix: str = "",
 ) -> tuple[list[CriterionResult], LLMUsage]:
-    """Evaluate each rubric item in its own agent session."""
-    results: list[CriterionResult] = []
-    total_usage = LLMUsage()
+    """Evaluate each rubric item in its own agent session.
+
+    When max_concurrency > 1, up to N criteria are evaluated in parallel
+    via a thread pool.  Results are always returned in rubric order.
+    """
     n = len(rubric)
-    for i, item in enumerate(rubric):
+    concurrency = config.max_concurrency or 1
+
+    def _eval_one(i: int, item: RubricItem) -> tuple[int, CriterionResult, LLMUsage]:
         print(f"[{i + 1}/{n}] Evaluating: {item.criterion[:80]}...")  # noqa: T201
         judge_input = JudgeInput(
             model=config.model,
@@ -371,10 +381,34 @@ def run_sequential(
             trace_path=trace_path,
             timeout=config.judge_timeout,
         )
-        total_usage = total_usage + usage
-        results.append(verdict_to_result(item, verdicts[0]))
-        print(f"  -> {format_status(met=verdicts[0].met)}: {verdicts[0].reasoning[:120]}")  # noqa: T201
-    return results, total_usage
+        result = verdict_to_result(item, verdicts[0])
+        print(f"  [{i + 1}/{n}] {format_status(met=verdicts[0].met)}: {verdicts[0].reasoning[:120]}")  # noqa: T201
+        return i, result, usage
+
+    total_usage = LLMUsage()
+
+    if concurrency == 1:
+        # Serial path — no thread pool overhead
+        results: list[CriterionResult] = []
+        for i, item in enumerate(rubric):
+            _, result, usage = _eval_one(i, item)
+            results.append(result)
+            total_usage = total_usage + usage
+        return results, total_usage
+
+    # Concurrent path
+    print(f"[individual] Evaluating {n} criteria with max_concurrency={concurrency}")  # noqa: T201
+    indexed_results: list[tuple[int, CriterionResult]] = []
+
+    with ThreadPoolExecutor(max_workers=min(concurrency, n)) as executor:
+        futures = [executor.submit(_eval_one, i, item) for i, item in enumerate(rubric)]
+        for future in futures:
+            i, result, usage = future.result()
+            indexed_results.append((i, result))
+            total_usage = total_usage + usage
+
+    indexed_results.sort(key=lambda x: x[0])
+    return [r for _, r in indexed_results], total_usage
 
 
 def run_batch(
@@ -418,6 +452,116 @@ def run_batch(
         results.append(verdict_to_result(item, v))
         print(f"  [{i + 1}/{n}] {format_status(met=v.met)}: {v.reasoning[:120]}")  # noqa: T201
     return results, usage
+
+
+def run_batch_concurrent(
+    config: GraderConfig,
+    rubric: list[RubricItem],
+    final_output: str,
+    judge_guidance: str,
+    judge_prompt: str | None,
+    trace_suffix: str = "",
+) -> tuple[list[CriterionResult], LLMUsage]:
+    """Split criteria into N positional chunks and evaluate each as a parallel batch.
+
+    Each chunk is sent to its own judge subprocess.  All chunks run in parallel
+    via a thread pool (each thread blocks on subprocess.run).  Results are merged
+    back in original rubric order.
+    """
+    concurrency = config.max_concurrency or 1
+    n = len(rubric)
+    if n == 0:
+        return [], LLMUsage()
+    chunk_size = math.ceil(n / concurrency)
+    chunks: list[list[tuple[int, RubricItem]]] = [
+        [(i, rubric[i]) for i in range(start, min(start + chunk_size, n))] for start in range(0, n, chunk_size)
+    ]
+
+    print(  # noqa: T201
+        f"[batch-concurrent] Splitting {n} criteria into {len(chunks)} chunks "
+        f"(sizes: {', '.join(str(len(c)) for c in chunks)})"
+    )
+
+    def _run_split(
+        split_idx: int, chunk: list[tuple[int, RubricItem]]
+    ) -> tuple[list[tuple[int, CriterionResult]], LLMUsage]:
+        # Use local 0-based indices for the judge — the prompt says
+        # "0 through N-1" and read_batch_verdict filters by 0 <= idx < N.
+        # Global rubric indices are restored when building indexed_results.
+        criteria_list = [item.criterion for _orig_idx, item in chunk]
+
+        n_criteria = len(criteria_list)
+        batch_timeout = config.judge_timeout * n_criteria
+        if config.batch_timeout is not None:
+            batch_timeout = min(batch_timeout, config.batch_timeout)
+
+        print(  # noqa: T201
+            f"  [split {split_idx + 1}/{len(chunks)}] {n_criteria} criteria (timeout={batch_timeout}s)..."
+        )
+
+        judge_input = BatchJudgeInput(
+            model=config.model,
+            instructions=config.instructions,
+            final_output=final_output,
+            criteria=criteria_list,
+            workdir=config.workdir,
+            mcp_servers=config.mcp_servers,
+            judge_guidance=judge_guidance,
+            judge_prompt=judge_prompt,
+        )
+
+        trace_path = os.path.join(config.output_dir, f"judge_trace_batch_split{split_idx}{trace_suffix}.txt")
+        verdicts, usage = run_judge(
+            judge_input,
+            sandbox_user=config.sandbox_user,
+            trace_path=trace_path,
+            timeout=batch_timeout,
+        )
+
+        indexed_results: list[tuple[int, CriterionResult]] = []
+        for j, (orig_idx, item) in enumerate(chunk):
+            v = verdicts[j] if j < len(verdicts) else Verdict(met=None, reasoning="No reasoning provided.")
+            indexed_results.append((orig_idx, verdict_to_result(item, v)))
+            print(  # noqa: T201
+                f"    [{orig_idx + 1}/{n}] {format_status(met=v.met)}: {v.reasoning[:120]}"
+            )
+
+        return indexed_results, usage
+
+    # Run all splits in parallel
+    all_indexed_results: list[tuple[int, CriterionResult]] = []
+    total_usage = LLMUsage()
+
+    with ThreadPoolExecutor(max_workers=len(chunks)) as executor:
+        futures = [executor.submit(_run_split, idx, chunk) for idx, chunk in enumerate(chunks)]
+        try:
+            for future in futures:
+                indexed_results, usage = future.result()
+                all_indexed_results.extend(indexed_results)
+                total_usage = total_usage + usage
+        except Exception as exc:  # noqa: BLE001
+            # All-or-nothing: if any split raises, we fail *all* criteria so
+            # the hard-fail path in main() writes info.json but not reward.json.
+            executor.shutdown(wait=True, cancel_futures=True)
+            print(f"[batch-concurrent] Split failed unexpectedly: {exc}", file=sys.stderr)  # noqa: T201
+            return (
+                [
+                    CriterionResult(
+                        criterion=item.criterion,
+                        weight=item.weight,
+                        met=None,
+                        reasoning=f"Batch split failed: {exc}",
+                    )
+                    for item in rubric
+                ],
+                LLMUsage(),
+            )
+
+    # Sort back to original rubric order
+    all_indexed_results.sort(key=lambda x: x[0])
+    results = [r for _, r in all_indexed_results]
+
+    return results, total_usage
 
 
 def get_errored_indices(results: list[CriterionResult]) -> list[int]:
@@ -500,7 +644,9 @@ def main() -> None:
 
     os.makedirs(config.output_dir, exist_ok=True)
 
-    run = run_batch if config.mode == "batch" else run_sequential
+    concurrency = config.max_concurrency or 1
+
+    run = (run_batch_concurrent if concurrency > 1 else run_batch) if config.mode == "batch" else run_individual
 
     # 1. Initial evaluation
     results, llm_usage = run(config, rubric, final_output, judge_guidance, judge_prompt)
@@ -508,14 +654,15 @@ def main() -> None:
     # 2. Record initial error count for observability
     initial_errored = len(get_errored_indices(results))
 
-    # 3. Retry loop
+    # 3. Retry loop — retries always use the non-concurrent variant
+    retry_run = run_batch if config.mode == "batch" else run_individual
     for attempt in range(config.judge_retries):
         errored = get_errored_indices(results)
         if not errored:
             break
         print(f"\n[retry {attempt + 1}/{config.judge_retries}] Retrying {len(errored)} errored criteria...")  # noqa: T201
         retry_rubric = [rubric[i] for i in errored]
-        retry_results, retry_usage = run(
+        retry_results, retry_usage = retry_run(
             config,
             retry_rubric,
             final_output,
@@ -552,7 +699,8 @@ def main() -> None:
             f"({len(rubric)} criteria, "
             f"{llm_usage.prompt_tokens} prompt + {llm_usage.completion_tokens} completion tokens)"
         )
-    print(f"Mode: {config.mode}")  # noqa: T201
+    mode_display = f"{config.mode} (max_concurrency={concurrency})" if concurrency > 1 else config.mode
+    print(f"Mode: {mode_display}")  # noqa: T201
     if initial_errored > 0:
         print(f"Retried: {initial_errored} criteria recovered after retry")  # noqa: T201
     print(f"Results written to {config.output_dir}/")  # noqa: T201

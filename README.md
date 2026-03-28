@@ -18,10 +18,17 @@ The grader uses a two-process architecture:
 - **Outer orchestrator** (`gandalf-the-grader`) — runs as the grader user, manages the evaluation loop, computes reward/raw scoring outputs, and writes output files.
 - **Inner judge** (`gandalf-the-grader-judge`) — runs as the sandbox user (via `sudo`), executes an [OpenHands](https://github.com/All-Hands-AI/OpenHands) agent-as-judge session that investigates the workspace and writes a verdict.
 
-Two evaluation modes are supported:
+Two evaluation modes are supported (configured via `mode` in the TOML config):
 
-- **Batch** (default): all criteria evaluated in a single agent session.
-- **Sequential**: one agent session per rubric criterion.
+- **Individual** (default): one agent session per rubric criterion.
+- **Batch**: all criteria evaluated in a single agent session.
+
+When `max_concurrency` > 1, multiple judge sessions run in parallel. For batch mode this splits criteria into positional chunks; for individual mode it runs multiple criterion evaluations concurrently.
+
+```toml
+mode = "batch"
+max_concurrency = 2   # split criteria into 2 chunks, evaluate in parallel
+```
 
 ## Installation
 
@@ -79,10 +86,11 @@ gandalf-the-grader --config /tests/grader.toml
 | `trajectory_path` | Yes | | Path to ATIF trajectory JSON |
 | `output_dir` | Yes | | Directory for grader output files |
 | `model` | No | `gemini/gemini-2.5-flash` | LLM model for the judge agent |
-| `mode` | No | `batch` | Evaluation mode: `batch` or `sequential` |
+| `mode` | No | `batch` | Evaluation mode: `individual` or `batch` |
+| `max_concurrency` | No | `None` | Max parallel judge sessions (None = no parallelism) |
 | `judge_timeout` | No | `300` | Max seconds per judge invocation |
-| `batch_timeout` | No | | Max total seconds for batch mode (caps `judge_timeout * N`) |
-| `judge_retries` | No | `1` | Number of retry attempts for criteria that error due to infrastructure failures |
+| `judge_retries` | No | `1` | Number of retry attempts for errored criteria |
+| `batch_timeout` | No | | Max seconds per batch session (caps `judge_timeout * N_criteria_in_session`) |
 | `sandbox_user` | No | | Username for running the inner judge (via sudo). When omitted the judge runs as the current user. |
 | `judge_prompt` | No | | Inline Jinja2 template that completely overrides the built-in judge task prompt (mutually exclusive with `judge_prompt_path`) |
 | `judge_prompt_path` | No | | Path to a Jinja2 template file that completely overrides the built-in judge task prompt (mutually exclusive with `judge_prompt`) |

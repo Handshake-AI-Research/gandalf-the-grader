@@ -1,6 +1,6 @@
 [project]
 name = "gandalf-the-grader"
-dynamic = ["version"]
+dynamic = ["version", "optional-dependencies"]
 description = "Agent-as-judge grading framework for evaluating AI agent outputs against rubric criteria"
 readme = "README.md"
 license = "Apache-2.0"
@@ -22,7 +22,6 @@ dependencies = [
     "openhands-tools>=1.11.2,<2",
     "pydantic>=2.12.5,<3",
 ]
-dynamic = ["optional-dependencies"]
 
 [project.urls]
 homepage = "https://github.com/Handshake-AI-Research/gandalf-the-grader"
