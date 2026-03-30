@@ -314,3 +314,74 @@ class TestPydanticModels:
         assert restored.model == ji.model
         assert restored.final_output == ji.final_output
         assert len(restored.mcp_servers) == 1
+
+    def test_verifier_config_max_concurrency_default(self):
+        cfg = VerifierConfig(
+            instructions="test",
+            rubric_path="/rubric.json",
+            workdir="/workspace",
+            trajectory_path="/logs/trajectory.json",
+            sandbox_user="sandbox",
+        )
+        assert cfg.max_concurrency is None
+
+    def test_verifier_config_max_concurrency_explicit(self):
+        cfg = VerifierConfig(
+            instructions="test",
+            rubric_path="/rubric.json",
+            workdir="/workspace",
+            trajectory_path="/logs/trajectory.json",
+            sandbox_user="sandbox",
+            max_concurrency=2,
+        )
+        assert cfg.max_concurrency == 2
+
+    def test_verifier_config_max_concurrency_rejects_zero(self):
+        with pytest.raises(ValidationError):
+            VerifierConfig(
+                instructions="test",
+                rubric_path="/rubric.json",
+                workdir="/workspace",
+                trajectory_path="/logs/trajectory.json",
+                sandbox_user="sandbox",
+                max_concurrency=0,
+            )
+
+    def test_verifier_config_max_concurrency_rejects_negative(self):
+        with pytest.raises(ValidationError):
+            VerifierConfig(
+                instructions="test",
+                rubric_path="/rubric.json",
+                workdir="/workspace",
+                trajectory_path="/logs/trajectory.json",
+                sandbox_user="sandbox",
+                max_concurrency=-1,
+            )
+
+    def test_verifier_config_mode_sequential_migrates_to_individual(self):
+        """mode='sequential' is accepted but migrated to 'individual' with a deprecation warning."""
+        import warnings
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            cfg = VerifierConfig(
+                instructions="test",
+                rubric_path="/rubric.json",
+                workdir="/workspace",
+                trajectory_path="/logs/trajectory.json",
+                sandbox_user="sandbox",
+                mode="sequential",
+            )
+        assert cfg.mode == "individual"
+        assert len(w) == 1
+        assert "deprecated" in str(w[0].message).lower()
+
+    def test_verifier_config_mode_individual(self):
+        cfg = VerifierConfig(
+            instructions="test",
+            rubric_path="/rubric.json",
+            workdir="/workspace",
+            trajectory_path="/logs/trajectory.json",
+            sandbox_user="sandbox",
+            mode="individual",
+        )
+        assert cfg.mode == "individual"
