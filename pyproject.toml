@@ -1,6 +1,6 @@
 [project]
 name = "gandalf-grader"
-version = "0.4.3"
+version = "0.4.4"
 description = "Agent-as-judge grading framework for evaluating AI agent outputs against rubric criteria"
 readme = "README.md"
 license = "Apache-2.0"
@@ -19,6 +19,7 @@ dependencies = [
     "litellm>=1.82.0,<2",
     "openhands-sdk>=1.11.2,<2",
     "openhands-tools>=1.11.2,<2",
+    "jinja2>=3.1,<4",
     "pydantic>=2.12.5,<3",
 ]
 dynamic = ["optional-dependencies"]

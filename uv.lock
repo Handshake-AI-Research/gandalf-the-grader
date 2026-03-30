@@ -882,9 +882,10 @@ sdist = { url = "https://files.pythonhosted.org/packages/b3/0d/bf0567477f7281d9a
 
 [[package]]
 name = "gandalf-grader"
-version = "0.4.3"
+version = "0.4.4"
 source = { editable = "." }
 dependencies = [
+    { name = "jinja2" },
     { name = "litellm" },
     { name = "openhands-sdk" },
     { name = "openhands-tools" },
@@ -900,6 +901,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "jinja2", specifier = ">=3.1,<4" },
     { name = "litellm", specifier = ">=1.82.0,<2" },
     { name = "openhands-sdk", specifier = ">=1.11.2,<2" },
     { name = "openhands-tools", specifier = ">=1.11.2,<2" },
