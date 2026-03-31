@@ -1,6 +1,6 @@
 [project]
 name = "gandalf-grader"
-version = "0.4.4"
+version = "0.4.5"
 description = "Agent-as-judge grading framework for evaluating AI agent outputs against rubric criteria"
 readme = "README.md"
 license = "Apache-2.0"

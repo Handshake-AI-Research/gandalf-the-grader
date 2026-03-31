@@ -8,10 +8,64 @@ from gandalf_grader.judge import (
     _make_verdict_path,
     _read_batch_verdict,
     _read_verdict,
+    _sanitize_json,
     build_judge_prompt,
     run_judge,
     run_judge_batch,
 )
+
+
+class TestSanitizeJson:
+    """Tests for _sanitize_json — fixes invalid backslash escapes from LLM output."""
+
+    def test_passthrough_valid_json(self):
+        valid = '{"key": "value with \\\\ and \\n and \\t"}'
+        assert _sanitize_json(valid) == valid
+
+    def test_fixes_backslash_dollar(self):
+        raw = r'{"evidence": "format: \$#,##0"}'
+        fixed = _sanitize_json(raw)
+        assert json.loads(fixed)["evidence"] == "format: \\$#,##0"
+
+    def test_preserves_already_escaped_backslash_dollar(self):
+        raw = r'{"evidence": "format: \\$#,##0"}'
+        fixed = _sanitize_json(raw)
+        assert fixed == raw
+        assert json.loads(fixed)["evidence"] == "format: \\$#,##0"
+
+    def test_fixes_backslash_paren(self):
+        raw = r'{"evidence": "format: \(0.00\)"}'
+        fixed = _sanitize_json(raw)
+        parsed = json.loads(fixed)
+        assert "\\(" in parsed["evidence"]
+
+    def test_preserves_valid_escapes(self):
+        raw = r'{"a": "line1\nline2", "b": "tab\there", "c": "quote\"d"}'
+        assert _sanitize_json(raw) == raw
+
+    def test_preserves_unicode_escapes(self):
+        raw = r'{"a": "\u0041"}'
+        assert _sanitize_json(raw) == raw
+        assert json.loads(_sanitize_json(raw))["a"] == "A"
+
+    def test_fixes_truncated_unicode_escape(self):
+        raw = r'{"evidence": "bad unicode: \u12"}'
+        fixed = _sanitize_json(raw)
+        parsed = json.loads(fixed)
+        assert parsed["evidence"] == r"bad unicode: \u12"
+
+    def test_fixes_non_hex_unicode_escape(self):
+        raw = r'{"evidence": "bad unicode: \uZZZZ"}'
+        fixed = _sanitize_json(raw)
+        parsed = json.loads(fixed)
+        assert parsed["evidence"] == r"bad unicode: \uZZZZ"
+
+    def test_excel_number_format_roundtrip(self):
+        """Reproduces the exact pattern that caused the observed failure."""
+        raw = r'{"evidence": "DCF_Debt!L37 format: \$#,##0;(\$#,##0)"}'
+        fixed = _sanitize_json(raw)
+        parsed = json.loads(fixed)
+        assert "\\$#,##0" in parsed["evidence"]
 
 
 class TestBuildJudgePrompt:
@@ -232,6 +286,18 @@ class TestReadVerdict:
         assert result.met is None
         assert "missing" in result.reasoning.lower()
 
+    def test_recovers_from_invalid_escape(self, tmp_path):
+        p = tmp_path / "verdict.json"
+        p.write_text(r'{"met": true, "reasoning": "format is \$#,##0", "evidence": []}')
+        result = _read_verdict(str(p))
+        assert result.met is True
+
+    def test_recovers_from_invalid_unicode_escape(self, tmp_path):
+        p = tmp_path / "verdict.json"
+        p.write_text(r'{"met": true, "reasoning": "bad unicode: \u12", "evidence": []}')
+        result = _read_verdict(str(p))
+        assert result.met is True
+
 
 class TestReadBatchVerdict:
     def test_valid_batch(self, tmp_path):
@@ -308,6 +374,24 @@ class TestReadBatchVerdict:
         p.write_text(json.dumps({"not": "an array"}))
         results = _read_batch_verdict(str(p), 1)
         assert results[0]["met"] is None
+
+    def test_recovers_from_invalid_escape(self, tmp_path):
+        p = tmp_path / "verdict.json"
+        p.write_text(
+            r'[{"index": 0, "met": true, "reasoning": "ok", "evidence": ["format: \$#,##0;(\$#,##0)"]}]'
+        )
+        results = _read_batch_verdict(str(p), 1)
+        assert results[0]["met"] is True
+        assert r"\$" in results[0]["evidence"][0]
+
+    def test_recovers_from_invalid_unicode_escape(self, tmp_path):
+        p = tmp_path / "verdict.json"
+        p.write_text(
+            r'[{"index": 0, "met": true, "reasoning": "ok", "evidence": ["bad unicode: \u12"]}]'
+        )
+        results = _read_batch_verdict(str(p), 1)
+        assert results[0]["met"] is True
+        assert r"\u12" in results[0]["evidence"][0]
 
 
 MOCK_USAGE = {
