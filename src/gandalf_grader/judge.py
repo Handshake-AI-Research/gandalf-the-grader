@@ -80,9 +80,9 @@ def build_batch_judge_prompt(
 # JSON sanitisation
 # ---------------------------------------------------------------------------
 
-# Matches either a valid two-character JSON escape (group 1) or an invalid
-# one (group 2).  Valid JSON escapes: \\ \" \/ \b \f \n \r \t \uXXXX.
-_ESCAPE_RE = re.compile(r'(\\["\\/bfnrtu])|(\\)')
+# Matches either a valid JSON escape (group 1) or an invalid backslash
+# (group 2). Valid JSON escapes: \\ \" \/ \b \f \n \r \t \uXXXX.
+_ESCAPE_RE = re.compile(r'(\\(?:["\\/bfnrt]|u[0-9a-fA-F]{4}))|(\\)')
 
 
 def _sanitize_json(raw: str) -> str:

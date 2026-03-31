@@ -27,6 +27,12 @@ class TestSanitizeJson:
         fixed = _sanitize_json(raw)
         assert json.loads(fixed)["evidence"] == "format: \\$#,##0"
 
+    def test_preserves_already_escaped_backslash_dollar(self):
+        raw = r'{"evidence": "format: \\$#,##0"}'
+        fixed = _sanitize_json(raw)
+        assert fixed == raw
+        assert json.loads(fixed)["evidence"] == "format: \\$#,##0"
+
     def test_fixes_backslash_paren(self):
         raw = r'{"evidence": "format: \(0.00\)"}'
         fixed = _sanitize_json(raw)
@@ -41,6 +47,18 @@ class TestSanitizeJson:
         raw = r'{"a": "\u0041"}'
         assert _sanitize_json(raw) == raw
         assert json.loads(_sanitize_json(raw))["a"] == "A"
+
+    def test_fixes_truncated_unicode_escape(self):
+        raw = r'{"evidence": "bad unicode: \u12"}'
+        fixed = _sanitize_json(raw)
+        parsed = json.loads(fixed)
+        assert parsed["evidence"] == r"bad unicode: \u12"
+
+    def test_fixes_non_hex_unicode_escape(self):
+        raw = r'{"evidence": "bad unicode: \uZZZZ"}'
+        fixed = _sanitize_json(raw)
+        parsed = json.loads(fixed)
+        assert parsed["evidence"] == r"bad unicode: \uZZZZ"
 
     def test_excel_number_format_roundtrip(self):
         """Reproduces the exact pattern that caused the observed failure."""
@@ -274,6 +292,12 @@ class TestReadVerdict:
         result = _read_verdict(str(p))
         assert result.met is True
 
+    def test_recovers_from_invalid_unicode_escape(self, tmp_path):
+        p = tmp_path / "verdict.json"
+        p.write_text(r'{"met": true, "reasoning": "bad unicode: \u12", "evidence": []}')
+        result = _read_verdict(str(p))
+        assert result.met is True
+
 
 class TestReadBatchVerdict:
     def test_valid_batch(self, tmp_path):
@@ -359,6 +383,15 @@ class TestReadBatchVerdict:
         results = _read_batch_verdict(str(p), 1)
         assert results[0]["met"] is True
         assert r"\$" in results[0]["evidence"][0]
+
+    def test_recovers_from_invalid_unicode_escape(self, tmp_path):
+        p = tmp_path / "verdict.json"
+        p.write_text(
+            r'[{"index": 0, "met": true, "reasoning": "ok", "evidence": ["bad unicode: \u12"]}]'
+        )
+        results = _read_batch_verdict(str(p), 1)
+        assert results[0]["met"] is True
+        assert r"\u12" in results[0]["evidence"][0]
 
 
 MOCK_USAGE = {
