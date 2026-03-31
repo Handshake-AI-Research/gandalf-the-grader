@@ -882,7 +882,7 @@ sdist = { url = "https://files.pythonhosted.org/packages/b3/0d/bf0567477f7281d9a
 
 [[package]]
 name = "gandalf-grader"
-version = "0.4.4"
+version = "0.4.5"
 source = { editable = "." }
 dependencies = [
     { name = "jinja2" },
