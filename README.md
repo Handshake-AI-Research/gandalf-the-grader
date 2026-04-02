@@ -70,7 +70,8 @@ gandalf-the-grader --config /tests/grader.toml
 
 | Field | Required | Default | Description |
 |---|---|---|---|
-| `instructions` | Yes | | Task instructions given to the original agent |
+| `instructions` | Yes\* | | Inline task instructions given to the original agent (mutually exclusive with `instructions_path`) |
+| `instructions_path` | Yes\* | | Path to a file with task instructions (mutually exclusive with `instructions`) |
 | `rubric` | Yes\* | | Inline rubric as a TOML array of tables (mutually exclusive with `rubric_path`) |
 | `rubric_path` | Yes\* | | Path to rubric JSON file (mutually exclusive with `rubric`) |
 | `judge_guidance` | No | | Inline judge guidance text (mutually exclusive with `judge_guidance_path`) |
@@ -168,6 +169,7 @@ For a complete container architecture with task runners and agent environments, 
 |---|---|
 | `LLM_API_KEY` | API key for the LLM provider |
 | `LLM_BASE_URL` | Base URL for the LLM API (optional) |
+| `GRADER_INSTRUCTIONS_PATH` | Fallback path to task instructions file (if not set in TOML) |
 | `GRADER_JUDGE_GUIDANCE_PATH` | Fallback path to judge guidance file (if not set in TOML) |
 | `GRADER_JUDGE_PROMPT_PATH` | Fallback path to custom judge prompt template (if not set in TOML) |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | OTLP endpoint URL for trace export (optional) |

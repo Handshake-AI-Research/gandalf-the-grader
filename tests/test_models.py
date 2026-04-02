@@ -373,6 +373,32 @@ class TestMutualExclusivity:
             "output_dir": "/logs/grader",
         }
 
+    def test_instructions_inline_only(self) -> None:
+        cfg = GraderConfig(**self.base_kwargs())
+        assert cfg.instructions == "test"
+        assert cfg.instructions_path is None
+
+    def test_instructions_path_only(self) -> None:
+        kw = self.base_kwargs()
+        del kw["instructions"]
+        cfg = GraderConfig(**kw, instructions_path="/some/instructions.md")
+        assert cfg.instructions_path == "/some/instructions.md"
+        assert cfg.instructions is None
+
+    def test_instructions_both_raises(self) -> None:
+        with pytest.raises(ValidationError, match="instructions"):
+            GraderConfig(
+                **self.base_kwargs(),
+                instructions_path="/some/instructions.md",
+            )
+
+    def test_instructions_neither_is_valid(self) -> None:
+        kw = self.base_kwargs()
+        del kw["instructions"]
+        cfg = GraderConfig(**kw)
+        assert cfg.instructions is None
+        assert cfg.instructions_path is None
+
     def test_rubric_inline_only(self) -> None:
         kw = self.base_kwargs()
         del kw["rubric_path"]

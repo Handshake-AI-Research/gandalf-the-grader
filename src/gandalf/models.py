@@ -46,7 +46,8 @@ class GraderConfig(BaseModel):
     """
 
     model: str = "gemini/gemini-2.5-flash"
-    instructions: str
+    instructions: str | None = None
+    instructions_path: str | None = None
     rubric: list[RubricItem] | None = None
     rubric_path: str | None = None
     workdir: str
@@ -65,6 +66,9 @@ class GraderConfig(BaseModel):
 
     @model_validator(mode="after")
     def _check_no_inline_and_path(self) -> "GraderConfig":
+        if self.instructions is not None and self.instructions_path is not None:
+            msg = "Cannot set both 'instructions' and 'instructions_path'"
+            raise ValueError(msg)
         if self.rubric is not None and self.rubric_path is not None:
             msg = "Cannot set both 'rubric' and 'rubric_path'"
             raise ValueError(msg)
