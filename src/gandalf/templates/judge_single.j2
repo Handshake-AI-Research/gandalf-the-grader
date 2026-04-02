@@ -51,5 +51,7 @@ Example:
 
 Write ONLY valid JSON to that file, with no additional text.
 
-YOUR FINAL ACTION must be: use file_editor tool (create command) to write the complete JSON object to {{ verdict_path }}. Then call the finish tool to complete your task. Do not finish or end your response until this file is written. Do not print the verdict in your response — only the file on disk counts.
+YOUR FINAL TWO ACTIONS, in order:
+Step 1: Use the file_editor tool (create command) to write the complete JSON object to {{ verdict_path }}. Do not print the verdict in your response — only the file on disk counts.
+Step 2: Call the finish tool to signal task completion. You must call finish after writing the file.
 </judge_instructions>
