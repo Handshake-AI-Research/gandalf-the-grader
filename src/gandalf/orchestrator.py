@@ -295,7 +295,10 @@ def run_judge(
         try:
             stdout, stderr = proc.communicate(timeout=timeout)
         except subprocess.TimeoutExpired:
-            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            try:
+                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            except ProcessLookupError:
+                pass  # process already exited
             proc.communicate()
             save_trace(trace_path, "", f"Judge execution timed out after {timeout}s.", -1)
             return fail("Judge execution timed out.")
