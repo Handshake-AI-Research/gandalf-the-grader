@@ -212,6 +212,8 @@ def run_agent_session(
         model=model,
         api_key=api_key,
         base_url=os.environ.get("LLM_BASE_URL"),
+        timeout=120,
+        max_retries=3,
     )
 
     tools = [

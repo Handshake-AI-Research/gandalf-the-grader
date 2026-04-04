@@ -22,6 +22,7 @@ import json
 import math
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -283,26 +284,29 @@ def run_judge(
         if batch:
             cmd.append("--batch")
 
-        result = subprocess.run(
+        proc = subprocess.Popen(
             cmd,
-            check=False,
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
-            timeout=timeout,
             cwd=clone_dir,
+            start_new_session=True,
         )
+        try:
+            stdout, stderr = proc.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            proc.communicate()
+            save_trace(trace_path, "", f"Judge execution timed out after {timeout}s.", -1)
+            return fail("Judge execution timed out.")
 
-        save_trace(trace_path, result.stdout, result.stderr, result.returncode)
+        save_trace(trace_path, stdout, stderr, proc.returncode)
 
-        if result.returncode != 0:
-            return fail(f"Judge process failed (exit {result.returncode}): {result.stderr[:500]}")
+        if proc.returncode != 0:
+            return fail(f"Judge process failed (exit {proc.returncode}): {stderr[:500]}")
 
         with open(output_path) as f:
             data = json.load(f)
-
-    except subprocess.TimeoutExpired:
-        save_trace(trace_path, "", "Judge execution timed out.", -1)
-        return fail("Judge execution timed out.")
     except (json.JSONDecodeError, FileNotFoundError) as e:
         return fail(f"Failed to read judge output: {e}")
     else:
