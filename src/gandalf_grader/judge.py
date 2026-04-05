@@ -56,7 +56,7 @@ def build_judge_prompt(
 def build_batch_judge_prompt(
     instructions: str,
     final_output: str,
-    criteria: list[dict[str, Any]],
+    criteria: list[str],
     verdict_path: str,
     judge_guidance: str = "",
 ) -> str:
@@ -72,7 +72,6 @@ def build_batch_judge_prompt(
         criteria=criteria,
         verdict_path=verdict_path,
         judge_guidance=judge_guidance,
-        n_max=len(criteria) - 1,
     )
 
 
@@ -354,7 +353,7 @@ def run_judge_batch(input_path: str, output_path: str) -> None:
     """Run the agent-as-judge for all rubric criteria in a single session.
 
     The input JSON must contain a ``criteria`` key whose value is a list of
-    dicts, each with ``index`` and ``criteria`` fields.
+    criterion strings.
 
     The output file will contain a JSON object with ``verdicts`` (array of
     verdict objects, one per criterion index) and ``llm_usage`` (aggregate
@@ -363,15 +362,14 @@ def run_judge_batch(input_path: str, output_path: str) -> None:
     with open(input_path) as f:
         judge_input = BatchJudgeInput.model_validate_json(f.read())
 
-    criteria_dicts = [c.model_dump() for c in judge_input.criteria]
-    n_criteria = len(criteria_dicts)
+    n_criteria = len(judge_input.criteria)
 
     verdict_path = _make_verdict_path(prefix="verdict_batch_", dir=judge_input.workdir)
 
     prompt = build_batch_judge_prompt(
         instructions=judge_input.instructions,
         final_output=judge_input.final_output,
-        criteria=criteria_dicts,
+        criteria=judge_input.criteria,
         verdict_path=verdict_path,
         judge_guidance=judge_input.judge_guidance,
     )

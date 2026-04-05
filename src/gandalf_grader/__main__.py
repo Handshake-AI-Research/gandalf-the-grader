@@ -31,7 +31,6 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 from gandalf_grader.config import (
-    BatchCriterion,
     BatchJudgeInput,
     CriteriaResult,
     EvaluationInfo,
@@ -382,10 +381,7 @@ def _run_batch(
     Returns (results, llm_usage) where llm_usage is the token/cost
     totals from the single batch agent session.
     """
-    criteria_list = [
-        BatchCriterion(index=i, criteria=item.criteria)
-        for i, item in enumerate(rubric)
-    ]
+    criteria_list = [item.criteria for item in rubric]
 
     n_criteria = len(criteria_list)
     batch_timeout = config.judge_timeout * n_criteria
@@ -463,10 +459,7 @@ def _run_batch_concurrent(
         # Use local 0-based indices for the judge — the prompt says
         # "0 through N-1" and _read_batch_verdict filters by 0 <= idx < N.
         # Global rubric indices are restored when building indexed_results.
-        criteria_list = [
-            BatchCriterion(index=local_idx, criteria=item.criteria)
-            for local_idx, (_orig_idx, item) in enumerate(chunk)
-        ]
+        criteria_list = [item.criteria for _orig_idx, item in chunk]
 
         n_criteria = len(criteria_list)
         batch_timeout = config.judge_timeout * n_criteria
@@ -623,10 +616,7 @@ def _retry_batch(
     errored_indices: list[int],
 ) -> None:
     """Re-run errored criteria as a batch and merge results in-place."""
-    retry_criteria = [
-        BatchCriterion(index=new_idx, criteria=rubric[orig_idx].criteria)
-        for new_idx, orig_idx in enumerate(errored_indices)
-    ]
+    retry_criteria = [rubric[orig_idx].criteria for orig_idx in errored_indices]
 
     n_retry = len(retry_criteria)
     batch_timeout = config.judge_timeout * n_retry

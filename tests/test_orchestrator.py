@@ -136,10 +136,7 @@ def _make_batch_input(tmp_path, n=2) -> BatchJudgeInput:
         model="test-model",
         instructions="do a thing",
         final_output="done",
-        criteria=[
-            {"index": i, "criteria": f"criterion {i}"}
-            for i in range(n)
-        ],
+        criteria=[f"criterion {i}" for i in range(n)],
         workdir=str(tmp_path),
     )
 
@@ -1109,8 +1106,8 @@ class TestBatchConcurrent:
 
         def _side_effect(judge_input, **kwargs):
             verdicts = [
-                {"index": c.index, "met": True, "reasoning": f"ok {c.index}", "evidence": []}
-                for c in judge_input.criteria
+                {"index": i, "met": True, "reasoning": f"ok {i}", "evidence": []}
+                for i, _c in enumerate(judge_input.criteria)
             ]
             usage = {"cost_usd": 0.1, "prompt_tokens": 100, "completion_tokens": 50, "cache_read_tokens": 10}
             return verdicts, usage
@@ -1135,13 +1132,11 @@ class TestBatchConcurrent:
         assert mock_eval_all.call_count == 2
 
     @patch("gandalf_grader.__main__._run_judge")
-    def test_split_uses_local_indices(self, mock_eval_all, tmp_path):
-        """Chunks must use 0-based local indices, not global rubric positions.
+    def test_split_uses_correct_criteria_subsets(self, mock_eval_all, tmp_path):
+        """Chunks must contain the correct subset of criteria strings.
 
-        Regression test: the judge prompt says "0 through N-1" and
-        _read_batch_verdict filters by 0 <= idx < N, so passing global
-        indices (e.g. 3, 4, 5) for chunk 2 causes the judge to either
-        write mismatched indices or have its verdicts silently discarded.
+        Regression test: ensures criteria are correctly partitioned across
+        splits and results are reassembled in original rubric order.
         """
         config = _make_config(
             workdir=str(tmp_path),
@@ -1152,14 +1147,13 @@ class TestBatchConcurrent:
         os.makedirs(config.output_dir, exist_ok=True)
         rubric = self._make_rubric(6)  # 6 criteria → 3 chunks of 2
 
-        received_indices = []
+        received_criteria = []
 
         def _side_effect(judge_input, **kwargs):
-            indices = [c.index for c in judge_input.criteria]
-            received_indices.append(indices)
+            received_criteria.append(list(judge_input.criteria))
             verdicts = [
-                {"index": c.index, "met": True, "reasoning": "ok", "evidence": []}
-                for c in judge_input.criteria
+                {"index": i, "met": True, "reasoning": "ok", "evidence": []}
+                for i in range(len(judge_input.criteria))
             ]
             return verdicts, {"cost_usd": 0.05}
 
@@ -1167,11 +1161,14 @@ class TestBatchConcurrent:
 
         results, _ = _run_batch_concurrent(config, rubric, "done", "")
 
-        # Every chunk must use local 0-based indices
-        for indices in received_indices:
-            assert indices == list(range(len(indices))), (
-                f"Expected 0-based local indices, got {indices}"
-            )
+        # Every chunk should have 2 criteria
+        assert len(received_criteria) == 3
+        for chunk_criteria in received_criteria:
+            assert len(chunk_criteria) == 2
+
+        # All criteria strings should appear exactly once across all chunks
+        all_criteria = [c for chunk in received_criteria for c in chunk]
+        assert sorted(all_criteria) == sorted(item.criteria for item in rubric)
 
         # All 6 results should be successful
         assert len(results) == 6
@@ -1194,8 +1191,8 @@ class TestBatchConcurrent:
 
         def _side_effect(judge_input, **kwargs):
             verdicts = [
-                {"index": c.index, "met": True, "reasoning": f"ok {c.index}", "evidence": []}
-                for c in judge_input.criteria
+                {"index": i, "met": True, "reasoning": f"ok {i}", "evidence": []}
+                for i, c in enumerate(judge_input.criteria)
             ]
             return verdicts, {"cost_usd": 0.1}
 
@@ -1224,8 +1221,8 @@ class TestBatchConcurrent:
 
         def _side_effect(judge_input, **kwargs):
             verdicts = [
-                {"index": c.index, "met": True, "reasoning": f"ok {c.index}", "evidence": []}
-                for c in judge_input.criteria
+                {"index": i, "met": True, "reasoning": f"ok {i}", "evidence": []}
+                for i, c in enumerate(judge_input.criteria)
             ]
             return verdicts, {"cost_usd": 0.05}
 
@@ -1254,8 +1251,8 @@ class TestBatchConcurrent:
         def _side_effect(judge_input, sandbox_user, trace_path, timeout):
             trace_paths.append(trace_path)
             verdicts = [
-                {"index": c.index, "met": True, "reasoning": "ok", "evidence": []}
-                for c in judge_input.criteria
+                {"index": i, "met": True, "reasoning": "ok", "evidence": []}
+                for i, c in enumerate(judge_input.criteria)
             ]
             return verdicts, {}
 
@@ -1285,12 +1282,12 @@ class TestBatchConcurrent:
         def _side_effect(judge_input, **kwargs):
             criteria = judge_input.criteria
             # Identify chunk by criteria text (indices are local 0-based in both chunks)
-            is_second_chunk = any("criterion 2" in c.criteria for c in criteria)
+            is_second_chunk = any("criterion 2" in c for c in criteria)
             if not is_second_chunk:
                 # First split: both pass
                 verdicts = [
-                    {"index": c.index, "met": True, "reasoning": "ok", "evidence": []}
-                    for c in criteria
+                    {"index": i, "met": True, "reasoning": "ok", "evidence": []}
+                    for i in range(len(criteria))
                 ]
             else:
                 # Second split: first criterion errors, second passes
@@ -1327,8 +1324,8 @@ class TestBatchConcurrent:
         def _side_effect(judge_input, sandbox_user, trace_path, timeout):
             timeouts.append(timeout)
             verdicts = [
-                {"index": c.index, "met": True, "reasoning": "ok", "evidence": []}
-                for c in judge_input.criteria
+                {"index": i, "met": True, "reasoning": "ok", "evidence": []}
+                for i, c in enumerate(judge_input.criteria)
             ]
             return verdicts, {}
 
@@ -1358,8 +1355,8 @@ class TestBatchConcurrent:
         def _side_effect(judge_input, sandbox_user, trace_path, timeout):
             timeouts.append(timeout)
             verdicts = [
-                {"index": c.index, "met": True, "reasoning": "ok", "evidence": []}
-                for c in judge_input.criteria
+                {"index": i, "met": True, "reasoning": "ok", "evidence": []}
+                for i, c in enumerate(judge_input.criteria)
             ]
             return verdicts, {}
 
@@ -1396,8 +1393,8 @@ class TestBatchConcurrent:
 
         def _side_effect(judge_input, **kwargs):
             verdicts = [
-                {"index": c.index, "met": True, "reasoning": "ok", "evidence": []}
-                for c in judge_input.criteria
+                {"index": i, "met": True, "reasoning": "ok", "evidence": []}
+                for i, c in enumerate(judge_input.criteria)
             ]
             return verdicts, {"cost_usd": 0.1, "prompt_tokens": 100, "completion_tokens": 50, "cache_read_tokens": 0}
 
@@ -1448,14 +1445,14 @@ class TestBatchConcurrent:
             if idx == 0:
                 # Split 0: both pass
                 verdicts = [
-                    {"index": c.index, "met": True, "reasoning": "ok", "evidence": []}
-                    for c in judge_input.criteria
+                    {"index": i, "met": True, "reasoning": "ok", "evidence": []}
+                    for i, c in enumerate(judge_input.criteria)
                 ]
             elif idx == 1:
                 # Split 1: one error
                 verdicts = [
-                    {"index": judge_input.criteria[0].index, "met": None, "reasoning": "timeout", "evidence": []},
-                    {"index": judge_input.criteria[1].index, "met": True, "reasoning": "ok", "evidence": []},
+                    {"index": 0, "met": None, "reasoning": "timeout", "evidence": []},
+                    {"index": 1, "met": True, "reasoning": "ok", "evidence": []},
                 ]
             else:
                 # Retry: the errored criterion resolves
@@ -1493,17 +1490,17 @@ class TestBatchConcurrent:
         rubric = self._make_rubric(4)
 
         def _side_effect(judge_input, **kwargs):
-            is_second_chunk = any("criterion 2" in c.criteria for c in judge_input.criteria)
+            is_second_chunk = any("criterion 2" in c for c in judge_input.criteria)
             if not is_second_chunk:
                 verdicts = [
-                    {"index": c.index, "met": True, "reasoning": "ok", "evidence": []}
-                    for c in judge_input.criteria
+                    {"index": i, "met": True, "reasoning": "ok", "evidence": []}
+                    for i, c in enumerate(judge_input.criteria)
                 ]
                 return verdicts, {"cost_usd": 0.1}
             else:
                 verdicts = [
-                    {"index": c.index, "met": None, "reasoning": "Judge process failed (exit 1)", "evidence": []}
-                    for c in judge_input.criteria
+                    {"index": i, "met": None, "reasoning": "Judge process failed (exit 1)", "evidence": []}
+                    for i in range(len(judge_input.criteria))
                 ]
                 return verdicts, {}
 
@@ -1529,17 +1526,17 @@ class TestBatchConcurrent:
         rubric = self._make_rubric(4)
 
         def _side_effect(judge_input, **kwargs):
-            is_second_chunk = any("criterion 2" in c.criteria for c in judge_input.criteria)
+            is_second_chunk = any("criterion 2" in c for c in judge_input.criteria)
             if not is_second_chunk:
                 verdicts = [
-                    {"index": c.index, "met": True, "reasoning": "ok", "evidence": []}
-                    for c in judge_input.criteria
+                    {"index": i, "met": True, "reasoning": "ok", "evidence": []}
+                    for i, c in enumerate(judge_input.criteria)
                 ]
                 return verdicts, {"cost_usd": 0.1}
             else:
                 verdicts = [
-                    {"index": c.index, "met": None, "reasoning": "Judge execution timed out.", "evidence": []}
-                    for c in judge_input.criteria
+                    {"index": i, "met": None, "reasoning": "Judge execution timed out.", "evidence": []}
+                    for i in range(len(judge_input.criteria))
                 ]
                 return verdicts, {}
 
@@ -1564,8 +1561,8 @@ class TestBatchConcurrent:
 
         def _side_effect(judge_input, **kwargs):
             verdicts = [
-                {"index": c.index, "met": None, "reasoning": "crash", "evidence": []}
-                for c in judge_input.criteria
+                {"index": i, "met": None, "reasoning": "crash", "evidence": []}
+                for i in range(len(judge_input.criteria))
             ]
             return verdicts, {}
 
@@ -1608,16 +1605,16 @@ class TestBatchConcurrent:
         def _side_effect(judge_input, **kwargs):
             criteria = judge_input.criteria
             # Identify by criteria text — "criterion 2" and "criterion 3" always fail
-            has_failing = any("criterion 2" in c.criteria or "criterion 3" in c.criteria for c in criteria)
+            has_failing = any("criterion 2" in c or "criterion 3" in c for c in criteria)
 
             if has_failing:
                 return (
-                    [{"index": c.index, "met": None, "reasoning": "persistent failure", "evidence": []} for c in criteria],
+                    [{"index": i, "met": None, "reasoning": "persistent failure", "evidence": []} for i in range(len(criteria))],
                     {"cost_usd": 0.05},
                 )
             else:
                 return (
-                    [{"index": c.index, "met": True, "reasoning": "ok", "evidence": []} for c in criteria],
+                    [{"index": i, "met": True, "reasoning": "ok", "evidence": []} for i in range(len(criteria))],
                     {"cost_usd": 0.1},
                 )
 
@@ -1655,11 +1652,11 @@ class TestBatchConcurrent:
         rubric = self._make_rubric(4)
 
         def _side_effect(judge_input, **kwargs):
-            is_second_chunk = any("criterion 2" in c.criteria for c in judge_input.criteria)
+            is_second_chunk = any("criterion 2" in c for c in judge_input.criteria)
             if not is_second_chunk:
                 verdicts = [
-                    {"index": c.index, "met": True, "reasoning": "ok", "evidence": []}
-                    for c in judge_input.criteria
+                    {"index": i, "met": True, "reasoning": "ok", "evidence": []}
+                    for i, c in enumerate(judge_input.criteria)
                 ]
                 return verdicts, {"cost_usd": 0.1}
             else:
@@ -1688,12 +1685,12 @@ class TestBatchConcurrent:
         rubric = self._make_rubric(4)
 
         def _side_effect(judge_input, **kwargs):
-            is_second_chunk = any("criterion 2" in c.criteria for c in judge_input.criteria)
+            is_second_chunk = any("criterion 2" in c for c in judge_input.criteria)
             if not is_second_chunk:
                 # First split (criteria 0, 1): returns both verdicts
                 verdicts = [
-                    {"index": c.index, "met": True, "reasoning": "ok", "evidence": []}
-                    for c in judge_input.criteria
+                    {"index": i, "met": True, "reasoning": "ok", "evidence": []}
+                    for i, c in enumerate(judge_input.criteria)
                 ]
                 return verdicts, {}
             else:

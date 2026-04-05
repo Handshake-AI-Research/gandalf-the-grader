@@ -422,10 +422,7 @@ def _make_batch_judge_input_json(tmp_path, n=2):
         "model": "test-model",
         "instructions": "do a thing",
         "final_output": "done",
-        "criteria": [
-            {"index": i, "criteria": f"criterion {i}"}
-            for i in range(n)
-        ],
+        "criteria": [f"criterion {i}" for i in range(n)],
         "workdir": str(tmp_path),
     }
     p = tmp_path / "batch_input.json"
