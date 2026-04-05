@@ -16,7 +16,6 @@ import argparse
 import contextlib
 import json
 import os
-import re
 import secrets
 import tempfile
 from pathlib import Path
@@ -88,32 +87,6 @@ def build_batch_judge_prompt(
 
 
 # ---------------------------------------------------------------------------
-# JSON sanitisation
-# ---------------------------------------------------------------------------
-
-# Matches either a valid JSON escape (group 1) or an invalid backslash
-# (group 2). Valid JSON escapes: \\ \" \/ \b \f \n \r \t \uXXXX.
-_ESCAPE_RE = re.compile(r'(\\(?:["\\/bfnrt]|u[0-9a-fA-F]{4}))|(\\)')
-
-
-def _sanitize_json(raw: str) -> str:
-    """Fix invalid backslash escapes in LLM-generated JSON.
-
-    LLM agents sometimes embed content containing literal backslashes
-    (e.g. Excel number formats like ``\\$#,##0``) without doubling them.
-    This turns each invalid ``\\X`` into ``\\\\X`` so ``json.loads`` can
-    parse the string, while leaving valid escapes untouched.
-    """
-
-    def _fix(m: re.Match) -> str:
-        if m.group(1):          # valid escape — leave as-is
-            return m.group(1)
-        return "\\\\"           # invalid escape — double the backslash
-
-    return _ESCAPE_RE.sub(_fix, raw)
-
-
-# ---------------------------------------------------------------------------
 # Verdict readers
 # ---------------------------------------------------------------------------
 
@@ -125,7 +98,7 @@ def _read_verdict(verdict_path: str) -> Verdict:
             content = f.read().strip()
         if not content:
             return Verdict(met=None, reasoning="Judge agent wrote an empty verdict file.")
-        data = json.loads(_sanitize_json(content))
+        data = json.loads(content)
         if "met" not in data:
             return Verdict(met=None, reasoning=f"Verdict missing 'met' field: {content[:200]}")
         raw_met = data["met"]
@@ -160,7 +133,7 @@ def _read_batch_verdict(verdict_path: str, n_criteria: int) -> list[dict[str, An
                 "Judge agent wrote an empty verdict file.",
             )
 
-        verdicts_raw = json.loads(_sanitize_json(content))
+        verdicts_raw = json.loads(content)
         if not isinstance(verdicts_raw, list):
             return _fail_all_verdicts(
                 n_criteria,
