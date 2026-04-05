@@ -46,7 +46,7 @@ from gandalf_grader.trajectory import load_trajectory_final_output
 # Environment variables forwarded to the inner judge subprocess (via sudo).
 # Only these are passed — everything else is stripped to avoid leaking secrets
 # or host-specific state into the sandbox.
-_JUDGE_ENV_ALLOWLIST = (
+_JUDGE_ENV_ALLOWLIST = frozenset({
     "PATH",
     "LLM_API_KEY",
     "LLM_BASE_URL",
@@ -59,7 +59,7 @@ _JUDGE_ENV_ALLOWLIST = (
     "OTEL_EXPORTER_OTLP_ENDPOINT",
     "OTEL_EXPORTER_OTLP_HEADERS",
     "OTEL_EXPORTER_OTLP_TRACES_PROTOCOL",
-)
+})
 
 
 def _judge_env_vars() -> list[str]:
@@ -109,7 +109,7 @@ def _clone_workspace(src: str) -> str:
     covers per-file errors — directory listing errors (e.g. a 0o700 dir owned
     by the agent) cannot be caught there.
     """
-    clone_dir = tempfile.mkdtemp(prefix="judge_workspace_", dir="/tmp")
+    clone_dir = tempfile.mkdtemp(prefix="judge_workspace_")
     # Root dir is created by mkdtemp at 0o700; open it up immediately so
     # sandbox_user can traverse and write to it.
     os.chmod(clone_dir, 0o777)
