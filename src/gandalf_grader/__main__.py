@@ -223,8 +223,10 @@ def evaluate_criteria(
             }
 
         with open(output_path) as f:
-            result_data: dict[str, Any] = json.load(f)
-            return result_data
+            data = json.load(f)
+        verdict_data = data["verdict"]
+        verdict_data["llm_usage"] = data.get("llm_usage", {})
+        return verdict_data
 
     except subprocess.TimeoutExpired:
         _save_trace(trace_path, "", "Judge execution timed out.", -1)
@@ -331,17 +333,9 @@ def evaluate_all_criteria(
         with open(output_path) as f:
             data = json.load(f)
 
-            if isinstance(data, dict):
-                verdicts = data.get("verdicts", [])
-                llm_usage = data.get("llm_usage", {})
-                return verdicts, llm_usage
-
-            if isinstance(data, list):
-                # Legacy format: bare JSON array of verdicts, no usage info.
-                return data, {}
-
-            reason = f"Unexpected JSON type from judge: {type(data).__name__}"
-            return _fail_all(n_criteria, reason), {}
+            verdicts = data.get("verdicts", [])
+            llm_usage = data.get("llm_usage", {})
+            return verdicts, llm_usage
 
     except subprocess.TimeoutExpired:
         _save_trace(trace_path, "", "Batch judge execution timed out.", -1)

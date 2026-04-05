@@ -330,16 +330,20 @@ def run_judge(input_path: str, output_path: str) -> None:
         )
         verdict = _read_verdict(verdict_path)
         output = {
-            "met": verdict.met,
-            "reasoning": verdict.reasoning,
-            "evidence": verdict.evidence,
+            "verdict": {
+                "met": verdict.met,
+                "reasoning": verdict.reasoning,
+                "evidence": verdict.evidence,
+            },
             "llm_usage": llm_usage,
         }
     except Exception as e:
         output = {
-            "met": None,
-            "reasoning": f"Judge execution error: {e}",
-            "evidence": [],
+            "verdict": {
+                "met": None,
+                "reasoning": f"Judge execution error: {e}",
+                "evidence": [],
+            },
             "llm_usage": llm_usage,
         }
     finally:
