@@ -30,6 +30,7 @@ def _make_config(**overrides) -> VerifierConfig:
         "workdir": "/workspace",
         "trajectory_path": "/logs/trajectory.json",
         "sandbox_user": "sandbox",
+        "output_dir": "/logs/verifier",
     }
     defaults.update(overrides)
     return VerifierConfig(**defaults)

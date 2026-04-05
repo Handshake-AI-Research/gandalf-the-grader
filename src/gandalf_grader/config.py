@@ -6,7 +6,7 @@ import tomllib
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, Field, TypeAdapter, field_validator
+from pydantic import BaseModel, Field, TypeAdapter, field_validator, model_validator
 
 
 class MCPServer(BaseModel):
@@ -21,61 +21,6 @@ class MCPServer(BaseModel):
     args: list[str] = Field(default_factory=list)
 
 
-class VerifierConfig(BaseModel):
-    """Top-level verifier configuration loaded from a TOML file.
-
-    mode controls the *granularity* of rubric evaluation — how many criteria
-    are sent to each judge session:
-      - "individual" (default): one agent session per rubric criterion.
-      - "batch": all criteria evaluated in a single agent session.
-
-    max_concurrency controls the *parallelism* — how many judge sessions run
-    at the same time:
-      - None (default): no parallelism (1 session at a time).
-      - N (>= 1): up to N sessions in parallel.
-
-    These are orthogonal axes.  For batch mode, max_concurrency > 1 splits
-    criteria into N positional chunks, each evaluated as a separate batch
-    session.  For individual mode, max_concurrency > 1 runs N individual
-    criterion evaluations in parallel.
-
-    judge_timeout is the per-criterion budget in seconds, regardless of mode.
-    In batch mode the effective timeout per session is
-    ``judge_timeout * N_criteria_in_session``, optionally capped by
-    batch_timeout.  When max_concurrency > 1, N_criteria_in_session is the
-    chunk size (not the full rubric), and batch_timeout applies to each
-    chunk independently.
-    """
-
-    model: str = "google/gemini-2.5-flash"
-    instructions: str
-    rubric_path: str
-    workdir: str
-    trajectory_path: str
-    sandbox_user: str
-    mcp_servers: list[MCPServer] = Field(default_factory=list)
-    output_dir: str = "/logs/verifier"
-    judge_timeout: int = 300
-    judge_guidance_path: str | None = None
-    batch_timeout: int | None = None
-    mode: Literal["individual", "batch"] = "individual"
-    max_concurrency: int | None = Field(default=None, ge=1)
-    judge_retries: int = 1
-
-    @field_validator("mode", mode="before")
-    @classmethod
-    def _migrate_sequential(cls, v: str) -> str:
-        if v == "sequential":
-            import warnings
-            warnings.warn(
-                'mode="sequential" is deprecated, use mode="individual" instead',
-                DeprecationWarning,
-                stacklevel=2,
-            )
-            return "individual"
-        return v
-
-
 class RubricItem(BaseModel):
     """A single rubric item with evaluation criteria and weight.
 
@@ -88,6 +33,82 @@ class RubricItem(BaseModel):
     weight: float
 
 
+class VerifierConfig(BaseModel):
+    """Top-level verifier configuration loaded from a TOML file.
+
+    mode controls the *granularity* of rubric evaluation -- how many criteria
+    are sent to each judge session:
+      - "individual" (default): one agent session per rubric criterion.
+      - "batch": all criteria evaluated in a single agent session.
+
+    max_concurrency controls the *parallelism* -- how many judge sessions run
+    at the same time:
+      - None (default): no parallelism (1 session at a time).
+      - N (>= 1): up to N sessions in parallel.
+
+    These are orthogonal axes.  For batch mode, max_concurrency > 1 splits
+    criteria into N positional chunks, each evaluated as a separate batch
+    session.  For individual mode, max_concurrency > 1 runs N individual
+    criterion evaluations in parallel.
+
+    judge_timeout is the per-criterion budget in seconds, regardless of mode.
+    In batch mode the effective timeout per session is
+    judge_timeout * N_criteria_in_session, optionally capped by
+    batch_timeout.  When max_concurrency > 1, N_criteria_in_session is the
+    chunk size (not the full rubric), and batch_timeout applies to each
+    chunk independently.
+    """
+
+    model: str = "gemini/gemini-2.5-flash"
+    instructions: str
+    rubric_path: str | None = None
+    rubric: list[RubricItem] | None = None
+    workdir: str
+    trajectory_path: str
+    sandbox_user: str | None = None
+    mcp_servers: list[MCPServer] = Field(default_factory=list)
+    output_dir: str
+    judge_timeout: int = 300
+    judge_guidance_path: str | None = None
+    judge_prompt: str | None = None
+    judge_prompt_path: str | None = None
+    batch_timeout: int | None = None
+    mode: Literal["individual", "batch"] = "individual"
+    max_concurrency: int | None = Field(default=None, ge=1)
+    judge_retries: int = 1
+
+    @model_validator(mode="after")
+    def _check_rubric(self) -> "VerifierConfig":
+        if self.rubric is not None and self.rubric_path is not None:
+            msg = "Cannot set both 'rubric' and 'rubric_path'"
+            raise ValueError(msg)
+        if self.rubric is None and self.rubric_path is None:
+            msg = "Must set either 'rubric' or 'rubric_path'"
+            raise ValueError(msg)
+        return self
+
+    @model_validator(mode="after")
+    def _check_judge_prompt(self) -> "VerifierConfig":
+        if self.judge_prompt is not None and self.judge_prompt_path is not None:
+            msg = "Cannot set both 'judge_prompt' and 'judge_prompt_path'"
+            raise ValueError(msg)
+        return self
+
+    @field_validator("mode", mode="before")
+    @classmethod
+    def _migrate_sequential(cls, v: str) -> str:
+        if v == "sequential":
+            import warnings
+
+            warnings.warn(
+                'mode="sequential" is deprecated, use mode="individual" instead',
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            return "individual"
+        return v
+
+
 class JudgeInput(BaseModel):
     """Input passed to the inner judge for a single criteria evaluation."""
 
@@ -98,12 +119,13 @@ class JudgeInput(BaseModel):
     workdir: str
     mcp_servers: list[MCPServer] = Field(default_factory=list)
     judge_guidance: str = ""
+    judge_prompt: str | None = None
 
 
 class BatchCriterion(BaseModel):
     """A single criterion entry within a batch judge input.
 
-    The judge sees only the index and criteria text — weights are intentionally
+    The judge sees only the index and criteria text -- weights are intentionally
     omitted so the judge evaluates each criterion on its own merits.
     """
 
@@ -121,6 +143,7 @@ class BatchJudgeInput(BaseModel):
     workdir: str
     mcp_servers: list[MCPServer] = Field(default_factory=list)
     judge_guidance: str = ""
+    judge_prompt: str | None = None
 
 
 class Verdict(BaseModel):

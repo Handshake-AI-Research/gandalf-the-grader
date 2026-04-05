@@ -29,9 +29,9 @@ from gandalf_grader.config import BatchJudgeInput, JudgeInput, Verdict
 TEMPLATES_DIR = Path(__file__).parent / "templates"
 
 
-def _render_template(template_name: str, **variables: Any) -> str:
+def _render_template(template_name: str, judge_prompt: str | None = None, **variables: Any) -> str:
     """Render a Jinja2 prompt template from the templates directory."""
-    template_str = (TEMPLATES_DIR / template_name).read_text()
+    template_str = judge_prompt if judge_prompt is not None else (TEMPLATES_DIR / template_name).read_text()
     return jinja2.Template(template_str).render(**variables)
 
 
@@ -41,10 +41,12 @@ def build_judge_prompt(
     criteria: str,
     verdict_path: str,
     judge_guidance: str = "",
+    judge_prompt: str | None = None,
 ) -> str:
     """Build the user message sent to kick off a single-criterion judge session."""
     return _render_template(
         "judge_single.j2",
+        judge_prompt,
         instructions=instructions,
         final_output=final_output,
         criteria=criteria,
@@ -59,6 +61,7 @@ def build_batch_judge_prompt(
     criteria: list[dict[str, Any]],
     verdict_path: str,
     judge_guidance: str = "",
+    judge_prompt: str | None = None,
 ) -> str:
     """Build the prompt for batch mode -- all criteria evaluated in one session.
 
@@ -67,6 +70,7 @@ def build_batch_judge_prompt(
     """
     return _render_template(
         "judge_batch.j2",
+        judge_prompt,
         instructions=instructions,
         final_output=final_output,
         criteria=criteria,
@@ -94,10 +98,10 @@ def _sanitize_json(raw: str) -> str:
     parse the string, while leaving valid escapes untouched.
     """
 
-    def _fix(m: re.Match) -> str:
-        if m.group(1):          # valid escape — leave as-is
+    def _fix(m: re.Match) -> str:  # type: ignore[type-arg]
+        if m.group(1):          # valid escape -- leave as-is
             return m.group(1)
-        return "\\\\"           # invalid escape — double the backslash
+        return "\\\\"           # invalid escape -- double the backslash
 
     return _ESCAPE_RE.sub(_fix, raw)
 
@@ -208,7 +212,7 @@ def _read_batch_verdict(verdict_path: str, n_criteria: int) -> list[dict[str, An
 def _make_verdict_path(prefix: str = "verdict_", dir: str | None = None) -> str:
     """Generate a unique path for the judge to write verdicts to.
 
-    Unlike mkstemp, this does NOT pre-create the file — allowing the agent
+    Unlike mkstemp, this does NOT pre-create the file -- allowing the agent
     to use file_editor create rather than error-prone shell echo fallbacks.
 
     Uses *dir* as the base directory when provided (e.g. the workdir, which
@@ -312,6 +316,7 @@ def run_judge(input_path: str, output_path: str) -> None:
         criteria=judge_input.criteria,
         verdict_path=verdict_path,
         judge_guidance=judge_input.judge_guidance,
+        judge_prompt=judge_input.judge_prompt,
     )
 
     mcp_servers = [
@@ -374,6 +379,7 @@ def run_judge_batch(input_path: str, output_path: str) -> None:
         criteria=criteria_dicts,
         verdict_path=verdict_path,
         judge_guidance=judge_input.judge_guidance,
+        judge_prompt=judge_input.judge_prompt,
     )
 
     mcp_servers = [

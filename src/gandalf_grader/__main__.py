@@ -44,7 +44,7 @@ from gandalf_grader.config import (
 from gandalf_grader.trajectory import load_trajectory_final_output
 
 # Environment variables forwarded to the inner judge subprocess (via sudo).
-# Only these are passed — everything else is stripped to avoid leaking secrets
+# Only these are passed -- everything else is stripped to avoid leaking secrets
 # or host-specific state into the sandbox.
 _JUDGE_ENV_ALLOWLIST = (
     "PATH",
@@ -54,7 +54,7 @@ _JUDGE_ENV_ALLOWLIST = (
     "UV_TOOL_DIR",
     "UV_TOOL_BIN_DIR",
     "UV_PYTHON_INSTALL_DIR",
-    # OpenTelemetry — forwarded so the inner judge can export traces
+    # OpenTelemetry -- forwarded so the inner judge can export traces
     # to any OTEL-compatible backend (e.g. Langfuse, Jaeger, Honeycomb).
     "OTEL_EXPORTER_OTLP_ENDPOINT",
     "OTEL_EXPORTER_OTLP_HEADERS",
@@ -98,6 +98,17 @@ def resolve_judge_guidance(config: VerifierConfig) -> str:
         return f.read()
 
 
+def resolve_judge_prompt(config: VerifierConfig) -> str | None:
+    """Resolve custom judge prompt template (inline, path, or env var)."""
+    if config.judge_prompt is not None:
+        return config.judge_prompt
+    path = config.judge_prompt_path or os.environ.get("GRADER_JUDGE_PROMPT_PATH")
+    if path is not None:
+        with open(path) as f:
+            return f.read()
+    return None
+
+
 def _clone_workspace(src: str) -> str:
     """Clone workspace into a temp directory accessible to the sandbox user.
 
@@ -106,7 +117,7 @@ def _clone_workspace(src: str) -> str:
     second pass is needed.
 
     ``shutil.copytree`` is not used because its ``copy_function`` hook only
-    covers per-file errors — directory listing errors (e.g. a 0o700 dir owned
+    covers per-file errors -- directory listing errors (e.g. a 0o700 dir owned
     by the agent) cannot be caught there.
     """
     clone_dir = tempfile.mkdtemp(prefix="judge_workspace_", dir="/tmp")
@@ -151,9 +162,41 @@ def _clone_workspace(src: str) -> str:
     return clone_dir
 
 
+def _build_judge_cmd(
+    sandbox_user: str | None,
+    clone_dir: str,
+    input_path: str,
+    output_path: str,
+    batch: bool = False,
+) -> list[str]:
+    """Build the subprocess command list for the inner judge.
+
+    When sandbox_user is not None, the command is prefixed with
+    ``sudo -u <sandbox_user>``.  Otherwise the judge runs as the current user.
+    """
+    env_part = [
+        "env",
+        f"HOME={clone_dir}",
+        *_judge_env_vars(),
+    ]
+    judge_part = [
+        "gandalf-grader-judge",
+        "--input",
+        input_path,
+        "--output",
+        output_path,
+    ]
+    if batch:
+        judge_part.append("--batch")
+
+    if sandbox_user is not None:
+        return ["sudo", "-u", sandbox_user, *env_part, *judge_part]
+    return [*env_part, *judge_part]
+
+
 def evaluate_criteria(
     judge_input: JudgeInput,
-    sandbox_user: str,
+    sandbox_user: str | None,
     trace_path: str,
     timeout: int = 300,
 ) -> dict[str, Any]:
@@ -189,22 +232,7 @@ def evaluate_criteria(
 
     try:
         os.chmod(input_path, 0o644)
-        cmd = [
-            "sudo",
-            "-u",
-            sandbox_user,
-            "env",
-            # Set HOME to the cloned workspace so the judge process (and any
-            # SDK it imports, e.g. OpenHands) writes ephemeral state to a
-            # writable, isolated directory instead of the original user's home.
-            f"HOME={clone_dir}",
-            *_judge_env_vars(),
-            "gandalf-grader-judge",
-            "--input",
-            input_path,
-            "--output",
-            output_path,
-        ]
+        cmd = _build_judge_cmd(sandbox_user, clone_dir, input_path, output_path)
 
         result = subprocess.run(
             cmd,
@@ -245,7 +273,7 @@ def _fail_all(n: int, reason: str) -> list[dict[str, Any]]:
 
 def evaluate_all_criteria(
     judge_input: BatchJudgeInput,
-    sandbox_user: str,
+    sandbox_user: str | None,
     trace_path: str,
     timeout: int = 300,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
@@ -253,7 +281,7 @@ def evaluate_all_criteria(
 
     Args:
         judge_input: Batch input with all context needed by the judge.
-        sandbox_user: Username to run the judge process as (via sudo).
+        sandbox_user: Username to run the judge process as (via sudo), or None.
         trace_path: Path to write the judge's stdout/stderr trace.
         timeout: Max seconds to wait for the judge to complete.
 
@@ -296,23 +324,7 @@ def evaluate_all_criteria(
     try:
         os.chmod(input_path, 0o644)
 
-        cmd = [
-            "sudo",
-            "-u",
-            sandbox_user,
-            "env",
-            # Set HOME to the cloned workspace so the judge process (and any
-            # SDK it imports, e.g. OpenHands) writes ephemeral state to a
-            # writable, isolated directory instead of the original user's home.
-            f"HOME={clone_dir}",
-            *_judge_env_vars(),
-            "gandalf-grader-judge",
-            "--input",
-            input_path,
-            "--output",
-            output_path,
-            "--batch",
-        ]
+        cmd = _build_judge_cmd(sandbox_user, clone_dir, input_path, output_path, batch=True)
 
         result = subprocess.run(
             cmd,
@@ -370,6 +382,7 @@ def _run_individual(
     rubric: list[RubricItem],
     final_output: str,
     judge_guidance: str,
+    judge_prompt: str | None = None,
 ) -> tuple[list[CriteriaResult], dict[str, Any]]:
     """Evaluate each criterion in its own agent session.
 
@@ -390,6 +403,7 @@ def _run_individual(
             workdir=config.workdir,
             mcp_servers=config.mcp_servers,
             judge_guidance=judge_guidance,
+            judge_prompt=judge_prompt,
         )
 
         trace_path = os.path.join(config.output_dir, f"judge_trace_{i}.txt")
@@ -417,7 +431,7 @@ def _run_individual(
     total_usage: dict[str, float | int] = {}
 
     if concurrency == 1:
-        # Serial path — no thread pool overhead
+        # Serial path -- no thread pool overhead
         results: list[CriteriaResult] = []
         for i, item in enumerate(rubric):
             _, result, usage = _eval_one(i, item)
@@ -450,6 +464,7 @@ def _run_batch(
     rubric: list[RubricItem],
     final_output: str,
     judge_guidance: str,
+    judge_prompt: str | None = None,
 ) -> tuple[list[CriteriaResult], dict[str, Any]]:
     """Evaluate all criteria in a single agent session.
 
@@ -479,6 +494,7 @@ def _run_batch(
         workdir=config.workdir,
         mcp_servers=config.mcp_servers,
         judge_guidance=judge_guidance,
+        judge_prompt=judge_prompt,
     )
 
     trace_path = os.path.join(config.output_dir, "judge_trace_batch.txt")
@@ -512,6 +528,7 @@ def _run_batch_concurrent(
     rubric: list[RubricItem],
     final_output: str,
     judge_guidance: str,
+    judge_prompt: str | None = None,
 ) -> tuple[list[CriteriaResult], dict[str, Any]]:
     """Split criteria into N positional chunks and evaluate each as a parallel batch.
 
@@ -534,7 +551,7 @@ def _run_batch_concurrent(
     )
 
     def _run_split(split_idx: int, chunk: list[tuple[int, RubricItem]]) -> tuple[list[tuple[int, CriteriaResult]], dict[str, Any]]:
-        # Use local 0-based indices for the judge — the prompt says
+        # Use local 0-based indices for the judge -- the prompt says
         # "0 through N-1" and _read_batch_verdict filters by 0 <= idx < N.
         # Global rubric indices are restored when building indexed_results.
         criteria_list = [
@@ -560,6 +577,7 @@ def _run_batch_concurrent(
             workdir=config.workdir,
             mcp_servers=config.mcp_servers,
             judge_guidance=judge_guidance,
+            judge_prompt=judge_prompt,
         )
 
         trace_path = os.path.join(
@@ -647,6 +665,7 @@ def _retry_individual(
     final_output: str,
     judge_guidance: str,
     errored_indices: list[int],
+    judge_prompt: str | None = None,
 ) -> None:
     """Re-run each errored criterion individually and merge results in-place."""
     for idx in errored_indices:
@@ -661,6 +680,7 @@ def _retry_individual(
             workdir=config.workdir,
             mcp_servers=config.mcp_servers,
             judge_guidance=judge_guidance,
+            judge_prompt=judge_prompt,
         )
 
         trace_path = os.path.join(config.output_dir, f"judge_trace_{idx}_retry.txt")
@@ -695,6 +715,7 @@ def _retry_batch(
     final_output: str,
     judge_guidance: str,
     errored_indices: list[int],
+    judge_prompt: str | None = None,
 ) -> None:
     """Re-run errored criteria as a batch and merge results in-place."""
     retry_criteria = [
@@ -717,6 +738,7 @@ def _retry_batch(
         workdir=config.workdir,
         mcp_servers=config.mcp_servers,
         judge_guidance=judge_guidance,
+        judge_prompt=judge_prompt,
     )
 
     trace_path = os.path.join(config.output_dir, "judge_trace_batch_retry.txt")
@@ -757,7 +779,7 @@ def _write_info(
     contribute when their criterion is met).  Errored criteria (met=None) contribute 0.
 
     reward: clip(0, 1, raw_score / sum_of_positive_weights).  This is the
-    reward written to reward.json — always in [0, 1].
+    reward written to reward.json -- always in [0, 1].
     """
     raw_score = round(
         sum(r.weight for r in results if r.met is True),
@@ -809,9 +831,14 @@ def main() -> None:
 
     config = load_config(args.config)
 
-    rubric = load_rubric(config.rubric_path)
+    if config.rubric is not None:
+        rubric = config.rubric
+    else:
+        rubric = load_rubric(config.rubric_path)
+
     final_output = load_trajectory_final_output(config.trajectory_path)
     judge_guidance = resolve_judge_guidance(config)
+    judge_prompt = resolve_judge_prompt(config)
 
     os.makedirs(config.output_dir, exist_ok=True)
 
@@ -820,11 +847,11 @@ def main() -> None:
     # 1. Initial evaluation
     if config.mode == "batch":
         if concurrency > 1:
-            results, llm_usage = _run_batch_concurrent(config, rubric, final_output, judge_guidance)
+            results, llm_usage = _run_batch_concurrent(config, rubric, final_output, judge_guidance, judge_prompt)
         else:
-            results, llm_usage = _run_batch(config, rubric, final_output, judge_guidance)
+            results, llm_usage = _run_batch(config, rubric, final_output, judge_guidance, judge_prompt)
     else:
-        results, llm_usage = _run_individual(config, rubric, final_output, judge_guidance)
+        results, llm_usage = _run_individual(config, rubric, final_output, judge_guidance, judge_prompt)
 
     # 2. Record initial error count for observability
     initial_errored = len(_get_errored_indices(results))
@@ -836,9 +863,9 @@ def main() -> None:
             break
         print(f"\n[retry {attempt + 1}/{config.judge_retries}] Retrying {len(errored)} errored criteria...")
         if config.mode == "batch":
-            _retry_batch(config, rubric, results, llm_usage, final_output, judge_guidance, errored)
+            _retry_batch(config, rubric, results, llm_usage, final_output, judge_guidance, errored, judge_prompt)
         else:
-            _retry_individual(config, rubric, results, llm_usage, final_output, judge_guidance, errored)
+            _retry_individual(config, rubric, results, llm_usage, final_output, judge_guidance, errored, judge_prompt)
 
     # 4. ALWAYS write info.json (even on hard fail)
     final_errored = _get_errored_indices(results)
@@ -859,7 +886,7 @@ def main() -> None:
         print(f"info.json written to {config.output_dir}/ (reward.json NOT written)", file=sys.stderr)
         sys.exit(1)
 
-    # 6. All resolved — write reward.json
+    # 6. All resolved -- write reward.json
     with open(os.path.join(config.output_dir, "reward.json"), "w") as f:
         json.dump({"reward": reward}, f, indent=2)
 

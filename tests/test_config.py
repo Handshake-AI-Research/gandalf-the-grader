@@ -10,6 +10,7 @@ from gandalf_grader.config import (
     EvaluationInfo,
     JudgeInput,
     MCPServer,
+    RubricItem,
     Verdict,
     VerifierConfig,
     load_config,
@@ -41,22 +42,33 @@ class TestLoadConfig:
         assert mcp.args == ["--verbose"]
 
     def test_defaults_model(self, tmp_path):
-        toml_content = """\
-sandbox_user = "sandbox"
-instructions = "Do something."
+        toml_content = """instructions = "Do something."
 rubric_path = "/tests/rubric.json"
 workdir = "/workspace"
 trajectory_path = "/logs/trajectory.json"
+output_dir = "/logs/verifier"
 """
         p = tmp_path / "verifier.toml"
         p.write_text(toml_content)
         cfg = load_config(str(p))
-        assert cfg.model == "google/gemini-2.5-flash"
+        assert cfg.model == "gemini/gemini-2.5-flash"
 
-    def test_defaults_output_dir_and_timeout(self, tmp_path):
-        toml_content = """\
-model = "openai/gpt-4o"
-sandbox_user = "sandbox"
+    def test_defaults_timeout(self, tmp_path):
+        toml_content = """model = "openai/gpt-4o"
+instructions = "Do something."
+rubric_path = "/tests/rubric.json"
+workdir = "/workspace"
+trajectory_path = "/logs/trajectory.json"
+output_dir = "/logs/verifier"
+"""
+        p = tmp_path / "verifier.toml"
+        p.write_text(toml_content)
+        cfg = load_config(str(p))
+        assert cfg.judge_timeout == 300
+
+    def test_output_dir_required(self, tmp_path):
+        """output_dir has no default -- must be set explicitly."""
+        toml_content = """model = "openai/gpt-4o"
 instructions = "Do something."
 rubric_path = "/tests/rubric.json"
 workdir = "/workspace"
@@ -64,9 +76,20 @@ trajectory_path = "/logs/trajectory.json"
 """
         p = tmp_path / "verifier.toml"
         p.write_text(toml_content)
+        with pytest.raises(ValidationError):
+            load_config(str(p))
+
+    def test_sandbox_user_defaults_none(self, tmp_path):
+        toml_content = """instructions = "Do something."
+rubric_path = "/tests/rubric.json"
+workdir = "/workspace"
+trajectory_path = "/logs/trajectory.json"
+output_dir = "/logs/verifier"
+"""
+        p = tmp_path / "verifier.toml"
+        p.write_text(toml_content)
         cfg = load_config(str(p))
-        assert cfg.output_dir == "/logs/verifier"
-        assert cfg.judge_timeout == 300
+        assert cfg.sandbox_user is None
 
     def test_missing_file_raises(self):
         with pytest.raises(FileNotFoundError):
@@ -121,10 +144,10 @@ class TestPydanticModels:
             rubric_path="/rubric.json",
             workdir="/workspace",
             trajectory_path="/logs/trajectory.json",
-            sandbox_user="sandbox",
+            output_dir="/logs/verifier",
         )
         assert cfg.trajectory_path == "/logs/trajectory.json"
-        assert cfg.model == "google/gemini-2.5-flash"
+        assert cfg.model == "gemini/gemini-2.5-flash"
 
     def test_verifier_config_judge_guidance_path_defaults_none(self):
         cfg = VerifierConfig(
@@ -132,7 +155,7 @@ class TestPydanticModels:
             rubric_path="/rubric.json",
             workdir="/workspace",
             trajectory_path="/logs/trajectory.json",
-            sandbox_user="sandbox",
+            output_dir="/logs/verifier",
         )
         assert cfg.judge_guidance_path is None
 
@@ -142,7 +165,7 @@ class TestPydanticModels:
             rubric_path="/rubric.json",
             workdir="/workspace",
             trajectory_path="/logs/trajectory.json",
-            sandbox_user="sandbox",
+            output_dir="/logs/verifier",
             judge_guidance_path="/opt/verifier/judge-guidance.md",
         )
         assert cfg.judge_guidance_path == "/opt/verifier/judge-guidance.md"
@@ -179,6 +202,29 @@ class TestPydanticModels:
         raw = ji.model_dump_json()
         restored = JudgeInput.model_validate_json(raw)
         assert restored.judge_guidance == "Use openpyxl for .xlsx files."
+
+    def test_judge_input_judge_prompt_defaults_none(self):
+        ji = JudgeInput(
+            model="test-model",
+            instructions="test",
+            final_output="done",
+            criteria="check",
+            workdir="/workspace",
+        )
+        assert ji.judge_prompt is None
+
+    def test_judge_input_judge_prompt_roundtrip(self):
+        ji = JudgeInput(
+            model="test-model",
+            instructions="test",
+            final_output="done",
+            criteria="check",
+            workdir="/workspace",
+            judge_prompt="custom prompt {{ criteria }}",
+        )
+        raw = ji.model_dump_json()
+        restored = JudgeInput.model_validate_json(raw)
+        assert restored.judge_prompt == "custom prompt {{ criteria }}"
 
     def test_verdict_defaults(self):
         v = Verdict(met=True, reasoning="ok")
@@ -248,7 +294,7 @@ class TestPydanticModels:
             rubric_path="/rubric.json",
             workdir="/workspace",
             trajectory_path="/logs/trajectory.json",
-            sandbox_user="sandbox",
+            output_dir="/logs/verifier",
         )
         assert cfg.judge_retries == 1
 
@@ -258,7 +304,7 @@ class TestPydanticModels:
             rubric_path="/rubric.json",
             workdir="/workspace",
             trajectory_path="/logs/trajectory.json",
-            sandbox_user="sandbox",
+            output_dir="/logs/verifier",
             judge_retries=3,
         )
         assert cfg.judge_retries == 3
@@ -321,7 +367,7 @@ class TestPydanticModels:
             rubric_path="/rubric.json",
             workdir="/workspace",
             trajectory_path="/logs/trajectory.json",
-            sandbox_user="sandbox",
+            output_dir="/logs/verifier",
         )
         assert cfg.max_concurrency is None
 
@@ -331,7 +377,7 @@ class TestPydanticModels:
             rubric_path="/rubric.json",
             workdir="/workspace",
             trajectory_path="/logs/trajectory.json",
-            sandbox_user="sandbox",
+            output_dir="/logs/verifier",
             max_concurrency=2,
         )
         assert cfg.max_concurrency == 2
@@ -343,7 +389,7 @@ class TestPydanticModels:
                 rubric_path="/rubric.json",
                 workdir="/workspace",
                 trajectory_path="/logs/trajectory.json",
-                sandbox_user="sandbox",
+                output_dir="/logs/verifier",
                 max_concurrency=0,
             )
 
@@ -354,13 +400,14 @@ class TestPydanticModels:
                 rubric_path="/rubric.json",
                 workdir="/workspace",
                 trajectory_path="/logs/trajectory.json",
-                sandbox_user="sandbox",
+                output_dir="/logs/verifier",
                 max_concurrency=-1,
             )
 
     def test_verifier_config_mode_sequential_migrates_to_individual(self):
         """mode='sequential' is accepted but migrated to 'individual' with a deprecation warning."""
         import warnings
+
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
             cfg = VerifierConfig(
@@ -368,7 +415,7 @@ class TestPydanticModels:
                 rubric_path="/rubric.json",
                 workdir="/workspace",
                 trajectory_path="/logs/trajectory.json",
-                sandbox_user="sandbox",
+                output_dir="/logs/verifier",
                 mode="sequential",
             )
         assert cfg.mode == "individual"
@@ -381,7 +428,78 @@ class TestPydanticModels:
             rubric_path="/rubric.json",
             workdir="/workspace",
             trajectory_path="/logs/trajectory.json",
-            sandbox_user="sandbox",
+            output_dir="/logs/verifier",
             mode="individual",
         )
         assert cfg.mode == "individual"
+
+    def test_rubric_inline(self):
+        """Inline rubric can be used instead of rubric_path."""
+        cfg = VerifierConfig(
+            instructions="test",
+            rubric=[RubricItem(criteria="check x", weight=1.0)],
+            workdir="/workspace",
+            trajectory_path="/logs/trajectory.json",
+            output_dir="/logs/verifier",
+        )
+        assert cfg.rubric is not None
+        assert cfg.rubric_path is None
+        assert len(cfg.rubric) == 1
+
+    def test_rubric_both_raises(self):
+        """Cannot set both rubric and rubric_path."""
+        with pytest.raises(ValidationError, match="Cannot set both"):
+            VerifierConfig(
+                instructions="test",
+                rubric_path="/rubric.json",
+                rubric=[RubricItem(criteria="check x", weight=1.0)],
+                workdir="/workspace",
+                trajectory_path="/logs/trajectory.json",
+                output_dir="/logs/verifier",
+            )
+
+    def test_rubric_neither_raises(self):
+        """Must set at least one of rubric or rubric_path."""
+        with pytest.raises(ValidationError, match="Must set either"):
+            VerifierConfig(
+                instructions="test",
+                workdir="/workspace",
+                trajectory_path="/logs/trajectory.json",
+                output_dir="/logs/verifier",
+            )
+
+    def test_judge_prompt_fields_default_none(self):
+        cfg = VerifierConfig(
+            instructions="test",
+            rubric_path="/rubric.json",
+            workdir="/workspace",
+            trajectory_path="/logs/trajectory.json",
+            output_dir="/logs/verifier",
+        )
+        assert cfg.judge_prompt is None
+        assert cfg.judge_prompt_path is None
+
+    def test_judge_prompt_both_raises(self):
+        """Cannot set both judge_prompt and judge_prompt_path."""
+        with pytest.raises(ValidationError, match="Cannot set both"):
+            VerifierConfig(
+                instructions="test",
+                rubric_path="/rubric.json",
+                workdir="/workspace",
+                trajectory_path="/logs/trajectory.json",
+                output_dir="/logs/verifier",
+                judge_prompt="inline prompt",
+                judge_prompt_path="/path/to/prompt.j2",
+            )
+
+    def test_judge_prompt_inline_ok(self):
+        cfg = VerifierConfig(
+            instructions="test",
+            rubric_path="/rubric.json",
+            workdir="/workspace",
+            trajectory_path="/logs/trajectory.json",
+            output_dir="/logs/verifier",
+            judge_prompt="custom prompt template",
+        )
+        assert cfg.judge_prompt == "custom prompt template"
+        assert cfg.judge_prompt_path is None
