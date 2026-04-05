@@ -213,7 +213,7 @@ def evaluate_criteria(
             # writable, isolated directory instead of the original user's home.
             f"HOME={clone_dir}",
             *judge_env_vars(),
-            "gandalf-grader-judge",
+            "gandalf-the-grader-judge",
             "--input",
             input_path,
             "--output",
@@ -320,7 +320,7 @@ def evaluate_all_criteria(
             # writable, isolated directory instead of the original user's home.
             f"HOME={clone_dir}",
             *judge_env_vars(),
-            "gandalf-grader-judge",
+            "gandalf-the-grader-judge",
             "--input",
             input_path,
             "--output",
