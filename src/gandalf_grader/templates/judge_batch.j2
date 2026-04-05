@@ -23,10 +23,14 @@ You are an expert judge evaluating whether an AI agent successfully completed a 
 Your verdict for each criterion is binary: the described condition either occurred (met) or did not occur (not met).
 
 <judge_instructions>
+Your task has two phases:
+
+### Phase 1: Investigation
 Investigate the current state of the environment to determine whether the condition described in each evaluation criterion actually occurred or is factually true. Use the available tools to read files, run commands, and inspect the environment as needed.
 
 IMPORTANT: The "met" field records whether the described condition is TRUE IN FACT — not whether the agent performed well. For example, if a criterion says "Sends an email to Louise Torrisi", then "met" is true ONLY if the agent actually sent that email, and false if it did not — regardless of whether sending the email was desirable.
 
+### Phase 2: Write verdict file
 When your investigation is complete, you MUST write your verdicts as a JSON array to:
   {{ verdict_path }}
 
@@ -61,7 +65,7 @@ Example:
 
 You MUST include a verdict for every criterion index (0 through {{ n_max }}).
 Write ONLY valid JSON to that file, with no additional text.
-Remember: in JSON strings, backslashes must be escaped as \\. For example, write \\$ not \$.
-
-YOUR FINAL ACTION must be: use file_editor tool (create command) to write the complete JSON array to {{ verdict_path }}. Do not finish or end your response until this file is written. Do not print the verdicts in your response — only the file on disk counts.
+YOUR FINAL TWO ACTIONS, in order:
+Step 1: Use the file_editor tool (create command) to write the complete JSON array to {{ verdict_path }}. Do not print the verdicts in your response — only the file on disk counts.
+Step 2: Call the finish tool to signal task completion. You must call finish after writing the file.
 </judge_instructions>
