@@ -66,35 +66,63 @@ def _judge_env_vars() -> list[str]:
     return [f"{k}={v}" for k, v in os.environ.items() if k in _JUDGE_ENV_ALLOWLIST and v]
 
 
-def resolve_judge_guidance(config: VerifierConfig) -> str:
-    """Resolve and load judge guidance content.
+def _resolve_optional_file(
+    inline: str | None,
+    path: str | None,
+    label: str,
+) -> str | None:
+    """Return *inline* content, or read from *path*, or ``None``.
 
-    Resolution order:
-      1. config.judge_guidance_path (from TOML)
-      2. VERIFIER_JUDGE_GUIDANCE_PATH env var
-      3. No guidance (empty string)
-
-    If a path is resolved but the file does not exist, raises SystemExit
-    with a clear error message.
+    If a path is given but does not exist, exits with a clear error.
     """
-    path = config.judge_guidance_path or os.environ.get("VERIFIER_JUDGE_GUIDANCE_PATH")
+    if inline is not None:
+        return inline
     if not path:
-        return ""
+        return None
     if not os.path.isfile(path):
-        source = (
-            "judge_guidance_path in verifier config"
-            if config.judge_guidance_path
-            else "VERIFIER_JUDGE_GUIDANCE_PATH env var"
-        )
         print(
-            f"ERROR: Judge guidance file not found: {path}\n"
-            f"  Configured via: {source}\n"
-            f"  Fix: ensure the file exists at that path, or remove the setting to run without guidance.",
+            f"ERROR: File not found: {path}\n  Configured via: {label}",
             file=sys.stderr,
         )
         sys.exit(1)
     with open(path) as f:
         return f.read()
+
+
+def resolve_judge_guidance(config: VerifierConfig) -> str:
+    """Resolve judge guidance content (inline, path, or env var).
+
+    Resolution order:
+      1. config.judge_guidance (inline in TOML)
+      2. config.judge_guidance_path (from TOML)
+      3. VERIFIER_JUDGE_GUIDANCE_PATH env var
+      4. No guidance (empty string)
+    """
+    path = config.judge_guidance_path or os.environ.get("VERIFIER_JUDGE_GUIDANCE_PATH")
+    source = (
+        "judge_guidance_path in verifier config"
+        if config.judge_guidance_path
+        else "VERIFIER_JUDGE_GUIDANCE_PATH env var"
+    )
+    return _resolve_optional_file(config.judge_guidance, path, source) or ""
+
+
+def resolve_judge_prompt(config: VerifierConfig) -> str | None:
+    """Resolve the custom judge prompt template (inline, path, or env var).
+
+    Resolution order:
+      1. config.judge_prompt (inline in TOML)
+      2. config.judge_prompt_path (from TOML)
+      3. VERIFIER_JUDGE_PROMPT_PATH env var
+      4. No custom template (returns None, uses built-in)
+    """
+    path = config.judge_prompt_path or os.environ.get("VERIFIER_JUDGE_PROMPT_PATH")
+    source = (
+        "judge_prompt_path in verifier config"
+        if config.judge_prompt_path
+        else "VERIFIER_JUDGE_PROMPT_PATH env var"
+    )
+    return _resolve_optional_file(config.judge_prompt, path, source)
 
 
 def _clone_workspace(src: str) -> str:
@@ -162,7 +190,7 @@ def _fail_all(n: int, reason: str) -> list[dict[str, Any]]:
 
 def _run_judge(
     judge_input: JudgeInput | BatchJudgeInput,
-    sandbox_user: str,
+    sandbox_user: str | None,
     trace_path: str,
     timeout: int = 300,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
@@ -209,16 +237,14 @@ def _run_judge(
 
     try:
         os.chmod(input_path, 0o644)
-        cmd = [
-            "sudo",
-            "-u",
-            sandbox_user,
+        env_vars = [f"HOME={clone_dir}", *_judge_env_vars()]
+
+        cmd: list[str] = []
+        if sandbox_user is not None:
+            cmd += ["sudo", "-u", sandbox_user]
+        cmd += [
             "env",
-            # Set HOME to the cloned workspace so the judge process (and any
-            # SDK it imports, e.g. OpenHands) writes ephemeral state to a
-            # writable, isolated directory instead of the original user's home.
-            f"HOME={clone_dir}",
-            *_judge_env_vars(),
+            *env_vars,
             "gandalf-grader-judge",
             "--input",
             input_path,
@@ -295,6 +321,7 @@ def _run_individual(
     rubric: list[RubricItem],
     final_output: str,
     judge_guidance: str,
+    judge_prompt: str | None = None,
 ) -> tuple[list[CriteriaResult], dict[str, Any]]:
     """Evaluate each criterion in its own agent session.
 
@@ -315,6 +342,7 @@ def _run_individual(
             workdir=config.workdir,
             mcp_servers=config.mcp_servers,
             judge_guidance=judge_guidance,
+            judge_prompt=judge_prompt,
         )
 
         trace_path = os.path.join(config.output_dir, f"judge_trace_{i}.txt")
@@ -375,6 +403,7 @@ def _run_batch(
     rubric: list[RubricItem],
     final_output: str,
     judge_guidance: str,
+    judge_prompt: str | None = None,
 ) -> tuple[list[CriteriaResult], dict[str, Any]]:
     """Evaluate all criteria in a single agent session.
 
@@ -401,6 +430,7 @@ def _run_batch(
         workdir=config.workdir,
         mcp_servers=config.mcp_servers,
         judge_guidance=judge_guidance,
+        judge_prompt=judge_prompt,
     )
 
     trace_path = os.path.join(config.output_dir, "judge_trace_batch.txt")
@@ -434,6 +464,7 @@ def _run_batch_concurrent(
     rubric: list[RubricItem],
     final_output: str,
     judge_guidance: str,
+    judge_prompt: str | None = None,
 ) -> tuple[list[CriteriaResult], dict[str, Any]]:
     """Split criteria into N positional chunks and evaluate each as a parallel batch.
 
@@ -479,6 +510,7 @@ def _run_batch_concurrent(
             workdir=config.workdir,
             mcp_servers=config.mcp_servers,
             judge_guidance=judge_guidance,
+            judge_prompt=judge_prompt,
         )
 
         trace_path = os.path.join(
@@ -566,6 +598,7 @@ def _retry_individual(
     final_output: str,
     judge_guidance: str,
     errored_indices: list[int],
+    judge_prompt: str | None = None,
 ) -> None:
     """Re-run each errored criterion individually and merge results in-place."""
     for idx in errored_indices:
@@ -580,6 +613,7 @@ def _retry_individual(
             workdir=config.workdir,
             mcp_servers=config.mcp_servers,
             judge_guidance=judge_guidance,
+            judge_prompt=judge_prompt,
         )
 
         trace_path = os.path.join(config.output_dir, f"judge_trace_{idx}_retry.txt")
@@ -614,6 +648,7 @@ def _retry_batch(
     final_output: str,
     judge_guidance: str,
     errored_indices: list[int],
+    judge_prompt: str | None = None,
 ) -> None:
     """Re-run errored criteria as a batch and merge results in-place."""
     retry_criteria = [rubric[orig_idx].criteria for orig_idx in errored_indices]
@@ -633,6 +668,7 @@ def _retry_batch(
         workdir=config.workdir,
         mcp_servers=config.mcp_servers,
         judge_guidance=judge_guidance,
+        judge_prompt=judge_prompt,
     )
 
     trace_path = os.path.join(config.output_dir, "judge_trace_batch_retry.txt")
@@ -725,9 +761,15 @@ def main() -> None:
 
     config = load_config(args.config)
 
-    rubric = load_rubric(config.rubric_path)
+    # The model validator guarantees exactly one of rubric / rubric_path is set.
+    if config.rubric is not None:
+        rubric = config.rubric
+    else:
+        assert config.rubric_path is not None  # guaranteed by model validator
+        rubric = load_rubric(config.rubric_path)
     final_output = load_trajectory_final_output(config.trajectory_path)
     judge_guidance = resolve_judge_guidance(config)
+    judge_prompt = resolve_judge_prompt(config)
 
     os.makedirs(config.output_dir, exist_ok=True)
 
@@ -736,11 +778,11 @@ def main() -> None:
     # 1. Initial evaluation
     if config.mode == "batch":
         if concurrency > 1:
-            results, llm_usage = _run_batch_concurrent(config, rubric, final_output, judge_guidance)
+            results, llm_usage = _run_batch_concurrent(config, rubric, final_output, judge_guidance, judge_prompt)
         else:
-            results, llm_usage = _run_batch(config, rubric, final_output, judge_guidance)
+            results, llm_usage = _run_batch(config, rubric, final_output, judge_guidance, judge_prompt)
     else:
-        results, llm_usage = _run_individual(config, rubric, final_output, judge_guidance)
+        results, llm_usage = _run_individual(config, rubric, final_output, judge_guidance, judge_prompt)
 
     # 2. Record initial error count for observability
     initial_errored = len(_get_errored_indices(results))
@@ -752,9 +794,9 @@ def main() -> None:
             break
         print(f"\n[retry {attempt + 1}/{config.judge_retries}] Retrying {len(errored)} errored criteria...")
         if config.mode == "batch":
-            _retry_batch(config, rubric, results, llm_usage, final_output, judge_guidance, errored)
+            _retry_batch(config, rubric, results, llm_usage, final_output, judge_guidance, errored, judge_prompt)
         else:
-            _retry_individual(config, rubric, results, llm_usage, final_output, judge_guidance, errored)
+            _retry_individual(config, rubric, results, llm_usage, final_output, judge_guidance, errored, judge_prompt)
 
     # 4. ALWAYS write info.json (even on hard fail)
     final_errored = _get_errored_indices(results)

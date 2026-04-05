@@ -29,9 +29,17 @@ from gandalf_grader.config import BatchJudgeInput, JudgeInput, Verdict
 TEMPLATES_DIR = Path(__file__).parent / "templates"
 
 
-def _render_template(template_name: str, **variables: Any) -> str:
-    """Render a Jinja2 prompt template from the templates directory."""
-    template_str = (TEMPLATES_DIR / template_name).read_text()
+def _render_template(
+    template_name: str,
+    judge_prompt: str | None = None,
+    **variables: Any,
+) -> str:
+    """Render a Jinja2 prompt template.
+
+    If *judge_prompt* is provided (a raw Jinja2 template string),
+    it is used instead of the built-in template identified by *template_name*.
+    """
+    template_str = judge_prompt if judge_prompt is not None else (TEMPLATES_DIR / template_name).read_text()
     return jinja2.Template(template_str).render(**variables)
 
 
@@ -41,10 +49,12 @@ def build_judge_prompt(
     criteria: str,
     verdict_path: str,
     judge_guidance: str = "",
+    judge_prompt: str | None = None,
 ) -> str:
     """Build the user message sent to kick off a single-criterion judge session."""
     return _render_template(
         "judge_single.j2",
+        judge_prompt,
         instructions=instructions,
         final_output=final_output,
         criteria=criteria,
@@ -59,6 +69,7 @@ def build_batch_judge_prompt(
     criteria: list[str],
     verdict_path: str,
     judge_guidance: str = "",
+    judge_prompt: str | None = None,
 ) -> str:
     """Build the prompt for batch mode -- all criteria evaluated in one session.
 
@@ -67,6 +78,7 @@ def build_batch_judge_prompt(
     """
     return _render_template(
         "judge_batch.j2",
+        judge_prompt,
         instructions=instructions,
         final_output=final_output,
         criteria=criteria,
@@ -311,6 +323,7 @@ def run_judge(input_path: str, output_path: str) -> None:
         criteria=judge_input.criteria,
         verdict_path=verdict_path,
         judge_guidance=judge_input.judge_guidance,
+        judge_prompt=judge_input.judge_prompt,
     )
 
     mcp_servers = [
@@ -372,6 +385,7 @@ def run_judge_batch(input_path: str, output_path: str) -> None:
         criteria=judge_input.criteria,
         verdict_path=verdict_path,
         judge_guidance=judge_input.judge_guidance,
+        judge_prompt=judge_input.judge_prompt,
     )
 
     mcp_servers = [

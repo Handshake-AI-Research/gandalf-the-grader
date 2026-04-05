@@ -6,7 +6,7 @@ import tomllib
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, Field, TypeAdapter, field_validator
+from pydantic import BaseModel, Field, TypeAdapter, field_validator, model_validator
 
 
 class MCPServer(BaseModel):
@@ -49,14 +49,18 @@ class VerifierConfig(BaseModel):
 
     model: str = "google/gemini-2.5-flash"
     instructions: str
-    rubric_path: str
+    rubric: list["RubricItem"] | None = None
+    rubric_path: str | None = None
     workdir: str
     trajectory_path: str
-    sandbox_user: str
+    sandbox_user: str | None = None
     mcp_servers: list[MCPServer] = Field(default_factory=list)
     output_dir: str = "/logs/verifier"
     judge_timeout: int = 300
+    judge_guidance: str | None = None
     judge_guidance_path: str | None = None
+    judge_prompt: str | None = None
+    judge_prompt_path: str | None = None
     batch_timeout: int | None = None
     mode: Literal["individual", "batch"] = "individual"
     max_concurrency: int | None = Field(default=None, ge=1)
@@ -74,6 +78,18 @@ class VerifierConfig(BaseModel):
             )
             return "individual"
         return v
+
+    @model_validator(mode="after")
+    def _check_mutual_exclusions(self) -> "VerifierConfig":
+        if self.rubric is not None and self.rubric_path is not None:
+            raise ValueError("Cannot set both 'rubric' and 'rubric_path'")
+        if self.rubric is None and self.rubric_path is None:
+            raise ValueError("Must set either 'rubric' or 'rubric_path'")
+        if self.judge_guidance is not None and self.judge_guidance_path is not None:
+            raise ValueError("Cannot set both 'judge_guidance' and 'judge_guidance_path'")
+        if self.judge_prompt is not None and self.judge_prompt_path is not None:
+            raise ValueError("Cannot set both 'judge_prompt' and 'judge_prompt_path'")
+        return self
 
 
 class RubricItem(BaseModel):
@@ -98,6 +114,7 @@ class JudgeInput(BaseModel):
     workdir: str
     mcp_servers: list[MCPServer] = Field(default_factory=list)
     judge_guidance: str = ""
+    judge_prompt: str | None = None
 
 
 class BatchJudgeInput(BaseModel):
@@ -114,6 +131,7 @@ class BatchJudgeInput(BaseModel):
     workdir: str
     mcp_servers: list[MCPServer] = Field(default_factory=list)
     judge_guidance: str = ""
+    judge_prompt: str | None = None
 
 
 class Verdict(BaseModel):
