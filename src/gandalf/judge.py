@@ -23,7 +23,7 @@ from typing import Any
 
 import jinja2
 
-from gandalf_grader.config import BatchJudgeInput, JudgeInput, Verdict
+from gandalf.models import BatchJudgeInput, JudgeInput, Verdict
 
 TEMPLATES_DIR = Path(__file__).parent / "templates"
 
@@ -45,7 +45,7 @@ def _render_template(
 def build_judge_prompt(
     instructions: str,
     final_output: str,
-    criteria: str,
+    criterion: str,
     verdict_path: str,
     judge_guidance: str = "",
     judge_prompt: str | None = None,
@@ -56,7 +56,7 @@ def build_judge_prompt(
         judge_prompt,
         instructions=instructions,
         final_output=final_output,
-        criteria=criteria,
+        criterion=criterion,
         verdict_path=verdict_path,
         judge_guidance=judge_guidance,
     )
@@ -293,7 +293,7 @@ def run_judge(input_path: str, output_path: str) -> None:
     prompt = build_judge_prompt(
         instructions=judge_input.instructions,
         final_output=judge_input.final_output,
-        criteria=judge_input.criteria,
+        criterion=judge_input.criterion,
         verdict_path=verdict_path,
         judge_guidance=judge_input.judge_guidance,
         judge_prompt=judge_input.judge_prompt,

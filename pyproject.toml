@@ -1,5 +1,5 @@
 [project]
-name = "gandalf-grader"
+name = "gandalf-the-grader"
 version = "0.4.6"
 description = "Agent-as-judge grading framework for evaluating AI agent outputs against rubric criteria"
 readme = "README.md"
@@ -29,15 +29,15 @@ Repository = "https://github.com/Handshake-AI-Research/gandalf-the-grader"
 Issues = "https://github.com/Handshake-AI-Research/gandalf-the-grader/issues"
 
 [project.scripts]
-gandalf-grader = "gandalf_grader.__main__:main"
-gandalf-grader-judge = "gandalf_grader.judge:main"
+gandalf-the-grader = "gandalf.orchestrator:main"
+gandalf-the-grader-judge = "gandalf.judge:main"
 
 [build-system]
 requires = ["hatchling", "hatch-pinned-extra>=0.2.0,<0.3.0"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/gandalf_grader"]
+packages = ["src/gandalf"]
 
 [tool.hatch.metadata.hooks.pinned_extra]
 name = "pinned"

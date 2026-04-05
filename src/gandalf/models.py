@@ -1,4 +1,4 @@
-"""Configuration models for the verifier."""
+"""Data models and configuration loaders for the grader."""
 
 from __future__ import annotations
 
@@ -21,13 +21,13 @@ class MCPServer(BaseModel):
     args: list[str] = Field(default_factory=list)
 
 
-class VerifierConfig(BaseModel):
-    """Top-level verifier configuration loaded from a TOML file.
+class GraderConfig(BaseModel):
+    """Top-level grader configuration loaded from a TOML file.
 
     mode controls the *granularity* of rubric evaluation — how many criteria
     are sent to each judge session:
-      - "individual" (default): one agent session per rubric criterion.
-      - "batch": all criteria evaluated in a single agent session.
+      - "individual": one agent session per rubric criterion.
+      - "batch" (default): all criteria evaluated in a single agent session.
 
     max_concurrency controls the *parallelism* — how many judge sessions run
     at the same time:
@@ -41,13 +41,13 @@ class VerifierConfig(BaseModel):
 
     judge_timeout is the per-criterion budget in seconds, regardless of mode.
     In batch mode the effective timeout per session is
-    ``judge_timeout * N_criteria_in_session``, optionally capped by
-    batch_timeout.  When max_concurrency > 1, N_criteria_in_session is the
+    ``judge_timeout * n_criteria_in_session``, optionally capped by
+    batch_timeout.  When max_concurrency > 1, n_criteria_in_session is the
     chunk size (not the full rubric), and batch_timeout applies to each
     chunk independently.
     """
 
-    model: str = "google/gemini-2.5-flash"
+    model: str = "gemini/gemini-2.5-flash"
     instructions: str
     rubric: list["RubricItem"] | None = None
     rubric_path: str | None = None
@@ -55,14 +55,14 @@ class VerifierConfig(BaseModel):
     trajectory_path: str
     sandbox_user: str | None = None
     mcp_servers: list[MCPServer] = Field(default_factory=list)
-    output_dir: str = "/logs/verifier"
+    output_dir: str
     judge_timeout: int = 300
     judge_guidance: str | None = None
     judge_guidance_path: str | None = None
     judge_prompt: str | None = None
     judge_prompt_path: str | None = None
     batch_timeout: int | None = None
-    mode: Literal["individual", "batch"] = "individual"
+    mode: Literal["individual", "batch"] = "batch"
     max_concurrency: int | None = Field(default=None, ge=1)
     judge_retries: int = 1
 
@@ -80,7 +80,7 @@ class VerifierConfig(BaseModel):
         return v
 
     @model_validator(mode="after")
-    def _check_mutual_exclusions(self) -> "VerifierConfig":
+    def _check_mutual_exclusions(self) -> "GraderConfig":
         if self.rubric is not None and self.rubric_path is not None:
             raise ValueError("Cannot set both 'rubric' and 'rubric_path'")
         if self.rubric is None and self.rubric_path is None:
@@ -93,24 +93,24 @@ class VerifierConfig(BaseModel):
 
 
 class RubricItem(BaseModel):
-    """A single rubric item with evaluation criteria and weight.
+    """A single rubric item with an evaluation criterion and weight.
 
     Weight can be negative to penalise undesired outcomes.  The sign of the
     weight carries the semantics: positive means "reward when met", negative
     means "penalise when met".
     """
 
-    criteria: str
+    criterion: str
     weight: float
 
 
 class JudgeInput(BaseModel):
-    """Input passed to the inner judge for a single criteria evaluation."""
+    """Input passed to the inner judge for a single criterion evaluation."""
 
     model: str
     instructions: str
     final_output: str
-    criteria: str
+    criterion: str
     workdir: str
     mcp_servers: list[MCPServer] = Field(default_factory=list)
     judge_guidance: str = ""
@@ -142,10 +142,10 @@ class Verdict(BaseModel):
     evidence: list[str] = Field(default_factory=list)
 
 
-class CriteriaResult(BaseModel):
-    """Result for a single criteria evaluation."""
+class CriterionResult(BaseModel):
+    """Result for a single criterion evaluation."""
 
-    criteria: str
+    criterion: str
     weight: float
     met: bool | None
     reasoning: str
@@ -153,23 +153,23 @@ class CriteriaResult(BaseModel):
 
 
 class EvaluationInfo(BaseModel):
-    """Full evaluation output with reward/raw score, per-criteria results, and LLM usage."""
+    """Full evaluation output with reward/raw score, per-criterion results, and LLM usage."""
 
     reward: float
     raw_score: float
     minimum_score: float = 0.0
     maximum_score: float = 0.0
-    criteria_results: list[CriteriaResult]
+    criterion_results: list[CriterionResult]
     llm_usage: dict[str, float | int | str] = Field(default_factory=dict)
-    errored_criteria_count: int = 0
+    errored_criterion_count: int = 0
     evaluated_criteria_pct: float = 100.0
 
 
-def load_config(path: str) -> VerifierConfig:
-    """Load verifier configuration from a TOML file."""
+def load_config(path: str) -> GraderConfig:
+    """Load grader configuration from a TOML file."""
     with open(path, "rb") as f:
         data = tomllib.load(f)
-    return VerifierConfig.model_validate(data)
+    return GraderConfig.model_validate(data)
 
 
 def load_rubric(path: str) -> list[RubricItem]:

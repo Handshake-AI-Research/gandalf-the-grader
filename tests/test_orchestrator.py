@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 import pytest
 
-from gandalf_grader.__main__ import (
+from gandalf.orchestrator import (
     _JUDGE_ENV_ALLOWLIST,
     _clone_workspace,
     _judge_env_vars,
@@ -18,30 +18,31 @@ from gandalf_grader.__main__ import (
     _write_info,
     resolve_judge_guidance,
 )
-from gandalf_grader.config import BatchJudgeInput, CriteriaResult, JudgeInput, RubricItem, VerifierConfig
+from gandalf.models import BatchJudgeInput, CriterionResult, JudgeInput, GraderConfig, RubricItem
 
 
-def _make_config(**overrides) -> VerifierConfig:
-    """Create a VerifierConfig with sensible defaults for testing."""
+def _make_config(**overrides) -> GraderConfig:
+    """Create a GraderConfig with sensible defaults for testing."""
     defaults = {
         "instructions": "test",
         "rubric_path": "/rubric.json",
         "workdir": "/workspace",
         "trajectory_path": "/logs/trajectory.json",
         "sandbox_user": "sandbox",
+        "output_dir": "/logs/verifier",
     }
     defaults.update(overrides)
-    return VerifierConfig(**defaults)
+    return GraderConfig(**defaults)
 
 
 class TestResolveJudgeGuidance:
     def test_no_path_returns_empty(self, monkeypatch):
-        monkeypatch.delenv("VERIFIER_JUDGE_GUIDANCE_PATH", raising=False)
+        monkeypatch.delenv("GRADER_JUDGE_GUIDANCE_PATH", raising=False)
         config = _make_config()
         assert resolve_judge_guidance(config) == ""
 
     def test_reads_file_from_toml_path(self, tmp_path, monkeypatch):
-        monkeypatch.delenv("VERIFIER_JUDGE_GUIDANCE_PATH", raising=False)
+        monkeypatch.delenv("GRADER_JUDGE_GUIDANCE_PATH", raising=False)
         guidance_file = tmp_path / "guidance.md"
         guidance_file.write_text("Use openpyxl for .xlsx files.")
         config = _make_config(judge_guidance_path=str(guidance_file))
@@ -50,7 +51,7 @@ class TestResolveJudgeGuidance:
     def test_reads_file_from_env_var(self, tmp_path, monkeypatch):
         guidance_file = tmp_path / "guidance.md"
         guidance_file.write_text("From env var.")
-        monkeypatch.setenv("VERIFIER_JUDGE_GUIDANCE_PATH", str(guidance_file))
+        monkeypatch.setenv("GRADER_JUDGE_GUIDANCE_PATH", str(guidance_file))
         config = _make_config()  # no judge_guidance_path in TOML
         assert resolve_judge_guidance(config) == "From env var."
 
@@ -59,24 +60,24 @@ class TestResolveJudgeGuidance:
         toml_file.write_text("From TOML.")
         env_file = tmp_path / "env_guidance.md"
         env_file.write_text("From env.")
-        monkeypatch.setenv("VERIFIER_JUDGE_GUIDANCE_PATH", str(env_file))
+        monkeypatch.setenv("GRADER_JUDGE_GUIDANCE_PATH", str(env_file))
         config = _make_config(judge_guidance_path=str(toml_file))
         assert resolve_judge_guidance(config) == "From TOML."
 
     def test_missing_configured_toml_path_exits(self, monkeypatch):
-        monkeypatch.delenv("VERIFIER_JUDGE_GUIDANCE_PATH", raising=False)
+        monkeypatch.delenv("GRADER_JUDGE_GUIDANCE_PATH", raising=False)
         config = _make_config(judge_guidance_path="/nonexistent/guidance.md")
         with pytest.raises(SystemExit):
             resolve_judge_guidance(config)
 
     def test_missing_configured_env_path_exits(self, tmp_path, monkeypatch):
-        monkeypatch.setenv("VERIFIER_JUDGE_GUIDANCE_PATH", "/nonexistent/guidance.md")
+        monkeypatch.setenv("GRADER_JUDGE_GUIDANCE_PATH", "/nonexistent/guidance.md")
         config = _make_config()
         with pytest.raises(SystemExit):
             resolve_judge_guidance(config)
 
     def test_error_message_mentions_file_path(self, capsys, monkeypatch):
-        monkeypatch.delenv("VERIFIER_JUDGE_GUIDANCE_PATH", raising=False)
+        monkeypatch.delenv("GRADER_JUDGE_GUIDANCE_PATH", raising=False)
         config = _make_config(judge_guidance_path="/missing/guidance.md")
         with pytest.raises(SystemExit):
             resolve_judge_guidance(config)
@@ -85,13 +86,13 @@ class TestResolveJudgeGuidance:
         assert "judge_guidance_path" in stderr
 
     def test_error_message_mentions_env_var_source(self, capsys, monkeypatch):
-        monkeypatch.setenv("VERIFIER_JUDGE_GUIDANCE_PATH", "/missing/env_guidance.md")
+        monkeypatch.setenv("GRADER_JUDGE_GUIDANCE_PATH", "/missing/env_guidance.md")
         config = _make_config()
         with pytest.raises(SystemExit):
             resolve_judge_guidance(config)
         stderr = capsys.readouterr().err
         assert "/missing/env_guidance.md" in stderr
-        assert "VERIFIER_JUDGE_GUIDANCE_PATH" in stderr
+        assert "GRADER_JUDGE_GUIDANCE_PATH" in stderr
 
 
 class TestJudgeEnvVars:
@@ -165,8 +166,8 @@ def _make_run_writing(content):
 class TestEvaluateAllCriteria:
     """Tests for _run_judge IPC contract: dict, list, invalid shapes, failures."""
 
-    @patch("gandalf_grader.__main__._clone_workspace")
-    @patch("gandalf_grader.__main__.subprocess.run")
+    @patch("gandalf.orchestrator._clone_workspace")
+    @patch("gandalf.orchestrator.subprocess.run")
     def test_new_dict_shape(self, mock_run, mock_clone, tmp_path):
         """New object format: {verdicts: [...], llm_usage: {...}}."""
         mock_clone.return_value = str(tmp_path)
@@ -191,8 +192,8 @@ class TestEvaluateAllCriteria:
         assert verdicts[1]["met"] is False
         assert usage["cost_usd"] == 0.1
 
-    @patch("gandalf_grader.__main__._clone_workspace")
-    @patch("gandalf_grader.__main__.subprocess.run")
+    @patch("gandalf.orchestrator._clone_workspace")
+    @patch("gandalf.orchestrator.subprocess.run")
     def test_legacy_array_shape(self, mock_run, mock_clone, tmp_path):
         """Legacy format: bare JSON array of verdicts, no usage info."""
         mock_clone.return_value = str(tmp_path)
@@ -214,8 +215,8 @@ class TestEvaluateAllCriteria:
         assert verdicts[0]["met"] is True
         assert usage == {}
 
-    @patch("gandalf_grader.__main__._clone_workspace")
-    @patch("gandalf_grader.__main__.subprocess.run")
+    @patch("gandalf.orchestrator._clone_workspace")
+    @patch("gandalf.orchestrator.subprocess.run")
     def test_unexpected_json_type_string(self, mock_run, mock_clone, tmp_path):
         """If the output file contains a JSON string, return fail-all."""
         mock_clone.return_value = str(tmp_path)
@@ -233,8 +234,8 @@ class TestEvaluateAllCriteria:
         assert "Unexpected JSON type" in verdicts[0]["reasoning"]
         assert usage == {}
 
-    @patch("gandalf_grader.__main__._clone_workspace")
-    @patch("gandalf_grader.__main__.subprocess.run")
+    @patch("gandalf.orchestrator._clone_workspace")
+    @patch("gandalf.orchestrator.subprocess.run")
     def test_unexpected_json_type_number(self, mock_run, mock_clone, tmp_path):
         """If the output file contains a JSON number, return fail-all."""
         mock_clone.return_value = str(tmp_path)
@@ -251,8 +252,8 @@ class TestEvaluateAllCriteria:
         assert verdicts[0]["met"] is None
         assert usage == {}
 
-    @patch("gandalf_grader.__main__._clone_workspace")
-    @patch("gandalf_grader.__main__.subprocess.run")
+    @patch("gandalf.orchestrator._clone_workspace")
+    @patch("gandalf.orchestrator.subprocess.run")
     def test_dict_without_expected_keys(self, mock_run, mock_clone, tmp_path):
         """Dict output missing 'verdicts' key: defaults to empty verdicts list."""
         mock_clone.return_value = str(tmp_path)
@@ -268,8 +269,8 @@ class TestEvaluateAllCriteria:
         assert verdicts == []
         assert usage == {}
 
-    @patch("gandalf_grader.__main__._clone_workspace")
-    @patch("gandalf_grader.__main__.subprocess.run")
+    @patch("gandalf.orchestrator._clone_workspace")
+    @patch("gandalf.orchestrator.subprocess.run")
     def test_nonzero_exit_returns_fail_all(self, mock_run, mock_clone, tmp_path):
         """Non-zero exit code from subprocess returns fail-all with empty usage."""
         mock_clone.return_value = str(tmp_path)
@@ -289,8 +290,8 @@ class TestEvaluateAllCriteria:
         assert "exit 1" in verdicts[0]["reasoning"]
         assert usage == {}
 
-    @patch("gandalf_grader.__main__._clone_workspace")
-    @patch("gandalf_grader.__main__.subprocess.run")
+    @patch("gandalf.orchestrator._clone_workspace")
+    @patch("gandalf.orchestrator.subprocess.run")
     def test_timeout_returns_fail_all(self, mock_run, mock_clone, tmp_path):
         """Subprocess timeout returns fail-all with empty usage."""
         mock_clone.return_value = str(tmp_path)
@@ -308,8 +309,8 @@ class TestEvaluateAllCriteria:
         assert "timed out" in verdicts[0]["reasoning"].lower()
         assert usage == {}
 
-    @patch("gandalf_grader.__main__._clone_workspace")
-    @patch("gandalf_grader.__main__.subprocess.run")
+    @patch("gandalf.orchestrator._clone_workspace")
+    @patch("gandalf.orchestrator.subprocess.run")
     def test_invalid_json_in_output_file(self, mock_run, mock_clone, tmp_path):
         """Non-JSON content in output file returns fail-all."""
         mock_clone.return_value = str(tmp_path)
@@ -334,8 +335,8 @@ class TestEvaluateAllCriteria:
         assert verdicts[0]["met"] is None
         assert usage == {}
 
-    @patch("gandalf_grader.__main__._clone_workspace")
-    @patch("gandalf_grader.__main__.subprocess.run")
+    @patch("gandalf.orchestrator._clone_workspace")
+    @patch("gandalf.orchestrator.subprocess.run")
     def test_empty_output_file(self, mock_run, mock_clone, tmp_path):
         """If the judge wrote nothing to the output file, return fail-all."""
         mock_clone.return_value = str(tmp_path)
@@ -356,10 +357,10 @@ class TestEvaluateAllCriteria:
         assert usage == {}
 
 
-def _cr(weight: float, met: bool | None) -> CriteriaResult:
-    """Helper to build a CriteriaResult for scoring tests."""
-    return CriteriaResult(
-        criteria="test",
+def _cr(weight: float, met: bool | None) -> CriterionResult:
+    """Helper to build a CriterionResult for scoring tests."""
+    return CriterionResult(
+        criterion="test",
         weight=weight,
         met=met,
         reasoning="test",
@@ -373,7 +374,7 @@ class TestScoring:
     scoring pipeline is verified in one place per scenario.
     """
 
-    def _info(self, results: list[CriteriaResult], tmp_path) -> dict:
+    def _info(self, results: list[CriterionResult], tmp_path) -> dict:
         """Run _write_info and return parsed info.json."""
         config = _make_config(output_dir=str(tmp_path))
         errored = sum(1 for r in results if r.met is None)
@@ -471,8 +472,8 @@ class TestOutputFilePermissions:
     existing file, not *create* one in a restricted directory.
     """
 
-    @patch("gandalf_grader.__main__._clone_workspace")
-    @patch("gandalf_grader.__main__.subprocess.run")
+    @patch("gandalf.orchestrator._clone_workspace")
+    @patch("gandalf.orchestrator.subprocess.run")
     def test_output_file_exists_before_subprocess(self, mock_run, mock_clone, tmp_path):
         """Output file must be pre-created so sandbox_user can write it without /tmp access."""
         mock_clone.return_value = str(tmp_path)
@@ -499,8 +500,8 @@ class TestOutputFilePermissions:
             "sandbox_user would need to create it in /tmp (may not be world-writable)"
         )
 
-    @patch("gandalf_grader.__main__._clone_workspace")
-    @patch("gandalf_grader.__main__.subprocess.run")
+    @patch("gandalf.orchestrator._clone_workspace")
+    @patch("gandalf.orchestrator.subprocess.run")
     def test_output_file_is_world_writable(self, mock_run, mock_clone, tmp_path):
         """Pre-created output file must have world-write so sandbox_user can overwrite it.
 
@@ -537,21 +538,21 @@ class TestOutputFilePermissions:
 class TestRetryLogic:
     """Tests for retry and hard-fail logic in main()."""
 
-    @patch("gandalf_grader.__main__.resolve_judge_guidance", return_value="")
-    @patch("gandalf_grader.__main__.load_trajectory_final_output", return_value="done")
-    @patch("gandalf_grader.__main__.load_rubric")
-    @patch("gandalf_grader.__main__.load_config")
-    @patch("gandalf_grader.__main__._run_judge")
+    @patch("gandalf.orchestrator.resolve_judge_guidance", return_value="")
+    @patch("gandalf.orchestrator.load_trajectory_final_output", return_value="done")
+    @patch("gandalf.orchestrator.load_rubric")
+    @patch("gandalf.orchestrator.load_config")
+    @patch("gandalf.orchestrator._run_judge")
     def test_sequential_retry_resolves_errored_criterion(
         self, mock_eval, mock_config, mock_rubric, mock_trajectory, mock_guidance, tmp_path
     ):
         """Sequential retry resolves an errored criterion on the second attempt."""
-        from gandalf_grader.config import RubricItem
+        from gandalf.models import RubricItem
 
         output_dir = str(tmp_path / "output")
         os.makedirs(output_dir, exist_ok=True)
 
-        mock_config.return_value = VerifierConfig(
+        mock_config.return_value = GraderConfig(
             instructions="test",
             rubric_path="/rubric.json",
             workdir=str(tmp_path),
@@ -562,8 +563,8 @@ class TestRetryLogic:
             mode="individual",
         )
         mock_rubric.return_value = [
-            RubricItem(criteria="c1", weight=1.0),
-            RubricItem(criteria="c2", weight=1.0),
+            RubricItem(criterion="c1", weight=1.0),
+            RubricItem(criterion="c2", weight=1.0),
         ]
 
         # First call: c1 passes, c2 errors. Retry: c2 passes.
@@ -574,34 +575,34 @@ class TestRetryLogic:
             ([{"met": True, "reasoning": "ok on retry", "evidence": ["e2"]}], {}),
         ]
 
-        from gandalf_grader.__main__ import main
+        from gandalf.orchestrator import main
 
         with patch("sys.argv", ["prog", "--config", "dummy.toml"]):
             main()
 
         info = json.loads((tmp_path / "output" / "info.json").read_text())
-        assert info["criteria_results"][0]["met"] is True
-        assert info["criteria_results"][1]["met"] is True
-        assert info["errored_criteria_count"] == 0
+        assert info["criterion_results"][0]["met"] is True
+        assert info["criterion_results"][1]["met"] is True
+        assert info["errored_criterion_count"] == 0
 
         reward = json.loads((tmp_path / "output" / "reward.json").read_text())
         assert reward["reward"] == 1.0  # all met: 2.0 / 2.0 = 1.0
 
-    @patch("gandalf_grader.__main__.resolve_judge_guidance", return_value="")
-    @patch("gandalf_grader.__main__.load_trajectory_final_output", return_value="done")
-    @patch("gandalf_grader.__main__.load_rubric")
-    @patch("gandalf_grader.__main__.load_config")
-    @patch("gandalf_grader.__main__._run_judge")
+    @patch("gandalf.orchestrator.resolve_judge_guidance", return_value="")
+    @patch("gandalf.orchestrator.load_trajectory_final_output", return_value="done")
+    @patch("gandalf.orchestrator.load_rubric")
+    @patch("gandalf.orchestrator.load_config")
+    @patch("gandalf.orchestrator._run_judge")
     def test_batch_retry_resolves_errored_criteria(
         self, mock_eval_all, mock_config, mock_rubric, mock_trajectory, mock_guidance, tmp_path
     ):
         """Batch retry resolves errored criteria with correct re-indexing."""
-        from gandalf_grader.config import RubricItem
+        from gandalf.models import RubricItem
 
         output_dir = str(tmp_path / "output")
         os.makedirs(output_dir, exist_ok=True)
 
-        mock_config.return_value = VerifierConfig(
+        mock_config.return_value = GraderConfig(
             instructions="test",
             rubric_path="/rubric.json",
             workdir=str(tmp_path),
@@ -612,9 +613,9 @@ class TestRetryLogic:
             mode="batch",
         )
         mock_rubric.return_value = [
-            RubricItem(criteria="c1", weight=1.0),
-            RubricItem(criteria="c2", weight=1.0),
-            RubricItem(criteria="c3", weight=1.0),
+            RubricItem(criterion="c1", weight=1.0),
+            RubricItem(criterion="c2", weight=1.0),
+            RubricItem(criterion="c3", weight=1.0),
         ]
 
         initial_verdicts = [
@@ -631,33 +632,33 @@ class TestRetryLogic:
             (retry_verdicts, {"cost_usd": 0.05}),
         ]
 
-        from gandalf_grader.__main__ import main
+        from gandalf.orchestrator import main
 
         with patch("sys.argv", ["prog", "--config", "dummy.toml"]):
             main()
 
         info = json.loads((tmp_path / "output" / "info.json").read_text())
-        assert all(r["met"] is True for r in info["criteria_results"])
-        assert info["errored_criteria_count"] == 0
+        assert all(r["met"] is True for r in info["criterion_results"])
+        assert info["errored_criterion_count"] == 0
 
         reward = json.loads((tmp_path / "output" / "reward.json").read_text())
         assert reward["reward"] == 1.0  # all met: 3.0 / 3.0 = 1.0
 
-    @patch("gandalf_grader.__main__.resolve_judge_guidance", return_value="")
-    @patch("gandalf_grader.__main__.load_trajectory_final_output", return_value="done")
-    @patch("gandalf_grader.__main__.load_rubric")
-    @patch("gandalf_grader.__main__.load_config")
-    @patch("gandalf_grader.__main__._run_judge")
+    @patch("gandalf.orchestrator.resolve_judge_guidance", return_value="")
+    @patch("gandalf.orchestrator.load_trajectory_final_output", return_value="done")
+    @patch("gandalf.orchestrator.load_rubric")
+    @patch("gandalf.orchestrator.load_config")
+    @patch("gandalf.orchestrator._run_judge")
     def test_judge_retries_zero_disables_retry(
         self, mock_eval, mock_config, mock_rubric, mock_trajectory, mock_guidance, tmp_path
     ):
         """judge_retries=0 skips retry loop entirely — errors cause hard fail."""
-        from gandalf_grader.config import RubricItem
+        from gandalf.models import RubricItem
 
         output_dir = str(tmp_path / "output")
         os.makedirs(output_dir, exist_ok=True)
 
-        mock_config.return_value = VerifierConfig(
+        mock_config.return_value = GraderConfig(
             instructions="test",
             rubric_path="/rubric.json",
             workdir=str(tmp_path),
@@ -667,10 +668,10 @@ class TestRetryLogic:
             judge_retries=0,
             mode="individual",
         )
-        mock_rubric.return_value = [RubricItem(criteria="c1", weight=1.0)]
+        mock_rubric.return_value = [RubricItem(criterion="c1", weight=1.0)]
         mock_eval.return_value = ([{"met": None, "reasoning": "timeout"}], {})
 
-        from gandalf_grader.__main__ import main
+        from gandalf.orchestrator import main
 
         with patch("sys.argv", ["prog", "--config", "dummy.toml"]):
             with pytest.raises(SystemExit) as exc_info:
@@ -681,21 +682,21 @@ class TestRetryLogic:
         assert not (tmp_path / "output" / "reward.json").exists()
         assert mock_eval.call_count == 1
 
-    @patch("gandalf_grader.__main__.resolve_judge_guidance", return_value="")
-    @patch("gandalf_grader.__main__.load_trajectory_final_output", return_value="done")
-    @patch("gandalf_grader.__main__.load_rubric")
-    @patch("gandalf_grader.__main__.load_config")
-    @patch("gandalf_grader.__main__._run_judge")
+    @patch("gandalf.orchestrator.resolve_judge_guidance", return_value="")
+    @patch("gandalf.orchestrator.load_trajectory_final_output", return_value="done")
+    @patch("gandalf.orchestrator.load_rubric")
+    @patch("gandalf.orchestrator.load_config")
+    @patch("gandalf.orchestrator._run_judge")
     def test_hard_fail_writes_info_not_reward(
         self, mock_eval, mock_config, mock_rubric, mock_trajectory, mock_guidance, tmp_path
     ):
         """Persistent errors: info.json written, reward.json NOT written, exit 1."""
-        from gandalf_grader.config import RubricItem
+        from gandalf.models import RubricItem
 
         output_dir = str(tmp_path / "output")
         os.makedirs(output_dir, exist_ok=True)
 
-        mock_config.return_value = VerifierConfig(
+        mock_config.return_value = GraderConfig(
             instructions="test",
             rubric_path="/rubric.json",
             workdir=str(tmp_path),
@@ -705,10 +706,10 @@ class TestRetryLogic:
             judge_retries=1,
             mode="individual",
         )
-        mock_rubric.return_value = [RubricItem(criteria="c1", weight=1.0)]
+        mock_rubric.return_value = [RubricItem(criterion="c1", weight=1.0)]
         mock_eval.return_value = ([{"met": None, "reasoning": "always fails"}], {})
 
-        from gandalf_grader.__main__ import main
+        from gandalf.orchestrator import main
 
         with patch("sys.argv", ["prog", "--config", "dummy.toml"]):
             with pytest.raises(SystemExit) as exc_info:
@@ -716,25 +717,25 @@ class TestRetryLogic:
             assert exc_info.value.code == 1
 
         info = json.loads((tmp_path / "output" / "info.json").read_text())
-        assert info["criteria_results"][0]["met"] is None
-        assert info["errored_criteria_count"] == 1
+        assert info["criterion_results"][0]["met"] is None
+        assert info["errored_criterion_count"] == 1
         assert not (tmp_path / "output" / "reward.json").exists()
 
-    @patch("gandalf_grader.__main__.resolve_judge_guidance", return_value="")
-    @patch("gandalf_grader.__main__.load_trajectory_final_output", return_value="done")
-    @patch("gandalf_grader.__main__.load_rubric")
-    @patch("gandalf_grader.__main__.load_config")
-    @patch("gandalf_grader.__main__._run_judge")
+    @patch("gandalf.orchestrator.resolve_judge_guidance", return_value="")
+    @patch("gandalf.orchestrator.load_trajectory_final_output", return_value="done")
+    @patch("gandalf.orchestrator.load_rubric")
+    @patch("gandalf.orchestrator.load_config")
+    @patch("gandalf.orchestrator._run_judge")
     def test_all_resolved_after_retry(
         self, mock_eval, mock_config, mock_rubric, mock_trajectory, mock_guidance, tmp_path
     ):
         """After retry resolves all errors: reward.json written with correct reward."""
-        from gandalf_grader.config import RubricItem
+        from gandalf.models import RubricItem
 
         output_dir = str(tmp_path / "output")
         os.makedirs(output_dir, exist_ok=True)
 
-        mock_config.return_value = VerifierConfig(
+        mock_config.return_value = GraderConfig(
             instructions="test",
             rubric_path="/rubric.json",
             workdir=str(tmp_path),
@@ -745,8 +746,8 @@ class TestRetryLogic:
             mode="individual",
         )
         mock_rubric.return_value = [
-            RubricItem(criteria="c1", weight=1.0),
-            RubricItem(criteria="c2", weight=1.0),
+            RubricItem(criterion="c1", weight=1.0),
+            RubricItem(criterion="c2", weight=1.0),
         ]
 
         mock_eval.side_effect = [
@@ -755,7 +756,7 @@ class TestRetryLogic:
             ([{"met": False, "reasoning": "genuinely failed", "evidence": []}], {}),
         ]
 
-        from gandalf_grader.__main__ import main
+        from gandalf.orchestrator import main
 
         with patch("sys.argv", ["prog", "--config", "dummy.toml"]):
             main()
@@ -764,24 +765,24 @@ class TestRetryLogic:
         assert reward["reward"] == 0.5  # c1 met, c2 not: 1.0 / 2.0 = 0.5
 
         info = json.loads((tmp_path / "output" / "info.json").read_text())
-        assert info["errored_criteria_count"] == 0
+        assert info["errored_criterion_count"] == 0
 
-    @patch("gandalf_grader.__main__.resolve_judge_guidance", return_value="")
-    @patch("gandalf_grader.__main__.load_trajectory_final_output", return_value="done")
-    @patch("gandalf_grader.__main__.load_rubric")
-    @patch("gandalf_grader.__main__.load_config")
-    @patch("gandalf_grader.__main__._run_judge")
+    @patch("gandalf.orchestrator.resolve_judge_guidance", return_value="")
+    @patch("gandalf.orchestrator.load_trajectory_final_output", return_value="done")
+    @patch("gandalf.orchestrator.load_rubric")
+    @patch("gandalf.orchestrator.load_config")
+    @patch("gandalf.orchestrator._run_judge")
     def test_reward_json_with_negative_weights(
         self, mock_eval, mock_config, mock_rubric, mock_trajectory, mock_guidance, tmp_path
     ):
         """reward.json must contain the [0,1] reward, not the raw score,
         when negative-weight criteria are present."""
-        from gandalf_grader.config import RubricItem
+        from gandalf.models import RubricItem
 
         output_dir = str(tmp_path / "output")
         os.makedirs(output_dir, exist_ok=True)
 
-        mock_config.return_value = VerifierConfig(
+        mock_config.return_value = GraderConfig(
             instructions="test",
             rubric_path="/rubric.json",
             workdir=str(tmp_path),
@@ -792,8 +793,8 @@ class TestRetryLogic:
             mode="individual",
         )
         mock_rubric.return_value = [
-            RubricItem(criteria="correct output", weight=3.0),
-            RubricItem(criteria="used hardcoded values", weight=-1.0),
+            RubricItem(criterion="correct output", weight=3.0),
+            RubricItem(criterion="used hardcoded values", weight=-1.0),
         ]
 
         # Both criteria met: raw = 3 + (-1) = 2, reward = 2/3 ≈ 0.6667
@@ -802,7 +803,7 @@ class TestRetryLogic:
             ([{"met": True, "reasoning": "hardcoded detected", "evidence": []}], {}),
         ]
 
-        from gandalf_grader.__main__ import main
+        from gandalf.orchestrator import main
 
         with patch("sys.argv", ["prog", "--config", "dummy.toml"]):
             main()
@@ -1036,13 +1037,13 @@ class TestBatchConcurrent:
     """Tests for _run_batch_concurrent — parallel positional splitting of batch evaluation."""
 
     def _make_rubric(self, n: int) -> list[RubricItem]:
-        return [RubricItem(criteria=f"criterion {i}", weight=1.0) for i in range(n)]
+        return [RubricItem(criterion=f"criterion {i}", weight=1.0) for i in range(n)]
 
-    @patch("gandalf_grader.__main__._run_batch")
-    @patch("gandalf_grader.__main__.resolve_judge_guidance", return_value="")
-    @patch("gandalf_grader.__main__.load_trajectory_final_output", return_value="done")
-    @patch("gandalf_grader.__main__.load_rubric")
-    @patch("gandalf_grader.__main__.load_config")
+    @patch("gandalf.orchestrator._run_batch")
+    @patch("gandalf.orchestrator.resolve_judge_guidance", return_value="")
+    @patch("gandalf.orchestrator.load_trajectory_final_output", return_value="done")
+    @patch("gandalf.orchestrator.load_rubric")
+    @patch("gandalf.orchestrator.load_config")
     def test_splits_1_dispatches_to_run_batch(
         self, mock_config, mock_rubric, mock_trajectory, mock_guidance, mock_run_batch, tmp_path
     ):
@@ -1050,7 +1051,7 @@ class TestBatchConcurrent:
         output_dir = str(tmp_path / "output")
         os.makedirs(output_dir, exist_ok=True)
 
-        mock_config.return_value = VerifierConfig(
+        mock_config.return_value = GraderConfig(
             instructions="test",
             rubric_path="/rubric.json",
             workdir=str(tmp_path),
@@ -1064,13 +1065,13 @@ class TestBatchConcurrent:
 
         mock_run_batch.return_value = (
             [
-                CriteriaResult(criteria="criterion 0", weight=1.0, met=True, reasoning="ok"),
-                CriteriaResult(criteria="criterion 1", weight=1.0, met=True, reasoning="ok"),
+                CriterionResult(criterion="criterion 0", weight=1.0, met=True, reasoning="ok"),
+                CriterionResult(criterion="criterion 1", weight=1.0, met=True, reasoning="ok"),
             ],
             {"cost_usd": 0.1, "prompt_tokens": 100, "completion_tokens": 50, "cache_read_tokens": 0},
         )
 
-        from gandalf_grader.__main__ import main
+        from gandalf.orchestrator import main
 
         with patch("sys.argv", ["prog", "--config", "dummy.toml"]):
             main()
@@ -1092,7 +1093,7 @@ class TestBatchConcurrent:
         assert results == []
         assert usage == {}
 
-    @patch("gandalf_grader.__main__._run_judge")
+    @patch("gandalf.orchestrator._run_judge")
     def test_splits_2_even(self, mock_eval_all, tmp_path):
         """4 criteria split into 2 chunks of 2, results merged in order."""
         config = _make_config(
@@ -1119,7 +1120,7 @@ class TestBatchConcurrent:
         assert len(results) == 4
         # Verify order preserved
         for i, r in enumerate(results):
-            assert r.criteria == f"criterion {i}"
+            assert r.criterion == f"criterion {i}"
             assert r.met is True
 
         # 2 splits, each with usage
@@ -1131,7 +1132,7 @@ class TestBatchConcurrent:
         # Verify _run_judge was called twice (one per split)
         assert mock_eval_all.call_count == 2
 
-    @patch("gandalf_grader.__main__._run_judge")
+    @patch("gandalf.orchestrator._run_judge")
     def test_split_uses_correct_criteria_subsets(self, mock_eval_all, tmp_path):
         """Chunks must contain the correct subset of criteria strings.
 
@@ -1168,16 +1169,16 @@ class TestBatchConcurrent:
 
         # All criteria strings should appear exactly once across all chunks
         all_criteria = [c for chunk in received_criteria for c in chunk]
-        assert sorted(all_criteria) == sorted(item.criteria for item in rubric)
+        assert sorted(all_criteria) == sorted(item.criterion for item in rubric)
 
         # All 6 results should be successful
         assert len(results) == 6
         assert all(r.met is True for r in results)
         # Results are in original rubric order
         for i, r in enumerate(results):
-            assert r.criteria == f"criterion {i}"
+            assert r.criterion == f"criterion {i}"
 
-    @patch("gandalf_grader.__main__._run_judge")
+    @patch("gandalf.orchestrator._run_judge")
     def test_splits_3_uneven(self, mock_eval_all, tmp_path):
         """7 criteria split into chunks of [3, 3, 1]."""
         config = _make_config(
@@ -1202,12 +1203,12 @@ class TestBatchConcurrent:
 
         assert len(results) == 7
         for i, r in enumerate(results):
-            assert r.criteria == f"criterion {i}"
+            assert r.criterion == f"criterion {i}"
 
         assert mock_eval_all.call_count == 3
         assert usage["cost_usd"] == pytest.approx(0.3)
 
-    @patch("gandalf_grader.__main__._run_judge")
+    @patch("gandalf.orchestrator._run_judge")
     def test_splits_exceeds_rubric_size(self, mock_eval_all, tmp_path):
         """splits=5 with 3 criteria → 3 chunks of 1 each."""
         config = _make_config(
@@ -1234,7 +1235,7 @@ class TestBatchConcurrent:
         assert mock_eval_all.call_count == 3
         assert usage["cost_usd"] == pytest.approx(0.15)
 
-    @patch("gandalf_grader.__main__._run_judge")
+    @patch("gandalf.orchestrator._run_judge")
     def test_trace_file_naming(self, mock_eval_all, tmp_path):
         """Each split gets a unique trace path."""
         config = _make_config(
@@ -1267,7 +1268,7 @@ class TestBatchConcurrent:
         assert trace_basenames[0] == "judge_trace_batch_split0.txt"
         assert trace_basenames[1] == "judge_trace_batch_split1.txt"
 
-    @patch("gandalf_grader.__main__._run_judge")
+    @patch("gandalf.orchestrator._run_judge")
     def test_errored_criteria_in_split(self, mock_eval_all, tmp_path):
         """Errors in one split are properly reflected in merged results."""
         config = _make_config(
@@ -1306,7 +1307,7 @@ class TestBatchConcurrent:
         assert results[2].met is None  # errored in second split
         assert results[3].met is True
 
-    @patch("gandalf_grader.__main__._run_judge")
+    @patch("gandalf.orchestrator._run_judge")
     def test_timeout_per_split(self, mock_eval_all, tmp_path):
         """Each split's timeout is based on its chunk size, not total rubric."""
         config = _make_config(
@@ -1336,7 +1337,7 @@ class TestBatchConcurrent:
         # Each split has 2 criteria → timeout = 100 * 2 = 200
         assert all(t == 200 for t in timeouts)
 
-    @patch("gandalf_grader.__main__._run_judge")
+    @patch("gandalf.orchestrator._run_judge")
     def test_batch_timeout_cap_per_split(self, mock_eval_all, tmp_path):
         """batch_timeout caps each split's timeout independently."""
         config = _make_config(
@@ -1367,11 +1368,11 @@ class TestBatchConcurrent:
         # 2 criteria * 100s = 200, capped to 150
         assert all(t == 150 for t in timeouts)
 
-    @patch("gandalf_grader.__main__.resolve_judge_guidance", return_value="")
-    @patch("gandalf_grader.__main__.load_trajectory_final_output", return_value="done")
-    @patch("gandalf_grader.__main__.load_rubric")
-    @patch("gandalf_grader.__main__.load_config")
-    @patch("gandalf_grader.__main__._run_judge")
+    @patch("gandalf.orchestrator.resolve_judge_guidance", return_value="")
+    @patch("gandalf.orchestrator.load_trajectory_final_output", return_value="done")
+    @patch("gandalf.orchestrator.load_rubric")
+    @patch("gandalf.orchestrator.load_config")
+    @patch("gandalf.orchestrator._run_judge")
     def test_main_dispatches_batch_concurrent(
         self, mock_eval_all, mock_config, mock_rubric, mock_trajectory, mock_guidance, tmp_path
     ):
@@ -1379,7 +1380,7 @@ class TestBatchConcurrent:
         output_dir = str(tmp_path / "output")
         os.makedirs(output_dir, exist_ok=True)
 
-        mock_config.return_value = VerifierConfig(
+        mock_config.return_value = GraderConfig(
             instructions="test",
             rubric_path="/rubric.json",
             workdir=str(tmp_path),
@@ -1400,23 +1401,23 @@ class TestBatchConcurrent:
 
         mock_eval_all.side_effect = _side_effect
 
-        from gandalf_grader.__main__ import main
+        from gandalf.orchestrator import main
 
         with patch("sys.argv", ["prog", "--config", "dummy.toml"]):
             main()
 
         info = json.loads((tmp_path / "output" / "info.json").read_text())
-        assert len(info["criteria_results"]) == 4
-        assert all(r["met"] is True for r in info["criteria_results"])
+        assert len(info["criterion_results"]) == 4
+        assert all(r["met"] is True for r in info["criterion_results"])
 
         reward = json.loads((tmp_path / "output" / "reward.json").read_text())
         assert reward["reward"] == 1.0
 
-    @patch("gandalf_grader.__main__.resolve_judge_guidance", return_value="")
-    @patch("gandalf_grader.__main__.load_trajectory_final_output", return_value="done")
-    @patch("gandalf_grader.__main__.load_rubric")
-    @patch("gandalf_grader.__main__.load_config")
-    @patch("gandalf_grader.__main__._run_judge")
+    @patch("gandalf.orchestrator.resolve_judge_guidance", return_value="")
+    @patch("gandalf.orchestrator.load_trajectory_final_output", return_value="done")
+    @patch("gandalf.orchestrator.load_rubric")
+    @patch("gandalf.orchestrator.load_config")
+    @patch("gandalf.orchestrator._run_judge")
     def test_retry_after_batch_concurrent(
         self, mock_eval_all, mock_config, mock_rubric, mock_trajectory, mock_guidance, tmp_path
     ):
@@ -1424,7 +1425,7 @@ class TestBatchConcurrent:
         output_dir = str(tmp_path / "output")
         os.makedirs(output_dir, exist_ok=True)
 
-        mock_config.return_value = VerifierConfig(
+        mock_config.return_value = GraderConfig(
             instructions="test",
             rubric_path="/rubric.json",
             workdir=str(tmp_path),
@@ -1463,21 +1464,21 @@ class TestBatchConcurrent:
 
         mock_eval_all.side_effect = _side_effect
 
-        from gandalf_grader.__main__ import main
+        from gandalf.orchestrator import main
 
         with patch("sys.argv", ["prog", "--config", "dummy.toml"]):
             main()
 
         info = json.loads((tmp_path / "output" / "info.json").read_text())
-        assert all(r["met"] is True for r in info["criteria_results"])
-        assert info["errored_criteria_count"] == 0
+        assert all(r["met"] is True for r in info["criterion_results"])
+        assert info["errored_criterion_count"] == 0
 
         reward = json.loads((tmp_path / "output" / "reward.json").read_text())
         assert reward["reward"] == 1.0
 
     # -- Error scenario tests (no partial scores) --
 
-    @patch("gandalf_grader.__main__._run_judge")
+    @patch("gandalf.orchestrator._run_judge")
     def test_one_split_crashes_criteria_errored(self, mock_eval_all, tmp_path):
         """When one split's subprocess crashes, its criteria get met=None."""
         config = _make_config(
@@ -1513,7 +1514,7 @@ class TestBatchConcurrent:
         assert results[2].met is None
         assert results[3].met is None
 
-    @patch("gandalf_grader.__main__._run_judge")
+    @patch("gandalf.orchestrator._run_judge")
     def test_one_split_times_out(self, mock_eval_all, tmp_path):
         """When one split times out, its criteria get met=None."""
         config = _make_config(
@@ -1547,7 +1548,7 @@ class TestBatchConcurrent:
         assert results[2].met is None
         assert "timed out" in results[2].reasoning
 
-    @patch("gandalf_grader.__main__._run_judge")
+    @patch("gandalf.orchestrator._run_judge")
     def test_all_splits_fail(self, mock_eval_all, tmp_path):
         """When all splits fail, every criterion has met=None."""
         config = _make_config(
@@ -1572,11 +1573,11 @@ class TestBatchConcurrent:
 
         assert all(r.met is None for r in results)
 
-    @patch("gandalf_grader.__main__.resolve_judge_guidance", return_value="")
-    @patch("gandalf_grader.__main__.load_trajectory_final_output", return_value="done")
-    @patch("gandalf_grader.__main__.load_rubric")
-    @patch("gandalf_grader.__main__.load_config")
-    @patch("gandalf_grader.__main__._run_judge")
+    @patch("gandalf.orchestrator.resolve_judge_guidance", return_value="")
+    @patch("gandalf.orchestrator.load_trajectory_final_output", return_value="done")
+    @patch("gandalf.orchestrator.load_rubric")
+    @patch("gandalf.orchestrator.load_config")
+    @patch("gandalf.orchestrator._run_judge")
     def test_no_partial_scores_when_split_fails(
         self, mock_eval_all, mock_config, mock_rubric, mock_trajectory, mock_guidance, tmp_path
     ):
@@ -1589,7 +1590,7 @@ class TestBatchConcurrent:
         output_dir = str(tmp_path / "output")
         os.makedirs(output_dir, exist_ok=True)
 
-        mock_config.return_value = VerifierConfig(
+        mock_config.return_value = GraderConfig(
             instructions="test",
             rubric_path="/rubric.json",
             workdir=str(tmp_path),
@@ -1620,7 +1621,7 @@ class TestBatchConcurrent:
 
         mock_eval_all.side_effect = _side_effect
 
-        from gandalf_grader.__main__ import main
+        from gandalf.orchestrator import main
 
         with patch("sys.argv", ["prog", "--config", "dummy.toml"]):
             with pytest.raises(SystemExit) as exc_info:
@@ -1632,14 +1633,14 @@ class TestBatchConcurrent:
 
         # info.json MUST exist with ALL criteria (not just the successful split)
         info = json.loads((tmp_path / "output" / "info.json").read_text())
-        assert len(info["criteria_results"]) == 4
-        assert info["criteria_results"][0]["met"] is True
-        assert info["criteria_results"][1]["met"] is True
-        assert info["criteria_results"][2]["met"] is None
-        assert info["criteria_results"][3]["met"] is None
-        assert info["errored_criteria_count"] == 2
+        assert len(info["criterion_results"]) == 4
+        assert info["criterion_results"][0]["met"] is True
+        assert info["criterion_results"][1]["met"] is True
+        assert info["criterion_results"][2]["met"] is None
+        assert info["criterion_results"][3]["met"] is None
+        assert info["errored_criterion_count"] == 2
 
-    @patch("gandalf_grader.__main__._run_judge")
+    @patch("gandalf.orchestrator._run_judge")
     def test_split_future_raises_exception(self, mock_eval_all, tmp_path):
         """When _run_judge raises an unhandled exception, all criteria fail gracefully."""
         config = _make_config(
@@ -1672,7 +1673,7 @@ class TestBatchConcurrent:
         # Usage must be reset to stay consistent with all-error results
         assert usage == {}
 
-    @patch("gandalf_grader.__main__._run_judge")
+    @patch("gandalf.orchestrator._run_judge")
     def test_split_returns_fewer_verdicts(self, mock_eval_all, tmp_path):
         """When a split returns fewer verdicts than criteria, missing ones get met=None."""
         config = _make_config(

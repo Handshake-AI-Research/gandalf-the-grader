@@ -1,19 +1,19 @@
-"""Outer verifier orchestrator.
+"""Outer grader orchestrator.
 
-Runs as the verifier user and spawns the inner judge as the sandbox user
+Runs as the grader user and spawns the inner judge as the sandbox user
 (via sudo) to evaluate rubric criteria using an OpenHands agent-as-judge.
 
 Supports two evaluation modes (configured via ``mode`` in the TOML config):
-  - **individual** (default): one agent session per rubric criterion.
-  - **batch**: all criteria evaluated in a single agent session.
+  - **individual**: one agent session per rubric criterion.
+  - **batch** (default): all criteria evaluated in a single agent session.
 
 When ``max_concurrency`` > 1, multiple judge sessions run in parallel.
 For batch mode this splits criteria into positional chunks; for individual
 mode it runs multiple criterion evaluations concurrently.
 
-Produces:
-  /logs/verifier/reward.json  - Reward file ([0,1] reward)
-  /logs/verifier/info.json    - Detailed per-criteria results + LLM usage
+Produces (in ``output_dir``):
+  reward.json  - Reward file ([0,1] reward)
+  info.json    - Detailed per-criterion results + LLM usage
 """
 
 from __future__ import annotations
@@ -30,17 +30,16 @@ import tempfile
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
-from gandalf_grader.config import (
+from gandalf.models import (
     BatchJudgeInput,
-    CriteriaResult,
+    CriterionResult,
     EvaluationInfo,
+    GraderConfig,
     JudgeInput,
     RubricItem,
-    VerifierConfig,
     load_config,
     load_rubric,
 )
-from gandalf_grader.trajectory import load_trajectory_final_output
 
 # Environment variables forwarded to the inner judge subprocess (via sudo).
 # Only these are passed — everything else is stripped to avoid leaking secrets
@@ -59,6 +58,25 @@ _JUDGE_ENV_ALLOWLIST = frozenset({
     "OTEL_EXPORTER_OTLP_HEADERS",
     "OTEL_EXPORTER_OTLP_TRACES_PROTOCOL",
 })
+
+
+def load_trajectory_final_output(path: str) -> str:
+    """Load an ATIF trajectory file and extract the final agent message."""
+    with open(path) as f:
+        data = json.load(f)
+
+    steps = data.get("steps", [])
+
+    # Extract final agent message (last with non-empty content, no tool calls)
+    final_output = ""
+    for step in reversed(steps):
+        if step.get("source") == "agent" and not step.get("tool_calls"):
+            msg = step.get("message", "")
+            if msg.strip():
+                final_output = msg
+                break
+
+    return final_output
 
 
 def _judge_env_vars() -> list[str]:
@@ -89,56 +107,45 @@ def _resolve_optional_file(
         return f.read()
 
 
-def resolve_judge_guidance(config: VerifierConfig) -> str:
+def resolve_judge_guidance(config: GraderConfig) -> str:
     """Resolve judge guidance content (inline, path, or env var).
 
     Resolution order:
       1. config.judge_guidance (inline in TOML)
       2. config.judge_guidance_path (from TOML)
-      3. VERIFIER_JUDGE_GUIDANCE_PATH env var
+      3. GRADER_JUDGE_GUIDANCE_PATH env var
       4. No guidance (empty string)
     """
-    path = config.judge_guidance_path or os.environ.get("VERIFIER_JUDGE_GUIDANCE_PATH")
+    path = config.judge_guidance_path or os.environ.get("GRADER_JUDGE_GUIDANCE_PATH")
     source = (
-        "judge_guidance_path in verifier config"
+        "judge_guidance_path in grader config"
         if config.judge_guidance_path
-        else "VERIFIER_JUDGE_GUIDANCE_PATH env var"
+        else "GRADER_JUDGE_GUIDANCE_PATH env var"
     )
     return _resolve_optional_file(config.judge_guidance, path, source) or ""
 
 
-def resolve_judge_prompt(config: VerifierConfig) -> str | None:
+def resolve_judge_prompt(config: GraderConfig) -> str | None:
     """Resolve the custom judge prompt template (inline, path, or env var).
 
     Resolution order:
       1. config.judge_prompt (inline in TOML)
       2. config.judge_prompt_path (from TOML)
-      3. VERIFIER_JUDGE_PROMPT_PATH env var
+      3. GRADER_JUDGE_PROMPT_PATH env var
       4. No custom template (returns None, uses built-in)
     """
-    path = config.judge_prompt_path or os.environ.get("VERIFIER_JUDGE_PROMPT_PATH")
+    path = config.judge_prompt_path or os.environ.get("GRADER_JUDGE_PROMPT_PATH")
     source = (
-        "judge_prompt_path in verifier config"
+        "judge_prompt_path in grader config"
         if config.judge_prompt_path
-        else "VERIFIER_JUDGE_PROMPT_PATH env var"
+        else "GRADER_JUDGE_PROMPT_PATH env var"
     )
     return _resolve_optional_file(config.judge_prompt, path, source)
 
 
 def _clone_workspace(src: str) -> str:
-    """Clone workspace into a temp directory accessible to the sandbox user.
-
-    Walks the source tree once, skipping unreadable directories and files with
-    a warning.  Each directory and file is made world-accessible inline so no
-    second pass is needed.
-
-    ``shutil.copytree`` is not used because its ``copy_function`` hook only
-    covers per-file errors — directory listing errors (e.g. a 0o700 dir owned
-    by the agent) cannot be caught there.
-    """
+    """Clone workspace into a temp directory accessible to the sandbox user."""
     clone_dir = tempfile.mkdtemp(prefix="judge_workspace_")
-    # Root dir is created by mkdtemp at 0o700; open it up immediately so
-    # sandbox_user can traverse and write to it.
     os.chmod(clone_dir, 0o777)
     skipped: list[str] = []
 
@@ -156,13 +163,9 @@ def _clone_workspace(src: str) -> str:
             dst_file = os.path.join(dst_dir, fname)
             try:
                 shutil.copyfile(src_file, dst_file)
-                # Preserve execute bits from source so scripts/binaries
-                # remain runnable, while granting world read/write.
                 src_mode = os.stat(src_file).st_mode
                 os.chmod(dst_file, 0o666 | (src_mode & 0o111))
             except OSError:
-                # Covers PermissionError, FileNotFoundError (broken symlinks),
-                # IsADirectoryError (symlinks to dirs in filenames), etc.
                 skipped.append(src_file)
 
     if skipped:
@@ -194,12 +197,7 @@ def _run_judge(
     trace_path: str,
     timeout: int = 300,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    """Clone workspace, run the judge subprocess, and return parsed results.
-
-    Handles both single-criterion (JudgeInput) and batch (BatchJudgeInput)
-    modes.  Always returns (verdicts_list, llm_usage_dict).  For single
-    mode, verdicts_list has one element.
-    """
+    """Clone workspace, run the judge subprocess, and return parsed results."""
     is_batch = isinstance(judge_input, BatchJudgeInput)
     n = len(judge_input.criteria) if is_batch else 1
 
@@ -223,8 +221,6 @@ def _run_judge(
         input_f.write(cloned_input.model_dump_json())
         input_path = input_f.name
 
-    # Pre-create the output file so sandbox_user can write to it without
-    # needing general write access to /tmp (which may not be world-writable).
     with tempfile.NamedTemporaryFile(
         mode="w",
         suffix=".json",
@@ -245,7 +241,7 @@ def _run_judge(
         cmd += [
             "env",
             *env_vars,
-            "gandalf-grader-judge",
+            "gandalf-the-grader-judge",
             "--input",
             input_path,
             "--output",
@@ -280,13 +276,11 @@ def _run_judge(
                 return verdicts, llm_usage
 
             if isinstance(data, list):
-                # Legacy format: bare JSON array of verdicts, no usage info.
                 return data, {}
 
             reason = f"Unexpected JSON type from judge: {type(data).__name__}"
             return _fail_all(n, reason), {}
         else:
-            # Single mode: data is the full output dict with met/reasoning/evidence/llm_usage
             llm_usage = data.get("llm_usage", {})
             return [data], llm_usage
 
@@ -317,28 +311,24 @@ def _save_trace(trace_path: str, stdout: str, stderr: str, returncode: int) -> N
 
 
 def _run_individual(
-    config: VerifierConfig,
+    config: GraderConfig,
     rubric: list[RubricItem],
     final_output: str,
     judge_guidance: str,
     judge_prompt: str | None = None,
-) -> tuple[list[CriteriaResult], dict[str, Any]]:
-    """Evaluate each criterion in its own agent session.
-
-    When max_concurrency > 1, up to N criteria are evaluated in parallel
-    via a thread pool.  Results are always returned in rubric order.
-    """
+) -> tuple[list[CriterionResult], dict[str, Any]]:
+    """Evaluate each criterion in its own agent session."""
     n = len(rubric)
     concurrency = config.max_concurrency or 1
 
-    def _eval_one(i: int, item: RubricItem) -> tuple[int, CriteriaResult, dict[str, Any]]:
-        print(f"[{i + 1}/{n}] Evaluating: {item.criteria[:80]}...")
+    def _eval_one(i: int, item: RubricItem) -> tuple[int, CriterionResult, dict[str, Any]]:
+        print(f"[{i + 1}/{n}] Evaluating: {item.criterion[:80]}...")
 
         judge_input = JudgeInput(
             model=config.model,
             instructions=config.instructions,
             final_output=final_output,
-            criteria=item.criteria,
+            criterion=item.criterion,
             workdir=config.workdir,
             mcp_servers=config.mcp_servers,
             judge_guidance=judge_guidance,
@@ -354,8 +344,8 @@ def _run_individual(
         )
 
         v = verdicts[0]
-        result = CriteriaResult(
-            criteria=item.criteria,
+        result = CriterionResult(
+            criterion=item.criterion,
             weight=item.weight,
             met=v.get("met"),
             reasoning=v.get("reasoning", "No reasoning provided."),
@@ -370,8 +360,7 @@ def _run_individual(
     total_usage: dict[str, float | int] = {}
 
     if concurrency == 1:
-        # Serial path — no thread pool overhead
-        results: list[CriteriaResult] = []
+        results: list[CriterionResult] = []
         for i, item in enumerate(rubric):
             _, result, usage = _eval_one(i, item)
             results.append(result)
@@ -379,9 +368,8 @@ def _run_individual(
                 total_usage[key] = total_usage.get(key, 0) + usage.get(key, 0)
         return results, total_usage
 
-    # Concurrent path
     print(f"[individual] Evaluating {n} criteria with max_concurrency={concurrency}")
-    indexed_results: list[tuple[int, CriteriaResult]] = []
+    indexed_results: list[tuple[int, CriterionResult]] = []
 
     with ThreadPoolExecutor(max_workers=min(concurrency, n)) as executor:
         futures = [
@@ -399,18 +387,14 @@ def _run_individual(
 
 
 def _run_batch(
-    config: VerifierConfig,
+    config: GraderConfig,
     rubric: list[RubricItem],
     final_output: str,
     judge_guidance: str,
     judge_prompt: str | None = None,
-) -> tuple[list[CriteriaResult], dict[str, Any]]:
-    """Evaluate all criteria in a single agent session.
-
-    Returns (results, llm_usage) where llm_usage is the token/cost
-    totals from the single batch agent session.
-    """
-    criteria_list = [item.criteria for item in rubric]
+) -> tuple[list[CriterionResult], dict[str, Any]]:
+    """Evaluate all criteria in a single agent session."""
+    criteria_list = [item.criterion for item in rubric]
 
     n_criteria = len(criteria_list)
     batch_timeout = config.judge_timeout * n_criteria
@@ -441,11 +425,11 @@ def _run_batch(
         timeout=batch_timeout,
     )
 
-    results: list[CriteriaResult] = []
+    results: list[CriterionResult] = []
     for i, item in enumerate(rubric):
         v = verdicts[i] if i < len(verdicts) else {}
-        result = CriteriaResult(
-            criteria=item.criteria,
+        result = CriterionResult(
+            criterion=item.criterion,
             weight=item.weight,
             met=v.get("met"),
             reasoning=v.get("reasoning", "No reasoning provided."),
@@ -460,18 +444,13 @@ def _run_batch(
 
 
 def _run_batch_concurrent(
-    config: VerifierConfig,
+    config: GraderConfig,
     rubric: list[RubricItem],
     final_output: str,
     judge_guidance: str,
     judge_prompt: str | None = None,
-) -> tuple[list[CriteriaResult], dict[str, Any]]:
-    """Split criteria into N positional chunks and evaluate each as a parallel batch.
-
-    Each chunk is sent to its own judge subprocess.  All chunks run in parallel
-    via a thread pool (each thread blocks on subprocess.run).  Results are merged
-    back in original rubric order.
-    """
+) -> tuple[list[CriterionResult], dict[str, Any]]:
+    """Split criteria into N positional chunks and evaluate each as a parallel batch."""
     concurrency = config.max_concurrency or 1
     n = len(rubric)
     if n == 0:
@@ -486,11 +465,8 @@ def _run_batch_concurrent(
         f"(sizes: {', '.join(str(len(c)) for c in chunks)})"
     )
 
-    def _run_split(split_idx: int, chunk: list[tuple[int, RubricItem]]) -> tuple[list[tuple[int, CriteriaResult]], dict[str, Any]]:
-        # Use local 0-based indices for the judge — the prompt says
-        # "0 through N-1" and _read_batch_verdict filters by 0 <= idx < N.
-        # Global rubric indices are restored when building indexed_results.
-        criteria_list = [item.criteria for _orig_idx, item in chunk]
+    def _run_split(split_idx: int, chunk: list[tuple[int, RubricItem]]) -> tuple[list[tuple[int, CriterionResult]], dict[str, Any]]:
+        criteria_list = [item.criterion for _orig_idx, item in chunk]
 
         n_criteria = len(criteria_list)
         batch_timeout = config.judge_timeout * n_criteria
@@ -523,11 +499,11 @@ def _run_batch_concurrent(
             timeout=batch_timeout,
         )
 
-        indexed_results: list[tuple[int, CriteriaResult]] = []
+        indexed_results: list[tuple[int, CriterionResult]] = []
         for j, (orig_idx, item) in enumerate(chunk):
             v = verdicts[j] if j < len(verdicts) else {}
-            result = CriteriaResult(
-                criteria=item.criteria,
+            result = CriterionResult(
+                criterion=item.criterion,
                 weight=item.weight,
                 met=v.get("met"),
                 reasoning=v.get("reasoning", "No reasoning provided."),
@@ -542,8 +518,7 @@ def _run_batch_concurrent(
 
         return indexed_results, llm_usage
 
-    # Run all splits in parallel
-    all_indexed_results: list[tuple[int, CriteriaResult]] = []
+    all_indexed_results: list[tuple[int, CriterionResult]] = []
     total_usage: dict[str, float | int] = {}
 
     with ThreadPoolExecutor(max_workers=len(chunks)) as executor:
@@ -558,17 +533,12 @@ def _run_batch_concurrent(
                 for key in ("cost_usd", "prompt_tokens", "completion_tokens", "cache_read_tokens"):
                     total_usage[key] = total_usage.get(key, 0) + usage.get(key, 0)
         except Exception as exc:
-            # All-or-nothing: if any split raises, we fail *all* criteria so
-            # the hard-fail path in main() writes info.json but not reward.json.
-            # We intentionally discard partial results from successful splits
-            # rather than returning a mix of real and error results.  Reset
-            # usage to stay consistent with the all-error result set.
             executor.shutdown(wait=True, cancel_futures=True)
             print(f"[batch-concurrent] Split failed unexpectedly: {exc}", file=sys.stderr)
             return (
                 [
-                    CriteriaResult(
-                        criteria=item.criteria,
+                    CriterionResult(
+                        criterion=item.criterion,
                         weight=item.weight,
                         met=None,
                         reasoning=f"Batch split failed: {exc}",
@@ -578,22 +548,21 @@ def _run_batch_concurrent(
                 {},
             )
 
-    # Sort back to original rubric order
     all_indexed_results.sort(key=lambda x: x[0])
     results = [r for _, r in all_indexed_results]
 
     return results, total_usage
 
 
-def _get_errored_indices(results: list[CriteriaResult]) -> list[int]:
+def _get_errored_indices(results: list[CriterionResult]) -> list[int]:
     """Return indices of criteria where met is None (infrastructure error)."""
     return [i for i, r in enumerate(results) if r.met is None]
 
 
 def _retry_individual(
-    config: VerifierConfig,
+    config: GraderConfig,
     rubric: list[RubricItem],
-    results: list[CriteriaResult],
+    results: list[CriterionResult],
     llm_usage: dict[str, Any],
     final_output: str,
     judge_guidance: str,
@@ -603,13 +572,13 @@ def _retry_individual(
     """Re-run each errored criterion individually and merge results in-place."""
     for idx in errored_indices:
         item = rubric[idx]
-        print(f"  [retry {idx}] Evaluating: {item.criteria[:80]}...")
+        print(f"  [retry {idx}] Evaluating: {item.criterion[:80]}...")
 
         judge_input = JudgeInput(
             model=config.model,
             instructions=config.instructions,
             final_output=final_output,
-            criteria=item.criteria,
+            criterion=item.criterion,
             workdir=config.workdir,
             mcp_servers=config.mcp_servers,
             judge_guidance=judge_guidance,
@@ -628,8 +597,8 @@ def _retry_individual(
             llm_usage[key] = llm_usage.get(key, 0) + usage.get(key, 0)
 
         v = verdicts[0]
-        results[idx] = CriteriaResult(
-            criteria=item.criteria,
+        results[idx] = CriterionResult(
+            criterion=item.criterion,
             weight=item.weight,
             met=v.get("met"),
             reasoning=v.get("reasoning", "No reasoning provided."),
@@ -641,9 +610,9 @@ def _retry_individual(
 
 
 def _retry_batch(
-    config: VerifierConfig,
+    config: GraderConfig,
     rubric: list[RubricItem],
-    results: list[CriteriaResult],
+    results: list[CriterionResult],
     llm_usage: dict[str, Any],
     final_output: str,
     judge_guidance: str,
@@ -651,7 +620,7 @@ def _retry_batch(
     judge_prompt: str | None = None,
 ) -> None:
     """Re-run errored criteria as a batch and merge results in-place."""
-    retry_criteria = [rubric[orig_idx].criteria for orig_idx in errored_indices]
+    retry_criteria = [rubric[orig_idx].criterion for orig_idx in errored_indices]
 
     n_retry = len(retry_criteria)
     batch_timeout = config.judge_timeout * n_retry
@@ -684,8 +653,8 @@ def _retry_batch(
 
     for new_idx, orig_idx in enumerate(errored_indices):
         v = verdicts[new_idx] if new_idx < len(verdicts) else {}
-        results[orig_idx] = CriteriaResult(
-            criteria=rubric[orig_idx].criteria,
+        results[orig_idx] = CriterionResult(
+            criterion=rubric[orig_idx].criterion,
             weight=rubric[orig_idx].weight,
             met=v.get("met"),
             reasoning=v.get("reasoning", "No reasoning provided."),
@@ -698,19 +667,12 @@ def _retry_batch(
 
 
 def _write_info(
-    config: VerifierConfig,
-    results: list[CriteriaResult],
+    config: GraderConfig,
+    results: list[CriterionResult],
     llm_usage: dict[str, Any],
-    errored_criteria_count: int,
+    errored_criterion_count: int,
 ) -> tuple[float, float]:
-    """Compute reward and raw score, ALWAYS write info.json. Returns (reward, raw_score).
-
-    raw_score: sum of weights for criteria whose condition was met (negative weights
-    contribute when their criterion is met).  Errored criteria (met=None) contribute 0.
-
-    reward: clip(0, 1, raw_score / sum_of_positive_weights).  This is the
-    reward written to reward.json — always in [0, 1].
-    """
+    """Compute reward and raw score, ALWAYS write info.json. Returns (reward, raw_score)."""
     raw_score = round(
         sum(r.weight for r in results if r.met is True),
         4,
@@ -725,7 +687,7 @@ def _write_info(
     )
 
     n_total = len(results)
-    n_evaluated = n_total - errored_criteria_count
+    n_evaluated = n_total - errored_criterion_count
     evaluated_pct = round((n_evaluated / n_total * 100.0) if n_total > 0 else 100.0, 2)
 
     info = EvaluationInfo(
@@ -733,7 +695,7 @@ def _write_info(
         raw_score=raw_score,
         minimum_score=minimum_score,
         maximum_score=maximum_score,
-        criteria_results=results,
+        criterion_results=results,
         llm_usage={
             "model": config.model,
             "total_cost_usd": llm_usage.get("cost_usd", 0),
@@ -741,7 +703,7 @@ def _write_info(
             "total_completion_tokens": llm_usage.get("completion_tokens", 0),
             "total_cache_read_tokens": llm_usage.get("cache_read_tokens", 0),
         },
-        errored_criteria_count=errored_criteria_count,
+        errored_criterion_count=errored_criterion_count,
         evaluated_criteria_pct=evaluated_pct,
     )
     with open(os.path.join(config.output_dir, "info.json"), "w") as f:
@@ -752,20 +714,19 @@ def _write_info(
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Verifier: evaluate agent output via agent-as-judge"
+        description="Grader: evaluate agent output via agent-as-judge"
     )
     parser.add_argument(
-        "--config", required=True, help="Path to verifier config TOML file"
+        "--config", required=True, help="Path to grader config TOML file"
     )
     args = parser.parse_args()
 
     config = load_config(args.config)
 
-    # The model validator guarantees exactly one of rubric / rubric_path is set.
     if config.rubric is not None:
         rubric = config.rubric
     else:
-        assert config.rubric_path is not None  # guaranteed by model validator
+        assert config.rubric_path is not None
         rubric = load_rubric(config.rubric_path)
     final_output = load_trajectory_final_output(config.trajectory_path)
     judge_guidance = resolve_judge_guidance(config)
@@ -824,7 +785,7 @@ def main() -> None:
     print(f"\nReward: {reward} (raw: {raw_score})")
     if total_cost > 0:
         print(
-            f"Verifier LLM cost: ${total_cost:.4f} "
+            f"Grader LLM cost: ${total_cost:.4f} "
             f"({len(rubric)} criteria, "
             f"{total_prompt} prompt + {total_completion} completion tokens)"
         )
