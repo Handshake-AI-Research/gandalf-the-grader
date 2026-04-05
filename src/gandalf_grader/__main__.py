@@ -24,6 +24,7 @@ import json
 import math
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -206,29 +207,37 @@ def evaluate_criteria(
             output_path,
         ]
 
-        result = subprocess.run(
+        proc = subprocess.Popen(
             cmd,
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
-            timeout=timeout,
             cwd=clone_dir,
+            start_new_session=True,
         )
+        try:
+            stdout, stderr = proc.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            proc.communicate()
+            _save_trace(trace_path, "", f"Judge execution timed out after {timeout}s.", -1)
+            return {"met": None, "reasoning": "Judge execution timed out."}
 
-        _save_trace(trace_path, result.stdout, result.stderr, result.returncode)
+        _save_trace(trace_path, stdout, stderr, proc.returncode)
 
-        if result.returncode != 0:
+        if proc.returncode != 0:
             return {
                 "met": None,
-                "reasoning": f"Judge process failed (exit {result.returncode}): {result.stderr[:500]}",
+                "reasoning": f"Judge process failed (exit {proc.returncode}): {stderr[:500]}",
             }
 
         with open(output_path) as f:
             result_data: dict[str, Any] = json.load(f)
             return result_data
 
-    except subprocess.TimeoutExpired:
-        _save_trace(trace_path, "", "Judge execution timed out.", -1)
-        return {"met": None, "reasoning": "Judge execution timed out."}
     except (json.JSONDecodeError, FileNotFoundError) as e:
         return {"met": None, "reasoning": f"Failed to read judge output: {e}"}
     finally:
@@ -314,18 +323,29 @@ def evaluate_all_criteria(
             "--batch",
         ]
 
-        result = subprocess.run(
+        proc = subprocess.Popen(
             cmd,
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
-            timeout=timeout,
             cwd=clone_dir,
+            start_new_session=True,
         )
+        try:
+            stdout, stderr = proc.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            proc.communicate()
+            _save_trace(trace_path, "", f"Batch judge execution timed out after {timeout}s.", -1)
+            return _fail_all(n_criteria, "Judge execution timed out."), {}
 
-        _save_trace(trace_path, result.stdout, result.stderr, result.returncode)
+        _save_trace(trace_path, stdout, stderr, proc.returncode)
 
-        if result.returncode != 0:
-            reason = f"Judge process failed (exit {result.returncode}): {result.stderr[:500]}"
+        if proc.returncode != 0:
+            reason = f"Judge process failed (exit {proc.returncode}): {stderr[:500]}"
             return _fail_all(n_criteria, reason), {}
 
         with open(output_path) as f:
@@ -343,9 +363,6 @@ def evaluate_all_criteria(
             reason = f"Unexpected JSON type from judge: {type(data).__name__}"
             return _fail_all(n_criteria, reason), {}
 
-    except subprocess.TimeoutExpired:
-        _save_trace(trace_path, "", "Batch judge execution timed out.", -1)
-        return _fail_all(n_criteria, "Judge execution timed out."), {}
     except (json.JSONDecodeError, FileNotFoundError, TypeError, AttributeError) as e:
         return _fail_all(n_criteria, f"Failed to read judge output: {e}"), {}
     finally:
