@@ -1,4 +1,4 @@
-"""Tests for orchestrator-level functions (resolve_judge_guidance, evaluate_all_criteria)."""
+"""Tests for orchestrator-level functions (resolve_judge_guidance, run_judge)."""
 
 import json
 import os
@@ -15,8 +15,7 @@ from gandalf_grader.__main__ import (
     _judge_env_vars,
     _run_batch_concurrent,
     _write_info,
-    evaluate_all_criteria,
-    evaluate_criteria,
+    run_judge,
     resolve_judge_guidance,
 )
 from gandalf_grader.config import BatchJudgeInput, CriteriaResult, JudgeInput, RubricItem, VerifierConfig
@@ -166,8 +165,8 @@ def _make_run_writing(content):
     return _side_effect
 
 
-class TestEvaluateAllCriteria:
-    """Tests for evaluate_all_criteria IPC contract: dict, list, invalid shapes, failures."""
+class TestRunJudgeBatch:
+    """Tests for run_judge (batch) IPC contract: dict, list, invalid shapes, failures."""
 
     @patch("gandalf_grader.__main__._clone_workspace")
     @patch("gandalf_grader.__main__.subprocess.run")
@@ -186,7 +185,7 @@ class TestEvaluateAllCriteria:
         judge_input = _make_batch_input(tmp_path, n=2)
         trace_path = str(tmp_path / "trace.txt")
 
-        verdicts, usage = evaluate_all_criteria(
+        verdicts, usage = run_judge(
             judge_input, sandbox_user="sandbox", trace_path=trace_path
         )
 
@@ -210,7 +209,7 @@ class TestEvaluateAllCriteria:
         judge_input = _make_batch_input(tmp_path, n=2)
         trace_path = str(tmp_path / "trace.txt")
 
-        verdicts, usage = evaluate_all_criteria(
+        verdicts, usage = run_judge(
             judge_input, sandbox_user="sandbox", trace_path=trace_path
         )
 
@@ -228,7 +227,7 @@ class TestEvaluateAllCriteria:
         judge_input = _make_batch_input(tmp_path, n=2)
         trace_path = str(tmp_path / "trace.txt")
 
-        verdicts, usage = evaluate_all_criteria(
+        verdicts, usage = run_judge(
             judge_input, sandbox_user="sandbox", trace_path=trace_path
         )
 
@@ -247,7 +246,7 @@ class TestEvaluateAllCriteria:
         judge_input = _make_batch_input(tmp_path, n=1)
         trace_path = str(tmp_path / "trace.txt")
 
-        verdicts, usage = evaluate_all_criteria(
+        verdicts, usage = run_judge(
             judge_input, sandbox_user="sandbox", trace_path=trace_path
         )
 
@@ -265,7 +264,7 @@ class TestEvaluateAllCriteria:
         judge_input = _make_batch_input(tmp_path, n=2)
         trace_path = str(tmp_path / "trace.txt")
 
-        verdicts, usage = evaluate_all_criteria(
+        verdicts, usage = run_judge(
             judge_input, sandbox_user="sandbox", trace_path=trace_path
         )
 
@@ -284,7 +283,7 @@ class TestEvaluateAllCriteria:
         judge_input = _make_batch_input(tmp_path, n=2)
         trace_path = str(tmp_path / "trace.txt")
 
-        verdicts, usage = evaluate_all_criteria(
+        verdicts, usage = run_judge(
             judge_input, sandbox_user="sandbox", trace_path=trace_path
         )
 
@@ -303,7 +302,7 @@ class TestEvaluateAllCriteria:
         judge_input = _make_batch_input(tmp_path, n=2)
         trace_path = str(tmp_path / "trace.txt")
 
-        verdicts, usage = evaluate_all_criteria(
+        verdicts, usage = run_judge(
             judge_input, sandbox_user="sandbox", trace_path=trace_path
         )
 
@@ -330,7 +329,7 @@ class TestEvaluateAllCriteria:
         judge_input = _make_batch_input(tmp_path, n=1)
         trace_path = str(tmp_path / "trace.txt")
 
-        verdicts, usage = evaluate_all_criteria(
+        verdicts, usage = run_judge(
             judge_input, sandbox_user="sandbox", trace_path=trace_path
         )
 
@@ -351,7 +350,7 @@ class TestEvaluateAllCriteria:
         judge_input = _make_batch_input(tmp_path, n=2)
         trace_path = str(tmp_path / "trace.txt")
 
-        verdicts, usage = evaluate_all_criteria(
+        verdicts, usage = run_judge(
             judge_input, sandbox_user="sandbox", trace_path=trace_path
         )
 
@@ -500,7 +499,7 @@ class TestOutputFilePermissions:
         mock_run.side_effect = _capture
         judge_input = _make_batch_input(tmp_path, n=1)
 
-        evaluate_all_criteria(judge_input, sandbox_user="sandbox", trace_path=str(tmp_path / "trace.txt"))
+        run_judge(judge_input, sandbox_user="sandbox", trace_path=str(tmp_path / "trace.txt"))
 
         assert "output_path" in captured_cmd, "subprocess was not called"
         assert captured_cmd.get("existed_before_run"), (
@@ -530,7 +529,7 @@ class TestOutputFilePermissions:
 
         mock_run.side_effect = _capture_and_check_permissions
         judge_input = _make_batch_input(tmp_path, n=1)
-        evaluate_all_criteria(judge_input, sandbox_user="sandbox", trace_path=str(tmp_path / "trace.txt"))
+        run_judge(judge_input, sandbox_user="sandbox", trace_path=str(tmp_path / "trace.txt"))
 
         assert captured.get("exists"), (
             "Output file was NOT pre-created before subprocess.run — "
@@ -550,7 +549,7 @@ class TestRetryLogic:
     @patch("gandalf_grader.__main__.load_trajectory_final_output", return_value="done")
     @patch("gandalf_grader.__main__.load_rubric")
     @patch("gandalf_grader.__main__.load_config")
-    @patch("gandalf_grader.__main__.evaluate_criteria")
+    @patch("gandalf_grader.__main__.run_judge")
     def test_sequential_retry_resolves_errored_criterion(
         self, mock_eval, mock_config, mock_rubric, mock_trajectory, mock_guidance, tmp_path
     ):
@@ -577,10 +576,10 @@ class TestRetryLogic:
 
         # First call: c1 passes, c2 errors. Retry: c2 passes.
         mock_eval.side_effect = [
-            {"met": True, "reasoning": "ok", "evidence": ["e1"]},
-            {"met": None, "reasoning": "timeout"},
+            ([{"met": True, "reasoning": "ok", "evidence": ["e1"]}], {}),
+            ([{"met": None, "reasoning": "timeout"}], {}),
             # retry for c2
-            {"met": True, "reasoning": "ok on retry", "evidence": ["e2"]},
+            ([{"met": True, "reasoning": "ok on retry", "evidence": ["e2"]}], {}),
         ]
 
         from gandalf_grader.__main__ import main
@@ -600,7 +599,7 @@ class TestRetryLogic:
     @patch("gandalf_grader.__main__.load_trajectory_final_output", return_value="done")
     @patch("gandalf_grader.__main__.load_rubric")
     @patch("gandalf_grader.__main__.load_config")
-    @patch("gandalf_grader.__main__.evaluate_all_criteria")
+    @patch("gandalf_grader.__main__.run_judge")
     def test_batch_retry_resolves_errored_criteria(
         self, mock_eval_all, mock_config, mock_rubric, mock_trajectory, mock_guidance, tmp_path
     ):
@@ -656,7 +655,7 @@ class TestRetryLogic:
     @patch("gandalf_grader.__main__.load_trajectory_final_output", return_value="done")
     @patch("gandalf_grader.__main__.load_rubric")
     @patch("gandalf_grader.__main__.load_config")
-    @patch("gandalf_grader.__main__.evaluate_criteria")
+    @patch("gandalf_grader.__main__.run_judge")
     def test_judge_retries_zero_disables_retry(
         self, mock_eval, mock_config, mock_rubric, mock_trajectory, mock_guidance, tmp_path
     ):
@@ -677,7 +676,7 @@ class TestRetryLogic:
             mode="individual",
         )
         mock_rubric.return_value = [RubricItem(criteria="c1", weight=1.0)]
-        mock_eval.return_value = {"met": None, "reasoning": "timeout"}
+        mock_eval.return_value = ([{"met": None, "reasoning": "timeout"}], {})
 
         from gandalf_grader.__main__ import main
 
@@ -694,7 +693,7 @@ class TestRetryLogic:
     @patch("gandalf_grader.__main__.load_trajectory_final_output", return_value="done")
     @patch("gandalf_grader.__main__.load_rubric")
     @patch("gandalf_grader.__main__.load_config")
-    @patch("gandalf_grader.__main__.evaluate_criteria")
+    @patch("gandalf_grader.__main__.run_judge")
     def test_hard_fail_writes_info_not_reward(
         self, mock_eval, mock_config, mock_rubric, mock_trajectory, mock_guidance, tmp_path
     ):
@@ -715,7 +714,7 @@ class TestRetryLogic:
             mode="individual",
         )
         mock_rubric.return_value = [RubricItem(criteria="c1", weight=1.0)]
-        mock_eval.return_value = {"met": None, "reasoning": "always fails"}
+        mock_eval.return_value = ([{"met": None, "reasoning": "always fails"}], {})
 
         from gandalf_grader.__main__ import main
 
@@ -733,7 +732,7 @@ class TestRetryLogic:
     @patch("gandalf_grader.__main__.load_trajectory_final_output", return_value="done")
     @patch("gandalf_grader.__main__.load_rubric")
     @patch("gandalf_grader.__main__.load_config")
-    @patch("gandalf_grader.__main__.evaluate_criteria")
+    @patch("gandalf_grader.__main__.run_judge")
     def test_all_resolved_after_retry(
         self, mock_eval, mock_config, mock_rubric, mock_trajectory, mock_guidance, tmp_path
     ):
@@ -759,9 +758,9 @@ class TestRetryLogic:
         ]
 
         mock_eval.side_effect = [
-            {"met": True, "reasoning": "ok", "evidence": []},
-            {"met": None, "reasoning": "timeout"},
-            {"met": False, "reasoning": "genuinely failed", "evidence": []},
+            ([{"met": True, "reasoning": "ok", "evidence": []}], {}),
+            ([{"met": None, "reasoning": "timeout"}], {}),
+            ([{"met": False, "reasoning": "genuinely failed", "evidence": []}], {}),
         ]
 
         from gandalf_grader.__main__ import main
@@ -779,7 +778,7 @@ class TestRetryLogic:
     @patch("gandalf_grader.__main__.load_trajectory_final_output", return_value="done")
     @patch("gandalf_grader.__main__.load_rubric")
     @patch("gandalf_grader.__main__.load_config")
-    @patch("gandalf_grader.__main__.evaluate_criteria")
+    @patch("gandalf_grader.__main__.run_judge")
     def test_reward_json_with_negative_weights(
         self, mock_eval, mock_config, mock_rubric, mock_trajectory, mock_guidance, tmp_path
     ):
@@ -807,8 +806,8 @@ class TestRetryLogic:
 
         # Both criteria met: raw = 3 + (-1) = 2, reward = 2/3 ≈ 0.6667
         mock_eval.side_effect = [
-            {"met": True, "reasoning": "ok", "evidence": []},
-            {"met": True, "reasoning": "hardcoded detected", "evidence": []},
+            ([{"met": True, "reasoning": "ok", "evidence": []}], {}),
+            ([{"met": True, "reasoning": "hardcoded detected", "evidence": []}], {}),
         ]
 
         from gandalf_grader.__main__ import main
@@ -1101,7 +1100,7 @@ class TestBatchConcurrent:
         assert results == []
         assert usage == {}
 
-    @patch("gandalf_grader.__main__.evaluate_all_criteria")
+    @patch("gandalf_grader.__main__.run_judge")
     def test_splits_2_even(self, mock_eval_all, tmp_path):
         """4 criteria split into 2 chunks of 2, results merged in order."""
         config = _make_config(
@@ -1137,10 +1136,10 @@ class TestBatchConcurrent:
         assert usage["completion_tokens"] == 100
         assert usage["cache_read_tokens"] == 20
 
-        # Verify evaluate_all_criteria was called twice (one per split)
+        # Verify run_judge was called twice (one per split)
         assert mock_eval_all.call_count == 2
 
-    @patch("gandalf_grader.__main__.evaluate_all_criteria")
+    @patch("gandalf_grader.__main__.run_judge")
     def test_split_uses_local_indices(self, mock_eval_all, tmp_path):
         """Chunks must use 0-based local indices, not global rubric positions.
 
@@ -1186,7 +1185,7 @@ class TestBatchConcurrent:
         for i, r in enumerate(results):
             assert r.criteria == f"criterion {i}"
 
-    @patch("gandalf_grader.__main__.evaluate_all_criteria")
+    @patch("gandalf_grader.__main__.run_judge")
     def test_splits_3_uneven(self, mock_eval_all, tmp_path):
         """7 criteria split into chunks of [3, 3, 1]."""
         config = _make_config(
@@ -1216,7 +1215,7 @@ class TestBatchConcurrent:
         assert mock_eval_all.call_count == 3
         assert usage["cost_usd"] == pytest.approx(0.3)
 
-    @patch("gandalf_grader.__main__.evaluate_all_criteria")
+    @patch("gandalf_grader.__main__.run_judge")
     def test_splits_exceeds_rubric_size(self, mock_eval_all, tmp_path):
         """splits=5 with 3 criteria → 3 chunks of 1 each."""
         config = _make_config(
@@ -1243,7 +1242,7 @@ class TestBatchConcurrent:
         assert mock_eval_all.call_count == 3
         assert usage["cost_usd"] == pytest.approx(0.15)
 
-    @patch("gandalf_grader.__main__.evaluate_all_criteria")
+    @patch("gandalf_grader.__main__.run_judge")
     def test_trace_file_naming(self, mock_eval_all, tmp_path):
         """Each split gets a unique trace path."""
         config = _make_config(
@@ -1276,7 +1275,7 @@ class TestBatchConcurrent:
         assert trace_basenames[0] == "judge_trace_batch_split0.txt"
         assert trace_basenames[1] == "judge_trace_batch_split1.txt"
 
-    @patch("gandalf_grader.__main__.evaluate_all_criteria")
+    @patch("gandalf_grader.__main__.run_judge")
     def test_errored_criteria_in_split(self, mock_eval_all, tmp_path):
         """Errors in one split are properly reflected in merged results."""
         config = _make_config(
@@ -1315,7 +1314,7 @@ class TestBatchConcurrent:
         assert results[2].met is None  # errored in second split
         assert results[3].met is True
 
-    @patch("gandalf_grader.__main__.evaluate_all_criteria")
+    @patch("gandalf_grader.__main__.run_judge")
     def test_timeout_per_split(self, mock_eval_all, tmp_path):
         """Each split's timeout is based on its chunk size, not total rubric."""
         config = _make_config(
@@ -1345,7 +1344,7 @@ class TestBatchConcurrent:
         # Each split has 2 criteria → timeout = 100 * 2 = 200
         assert all(t == 200 for t in timeouts)
 
-    @patch("gandalf_grader.__main__.evaluate_all_criteria")
+    @patch("gandalf_grader.__main__.run_judge")
     def test_batch_timeout_cap_per_split(self, mock_eval_all, tmp_path):
         """batch_timeout caps each split's timeout independently."""
         config = _make_config(
@@ -1380,7 +1379,7 @@ class TestBatchConcurrent:
     @patch("gandalf_grader.__main__.load_trajectory_final_output", return_value="done")
     @patch("gandalf_grader.__main__.load_rubric")
     @patch("gandalf_grader.__main__.load_config")
-    @patch("gandalf_grader.__main__.evaluate_all_criteria")
+    @patch("gandalf_grader.__main__.run_judge")
     def test_main_dispatches_batch_concurrent(
         self, mock_eval_all, mock_config, mock_rubric, mock_trajectory, mock_guidance, tmp_path
     ):
@@ -1425,7 +1424,7 @@ class TestBatchConcurrent:
     @patch("gandalf_grader.__main__.load_trajectory_final_output", return_value="done")
     @patch("gandalf_grader.__main__.load_rubric")
     @patch("gandalf_grader.__main__.load_config")
-    @patch("gandalf_grader.__main__.evaluate_all_criteria")
+    @patch("gandalf_grader.__main__.run_judge")
     def test_retry_after_batch_concurrent(
         self, mock_eval_all, mock_config, mock_rubric, mock_trajectory, mock_guidance, tmp_path
     ):
@@ -1486,7 +1485,7 @@ class TestBatchConcurrent:
 
     # -- Error scenario tests (no partial scores) --
 
-    @patch("gandalf_grader.__main__.evaluate_all_criteria")
+    @patch("gandalf_grader.__main__.run_judge")
     def test_one_split_crashes_criteria_errored(self, mock_eval_all, tmp_path):
         """When one split's subprocess crashes, its criteria get met=None."""
         config = _make_config(
@@ -1522,7 +1521,7 @@ class TestBatchConcurrent:
         assert results[2].met is None
         assert results[3].met is None
 
-    @patch("gandalf_grader.__main__.evaluate_all_criteria")
+    @patch("gandalf_grader.__main__.run_judge")
     def test_one_split_times_out(self, mock_eval_all, tmp_path):
         """When one split times out, its criteria get met=None."""
         config = _make_config(
@@ -1556,7 +1555,7 @@ class TestBatchConcurrent:
         assert results[2].met is None
         assert "timed out" in results[2].reasoning
 
-    @patch("gandalf_grader.__main__.evaluate_all_criteria")
+    @patch("gandalf_grader.__main__.run_judge")
     def test_all_splits_fail(self, mock_eval_all, tmp_path):
         """When all splits fail, every criterion has met=None."""
         config = _make_config(
@@ -1585,7 +1584,7 @@ class TestBatchConcurrent:
     @patch("gandalf_grader.__main__.load_trajectory_final_output", return_value="done")
     @patch("gandalf_grader.__main__.load_rubric")
     @patch("gandalf_grader.__main__.load_config")
-    @patch("gandalf_grader.__main__.evaluate_all_criteria")
+    @patch("gandalf_grader.__main__.run_judge")
     def test_no_partial_scores_when_split_fails(
         self, mock_eval_all, mock_config, mock_rubric, mock_trajectory, mock_guidance, tmp_path
     ):
@@ -1648,9 +1647,9 @@ class TestBatchConcurrent:
         assert info["criteria_results"][3]["met"] is None
         assert info["errored_criteria_count"] == 2
 
-    @patch("gandalf_grader.__main__.evaluate_all_criteria")
+    @patch("gandalf_grader.__main__.run_judge")
     def test_split_future_raises_exception(self, mock_eval_all, tmp_path):
-        """When evaluate_all_criteria raises an unhandled exception, all criteria fail gracefully."""
+        """When run_judge raises an unhandled exception, all criteria fail gracefully."""
         config = _make_config(
             workdir=str(tmp_path),
             output_dir=str(tmp_path / "output"),
@@ -1681,7 +1680,7 @@ class TestBatchConcurrent:
         # Usage must be reset to stay consistent with all-error results
         assert usage == {}
 
-    @patch("gandalf_grader.__main__.evaluate_all_criteria")
+    @patch("gandalf_grader.__main__.run_judge")
     def test_split_returns_fewer_verdicts(self, mock_eval_all, tmp_path):
         """When a split returns fewer verdicts than criteria, missing ones get met=None."""
         config = _make_config(

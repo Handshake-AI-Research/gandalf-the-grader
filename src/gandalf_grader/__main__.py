@@ -151,142 +151,60 @@ def _clone_workspace(src: str) -> str:
     return clone_dir
 
 
-def evaluate_criteria(
-    judge_input: JudgeInput,
-    sandbox_user: str,
-    trace_path: str,
-    timeout: int = 300,
-) -> dict[str, Any]:
-    """Run the inner judge as the sandbox user for a single criteria."""
-    try:
-        clone_dir = _clone_workspace(judge_input.workdir)
-    except Exception as e:
-        return {"met": None, "reasoning": f"Failed to clone workspace: {e}"}
-
-    cloned_input = judge_input.model_copy(update={"workdir": clone_dir})
-
-    with tempfile.NamedTemporaryFile(
-        mode="w",
-        suffix=".json",
-        prefix="judge_input_",
-        dir=clone_dir,
-        delete=False,
-    ) as input_f:
-        input_f.write(cloned_input.model_dump_json())
-        input_path = input_f.name
-
-    # Pre-create the output file so sandbox_user can write to it without
-    # needing general write access to /tmp (which may not be world-writable).
-    with tempfile.NamedTemporaryFile(
-        mode="w",
-        suffix=".json",
-        prefix="judge_output_",
-        dir=clone_dir,
-        delete=False,
-    ) as output_f:
-        output_path = output_f.name
-    os.chmod(output_path, 0o666)
-
-    try:
-        os.chmod(input_path, 0o644)
-        cmd = [
-            "sudo",
-            "-u",
-            sandbox_user,
-            "env",
-            # Set HOME to the cloned workspace so the judge process (and any
-            # SDK it imports, e.g. OpenHands) writes ephemeral state to a
-            # writable, isolated directory instead of the original user's home.
-            f"HOME={clone_dir}",
-            *_judge_env_vars(),
-            "gandalf-grader-judge",
-            "--input",
-            input_path,
-            "--output",
-            output_path,
-        ]
-
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            cwd=clone_dir,
-        )
-
-        _save_trace(trace_path, result.stdout, result.stderr, result.returncode)
-
-        if result.returncode != 0:
-            return {
-                "met": None,
-                "reasoning": f"Judge process failed (exit {result.returncode}): {result.stderr[:500]}",
-            }
-
-        with open(output_path) as f:
-            result_data: dict[str, Any] = json.load(f)
-            return result_data
-
-    except subprocess.TimeoutExpired:
-        _save_trace(trace_path, "", "Judge execution timed out.", -1)
-        return {"met": None, "reasoning": "Judge execution timed out."}
-    except (json.JSONDecodeError, FileNotFoundError) as e:
-        return {"met": None, "reasoning": f"Failed to read judge output: {e}"}
-    finally:
-        shutil.rmtree(clone_dir, ignore_errors=True)
-        for path in (input_path, output_path):
-            with contextlib.suppress(OSError):
-                os.unlink(path)
-
-
 def _fail_all(n: int, reason: str) -> list[dict[str, Any]]:
     """Return *n* fail verdicts that all share the same reason."""
     return [{"index": i, "met": None, "reasoning": reason, "evidence": []} for i in range(n)]
 
 
-def evaluate_all_criteria(
-    judge_input: BatchJudgeInput,
+def run_judge(
+    judge_input: JudgeInput | BatchJudgeInput,
     sandbox_user: str,
     trace_path: str,
     timeout: int = 300,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    """Run the inner judge in batch mode -- all criteria in one agent session.
+    """Run the inner judge as the sandbox user for single or batch criteria.
+
+    Detects batch vs single mode from the input type (isinstance check).
 
     Args:
-        judge_input: Batch input with all context needed by the judge.
+        judge_input: Either a JudgeInput (single criterion) or BatchJudgeInput (batch).
         sandbox_user: Username to run the judge process as (via sudo).
         trace_path: Path to write the judge's stdout/stderr trace.
         timeout: Max seconds to wait for the judge to complete.
 
     Returns:
         (verdicts, llm_usage) where verdicts is a list of dicts each with
-        ``index``, ``met``, ``reasoning``, ``evidence``, and llm_usage
-        is the aggregate token/cost dict for the single batch session.
+        verdict fields, and llm_usage is the aggregate token/cost dict.
+        For single-criterion input, verdicts is a one-element list.
     """
-    n_criteria = len(judge_input.criteria)
+    is_batch = isinstance(judge_input, BatchJudgeInput)
+    n_criteria = len(judge_input.criteria) if is_batch else 1
 
     try:
         clone_dir = _clone_workspace(judge_input.workdir)
     except Exception as e:
-        return _fail_all(n_criteria, f"Failed to clone workspace: {e}"), {}
+        if is_batch:
+            return _fail_all(n_criteria, f"Failed to clone workspace: {e}"), {}
+        return [{"met": None, "reasoning": f"Failed to clone workspace: {e}"}], {}
 
     cloned_input = judge_input.model_copy(update={"workdir": clone_dir})
 
+    prefix = "judge_batch_input_" if is_batch else "judge_input_"
     with tempfile.NamedTemporaryFile(
         mode="w",
         suffix=".json",
-        prefix="judge_batch_input_",
+        prefix=prefix,
         dir=clone_dir,
         delete=False,
     ) as input_f:
         input_f.write(cloned_input.model_dump_json())
         input_path = input_f.name
 
-    # Pre-create the output file so sandbox_user can write to it without
-    # needing general write access to /tmp (which may not be world-writable).
+    output_prefix = "judge_batch_output_" if is_batch else "judge_output_"
     with tempfile.NamedTemporaryFile(
         mode="w",
         suffix=".json",
-        prefix="judge_batch_output_",
+        prefix=output_prefix,
         dir=clone_dir,
         delete=False,
     ) as output_f:
@@ -295,15 +213,11 @@ def evaluate_all_criteria(
 
     try:
         os.chmod(input_path, 0o644)
-
         cmd = [
             "sudo",
             "-u",
             sandbox_user,
             "env",
-            # Set HOME to the cloned workspace so the judge process (and any
-            # SDK it imports, e.g. OpenHands) writes ephemeral state to a
-            # writable, isolated directory instead of the original user's home.
             f"HOME={clone_dir}",
             *_judge_env_vars(),
             "gandalf-grader-judge",
@@ -311,8 +225,9 @@ def evaluate_all_criteria(
             input_path,
             "--output",
             output_path,
-            "--batch",
         ]
+        if is_batch:
+            cmd.append("--batch")
 
         result = subprocess.run(
             cmd,
@@ -326,28 +241,35 @@ def evaluate_all_criteria(
 
         if result.returncode != 0:
             reason = f"Judge process failed (exit {result.returncode}): {result.stderr[:500]}"
-            return _fail_all(n_criteria, reason), {}
+            if is_batch:
+                return _fail_all(n_criteria, reason), {}
+            return [{"met": None, "reasoning": reason}], {}
 
         with open(output_path) as f:
             data = json.load(f)
 
+        if is_batch:
             if isinstance(data, dict):
                 verdicts = data.get("verdicts", [])
                 llm_usage = data.get("llm_usage", {})
                 return verdicts, llm_usage
-
             if isinstance(data, list):
-                # Legacy format: bare JSON array of verdicts, no usage info.
                 return data, {}
-
             reason = f"Unexpected JSON type from judge: {type(data).__name__}"
             return _fail_all(n_criteria, reason), {}
+        else:
+            return [data], {}
 
     except subprocess.TimeoutExpired:
-        _save_trace(trace_path, "", "Batch judge execution timed out.", -1)
-        return _fail_all(n_criteria, "Judge execution timed out."), {}
+        if is_batch:
+            _save_trace(trace_path, "", "Batch judge execution timed out.", -1)
+            return _fail_all(n_criteria, "Judge execution timed out."), {}
+        _save_trace(trace_path, "", "Judge execution timed out.", -1)
+        return [{"met": None, "reasoning": "Judge execution timed out."}], {}
     except (json.JSONDecodeError, FileNotFoundError, TypeError, AttributeError) as e:
-        return _fail_all(n_criteria, f"Failed to read judge output: {e}"), {}
+        if is_batch:
+            return _fail_all(n_criteria, f"Failed to read judge output: {e}"), {}
+        return [{"met": None, "reasoning": f"Failed to read judge output: {e}"}], {}
     finally:
         shutil.rmtree(clone_dir, ignore_errors=True)
         for path in (input_path, output_path):
@@ -393,12 +315,13 @@ def _run_individual(
         )
 
         trace_path = os.path.join(config.output_dir, f"judge_trace_{i}.txt")
-        verdict = evaluate_criteria(
+        verdicts, _ = run_judge(
             judge_input,
             sandbox_user=config.sandbox_user,
             trace_path=trace_path,
             timeout=config.judge_timeout,
         )
+        verdict = verdicts[0]
 
         usage = verdict.get("llm_usage", {})
         result = CriteriaResult(
@@ -482,7 +405,7 @@ def _run_batch(
     )
 
     trace_path = os.path.join(config.output_dir, "judge_trace_batch.txt")
-    verdicts, llm_usage = evaluate_all_criteria(
+    verdicts, llm_usage = run_judge(
         judge_input,
         sandbox_user=config.sandbox_user,
         trace_path=trace_path,
@@ -565,7 +488,7 @@ def _run_batch_concurrent(
         trace_path = os.path.join(
             config.output_dir, f"judge_trace_batch_split{split_idx}.txt"
         )
-        verdicts, llm_usage = evaluate_all_criteria(
+        verdicts, llm_usage = run_judge(
             judge_input,
             sandbox_user=config.sandbox_user,
             trace_path=trace_path,
@@ -639,7 +562,7 @@ def _get_errored_indices(results: list[CriteriaResult]) -> list[int]:
     return [i for i, r in enumerate(results) if r.met is None]
 
 
-def _retry_individual(
+def apply_retries(
     config: VerifierConfig,
     rubric: list[RubricItem],
     results: list[CriteriaResult],
@@ -648,101 +571,66 @@ def _retry_individual(
     judge_guidance: str,
     errored_indices: list[int],
 ) -> None:
-    """Re-run each errored criterion individually and merge results in-place."""
-    for idx in errored_indices:
-        item = rubric[idx]
-        print(f"  [retry {idx}] Evaluating: {item.criteria[:80]}...")
-
-        judge_input = JudgeInput(
-            model=config.model,
-            instructions=config.instructions,
-            final_output=final_output,
-            criteria=item.criteria,
-            workdir=config.workdir,
-            mcp_servers=config.mcp_servers,
+    """Re-run errored criteria and merge results in-place."""
+    if config.mode == "batch":
+        retry_criteria = [
+            BatchCriterion(index=new_idx, criteria=rubric[orig_idx].criteria)
+            for new_idx, orig_idx in enumerate(errored_indices)
+        ]
+        n_retry = len(retry_criteria)
+        batch_timeout = config.judge_timeout * n_retry
+        if config.batch_timeout is not None:
+            batch_timeout = min(batch_timeout, config.batch_timeout)
+        print(f"  [retry batch] Re-evaluating {n_retry} criteria (timeout={batch_timeout}s)...")
+        judge_input = BatchJudgeInput(
+            model=config.model, instructions=config.instructions,
+            final_output=final_output, criteria=retry_criteria,
+            workdir=config.workdir, mcp_servers=config.mcp_servers,
             judge_guidance=judge_guidance,
         )
-
-        trace_path = os.path.join(config.output_dir, f"judge_trace_{idx}_retry.txt")
-        verdict = evaluate_criteria(
-            judge_input,
-            sandbox_user=config.sandbox_user,
-            trace_path=trace_path,
-            timeout=config.judge_timeout,
+        trace_path = os.path.join(config.output_dir, "judge_trace_batch_retry.txt")
+        verdicts, retry_usage = run_judge(
+            judge_input, sandbox_user=config.sandbox_user,
+            trace_path=trace_path, timeout=batch_timeout,
         )
-
-        usage = verdict.get("llm_usage", {})
         for key in ("cost_usd", "prompt_tokens", "completion_tokens", "cache_read_tokens"):
-            llm_usage[key] = llm_usage.get(key, 0) + usage.get(key, 0)
-
-        results[idx] = CriteriaResult(
-            criteria=item.criteria,
-            weight=item.weight,
-            met=verdict.get("met"),
-            reasoning=verdict.get("reasoning", "No reasoning provided."),
-            evidence=verdict.get("evidence", []),
-        )
-
-        status = "MET" if results[idx].met is True else ("ERROR" if results[idx].met is None else "UNMET")
-        print(f"    -> {status}: {results[idx].reasoning[:120]}")
-
-
-def _retry_batch(
-    config: VerifierConfig,
-    rubric: list[RubricItem],
-    results: list[CriteriaResult],
-    llm_usage: dict[str, Any],
-    final_output: str,
-    judge_guidance: str,
-    errored_indices: list[int],
-) -> None:
-    """Re-run errored criteria as a batch and merge results in-place."""
-    retry_criteria = [
-        BatchCriterion(index=new_idx, criteria=rubric[orig_idx].criteria)
-        for new_idx, orig_idx in enumerate(errored_indices)
-    ]
-
-    n_retry = len(retry_criteria)
-    batch_timeout = config.judge_timeout * n_retry
-    if config.batch_timeout is not None:
-        batch_timeout = min(batch_timeout, config.batch_timeout)
-
-    print(f"  [retry batch] Re-evaluating {n_retry} criteria (timeout={batch_timeout}s)...")
-
-    judge_input = BatchJudgeInput(
-        model=config.model,
-        instructions=config.instructions,
-        final_output=final_output,
-        criteria=retry_criteria,
-        workdir=config.workdir,
-        mcp_servers=config.mcp_servers,
-        judge_guidance=judge_guidance,
-    )
-
-    trace_path = os.path.join(config.output_dir, "judge_trace_batch_retry.txt")
-    verdicts, retry_usage = evaluate_all_criteria(
-        judge_input,
-        sandbox_user=config.sandbox_user,
-        trace_path=trace_path,
-        timeout=batch_timeout,
-    )
-
-    for key in ("cost_usd", "prompt_tokens", "completion_tokens", "cache_read_tokens"):
-        llm_usage[key] = llm_usage.get(key, 0) + retry_usage.get(key, 0)
-
-    for new_idx, orig_idx in enumerate(errored_indices):
-        v = verdicts[new_idx] if new_idx < len(verdicts) else {}
-        results[orig_idx] = CriteriaResult(
-            criteria=rubric[orig_idx].criteria,
-            weight=rubric[orig_idx].weight,
-            met=v.get("met"),
-            reasoning=v.get("reasoning", "No reasoning provided."),
-            evidence=v.get("evidence", []),
-        )
-
-        met = results[orig_idx].met
-        status = "MET" if met is True else ("ERROR" if met is None else "UNMET")
-        print(f"    [{orig_idx}] {status}: {results[orig_idx].reasoning[:120]}")
+            llm_usage[key] = llm_usage.get(key, 0) + retry_usage.get(key, 0)
+        for new_idx, orig_idx in enumerate(errored_indices):
+            v = verdicts[new_idx] if new_idx < len(verdicts) else {}
+            results[orig_idx] = CriteriaResult(
+                criteria=rubric[orig_idx].criteria, weight=rubric[orig_idx].weight,
+                met=v.get("met"), reasoning=v.get("reasoning", "No reasoning provided."),
+                evidence=v.get("evidence", []),
+            )
+            met = results[orig_idx].met
+            status = "MET" if met is True else ("ERROR" if met is None else "UNMET")
+            print(f"    [{orig_idx}] {status}: {results[orig_idx].reasoning[:120]}")
+    else:
+        for idx in errored_indices:
+            item = rubric[idx]
+            print(f"  [retry {idx}] Evaluating: {item.criteria[:80]}...")
+            judge_input = JudgeInput(
+                model=config.model, instructions=config.instructions,
+                final_output=final_output, criteria=item.criteria,
+                workdir=config.workdir, mcp_servers=config.mcp_servers,
+                judge_guidance=judge_guidance,
+            )
+            trace_path = os.path.join(config.output_dir, f"judge_trace_{idx}_retry.txt")
+            verdicts, _ = run_judge(
+                judge_input, sandbox_user=config.sandbox_user,
+                trace_path=trace_path, timeout=config.judge_timeout,
+            )
+            verdict = verdicts[0]
+            usage = verdict.get("llm_usage", {})
+            for key in ("cost_usd", "prompt_tokens", "completion_tokens", "cache_read_tokens"):
+                llm_usage[key] = llm_usage.get(key, 0) + usage.get(key, 0)
+            results[idx] = CriteriaResult(
+                criteria=item.criteria, weight=item.weight,
+                met=verdict.get("met"), reasoning=verdict.get("reasoning", "No reasoning provided."),
+                evidence=verdict.get("evidence", []),
+            )
+            status = "MET" if results[idx].met is True else ("ERROR" if results[idx].met is None else "UNMET")
+            print(f"    -> {status}: {results[idx].reasoning[:120]}")
 
 
 def _write_info(
@@ -835,10 +723,7 @@ def main() -> None:
         if not errored:
             break
         print(f"\n[retry {attempt + 1}/{config.judge_retries}] Retrying {len(errored)} errored criteria...")
-        if config.mode == "batch":
-            _retry_batch(config, rubric, results, llm_usage, final_output, judge_guidance, errored)
-        else:
-            _retry_individual(config, rubric, results, llm_usage, final_output, judge_guidance, errored)
+        apply_retries(config, rubric, results, llm_usage, final_output, judge_guidance, errored)
 
     # 4. ALWAYS write info.json (even on hard fail)
     final_errored = _get_errored_indices(results)
