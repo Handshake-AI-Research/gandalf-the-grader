@@ -1,14 +1,14 @@
-"""Tests for gandalf_grader.judge."""
+"""Tests for gandalf.judge."""
 
 import json
 import tempfile
 from unittest.mock import patch
 
-from gandalf_grader.judge import (
-    _make_verdict_path,
-    _read_batch_verdict,
-    _read_verdict,
-    _sanitize_json,
+from gandalf.judge import (
+    make_verdict_path,
+    read_batch_verdict,
+    read_verdict,
+    sanitize_json,
     build_judge_prompt,
     run_judge,
     run_judge_batch,
@@ -16,54 +16,54 @@ from gandalf_grader.judge import (
 
 
 class TestSanitizeJson:
-    """Tests for _sanitize_json — fixes invalid backslash escapes from LLM output."""
+    """Tests for sanitize_json — fixes invalid backslash escapes from LLM output."""
 
     def test_passthrough_valid_json(self):
         valid = '{"key": "value with \\\\ and \\n and \\t"}'
-        assert _sanitize_json(valid) == valid
+        assert sanitize_json(valid) == valid
 
     def test_fixes_backslash_dollar(self):
         raw = r'{"evidence": "format: \$#,##0"}'
-        fixed = _sanitize_json(raw)
+        fixed = sanitize_json(raw)
         assert json.loads(fixed)["evidence"] == "format: \\$#,##0"
 
     def test_preserves_already_escaped_backslash_dollar(self):
         raw = r'{"evidence": "format: \\$#,##0"}'
-        fixed = _sanitize_json(raw)
+        fixed = sanitize_json(raw)
         assert fixed == raw
         assert json.loads(fixed)["evidence"] == "format: \\$#,##0"
 
     def test_fixes_backslash_paren(self):
         raw = r'{"evidence": "format: \(0.00\)"}'
-        fixed = _sanitize_json(raw)
+        fixed = sanitize_json(raw)
         parsed = json.loads(fixed)
         assert "\\(" in parsed["evidence"]
 
     def test_preserves_valid_escapes(self):
         raw = r'{"a": "line1\nline2", "b": "tab\there", "c": "quote\"d"}'
-        assert _sanitize_json(raw) == raw
+        assert sanitize_json(raw) == raw
 
     def test_preserves_unicode_escapes(self):
         raw = r'{"a": "\u0041"}'
-        assert _sanitize_json(raw) == raw
-        assert json.loads(_sanitize_json(raw))["a"] == "A"
+        assert sanitize_json(raw) == raw
+        assert json.loads(sanitize_json(raw))["a"] == "A"
 
     def test_fixes_truncated_unicode_escape(self):
         raw = r'{"evidence": "bad unicode: \u12"}'
-        fixed = _sanitize_json(raw)
+        fixed = sanitize_json(raw)
         parsed = json.loads(fixed)
         assert parsed["evidence"] == r"bad unicode: \u12"
 
     def test_fixes_non_hex_unicode_escape(self):
         raw = r'{"evidence": "bad unicode: \uZZZZ"}'
-        fixed = _sanitize_json(raw)
+        fixed = sanitize_json(raw)
         parsed = json.loads(fixed)
         assert parsed["evidence"] == r"bad unicode: \uZZZZ"
 
     def test_excel_number_format_roundtrip(self):
         """Reproduces the exact pattern that caused the observed failure."""
         raw = r'{"evidence": "DCF_Debt!L37 format: \$#,##0;(\$#,##0)"}'
-        fixed = _sanitize_json(raw)
+        fixed = sanitize_json(raw)
         parsed = json.loads(fixed)
         assert "\\$#,##0" in parsed["evidence"]
 
@@ -173,7 +173,7 @@ class TestMakeVerdictPath:
     """
 
     def test_default_uses_system_tmpdir(self):
-        path = _make_verdict_path()
+        path = make_verdict_path()
         assert path.startswith(tempfile.gettempdir())
         assert "verdict_" in path
         assert path.endswith(".json")
@@ -181,17 +181,17 @@ class TestMakeVerdictPath:
     def test_dir_overrides_tmpdir(self, tmp_path):
         """When dir is provided the verdict path must be inside it, not in /tmp.
 
-        This test fails on the pre-fix code (_make_verdict_path had no dir param)
+        This test fails on the pre-fix code (make_verdict_path had no dir param)
         and passes with the fix.
         """
-        path = _make_verdict_path(dir=str(tmp_path))
+        path = make_verdict_path(dir=str(tmp_path))
         assert path.startswith(str(tmp_path)), (
             f"Verdict path {path!r} should be inside workdir {tmp_path}, "
             "not in /tmp — sandbox_user may lack /tmp write access"
         )
 
     def test_run_judge_verdict_goes_to_workdir(self, tmp_path):
-        """run_judge must pass workdir to _make_verdict_path, not rely on /tmp.
+        """run_judge must pass workdir to make_verdict_path, not rely on /tmp.
 
         This test fails on the pre-fix code (verdict_path always used /tmp)
         and passes with the fix (verdict_path uses judge_input.workdir).
@@ -200,7 +200,7 @@ class TestMakeVerdictPath:
             "model": "test-model",
             "instructions": "do a thing",
             "final_output": "done",
-            "criteria": "check something",
+            "criterion": "check something",
             "workdir": str(tmp_path),
         }
         input_path = str(tmp_path / "input.json")
@@ -209,7 +209,7 @@ class TestMakeVerdictPath:
 
         captured_verdict_dir = {}
 
-        def _fake_make_verdict_path(prefix="verdict_", dir=None):
+        def _fakemake_verdict_path(prefix="verdict_", dir=None):
             captured_verdict_dir["dir"] = dir
             # Return a path inside tmp_path so the test can write the verdict
             p = str(tmp_path / f"{prefix}test.json")
@@ -218,12 +218,12 @@ class TestMakeVerdictPath:
             )
             return p
 
-        with patch("gandalf_grader.judge._make_verdict_path", side_effect=_fake_make_verdict_path):
-            with patch("gandalf_grader.judge._run_agent_session", return_value={}):
+        with patch("gandalf.judge.make_verdict_path", side_effect=_fakemake_verdict_path):
+            with patch("gandalf.judge.run_agent_session", return_value={}):
                 run_judge(input_path, output_path)
 
         assert captured_verdict_dir.get("dir") == str(tmp_path), (
-            f"run_judge passed dir={captured_verdict_dir.get('dir')!r} to _make_verdict_path "
+            f"run_judge passed dir={captured_verdict_dir.get('dir')!r} to make_verdict_path "
             f"but expected workdir={str(tmp_path)!r} — "
             "sandbox_user would need to create the verdict file in /tmp instead"
         )
@@ -241,7 +241,7 @@ class TestReadVerdict:
                 }
             )
         )
-        result = _read_verdict(str(p))
+        result = read_verdict(str(p))
         assert result.met is True
         assert result.reasoning == "Looks good."
         assert result.evidence == ["checked file"]
@@ -249,7 +249,7 @@ class TestReadVerdict:
     def test_missing_evidence_defaults_to_empty(self, tmp_path):
         p = tmp_path / "verdict.json"
         p.write_text(json.dumps({"met": True, "reasoning": "ok"}))
-        result = _read_verdict(str(p))
+        result = read_verdict(str(p))
         assert result.met is True
         assert result.evidence == []
 
@@ -257,45 +257,45 @@ class TestReadVerdict:
         """If the judge writes {"met": null}, it must stay None, not become False."""
         p = tmp_path / "verdict.json"
         p.write_text(json.dumps({"met": None, "reasoning": "judge errored internally"}))
-        result = _read_verdict(str(p))
+        result = read_verdict(str(p))
         assert result.met is None
 
     def test_empty_file(self, tmp_path):
         p = tmp_path / "verdict.json"
         p.write_text("")
-        result = _read_verdict(str(p))
+        result = read_verdict(str(p))
         assert result.met is None
         assert "empty" in result.reasoning.lower()
 
     def test_missing_file(self):
-        result = _read_verdict("/nonexistent/verdict.json")
+        result = read_verdict("/nonexistent/verdict.json")
         assert result.met is None
         assert "did not write" in result.reasoning.lower()
 
     def test_invalid_json(self, tmp_path):
         p = tmp_path / "verdict.json"
         p.write_text("not json at all")
-        result = _read_verdict(str(p))
+        result = read_verdict(str(p))
         assert result.met is None
         assert "invalid JSON" in result.reasoning
 
     def test_missing_met_field(self, tmp_path):
         p = tmp_path / "verdict.json"
         p.write_text(json.dumps({"reasoning": "no met field"}))
-        result = _read_verdict(str(p))
+        result = read_verdict(str(p))
         assert result.met is None
         assert "missing" in result.reasoning.lower()
 
     def test_recovers_from_invalid_escape(self, tmp_path):
         p = tmp_path / "verdict.json"
         p.write_text(r'{"met": true, "reasoning": "format is \$#,##0", "evidence": []}')
-        result = _read_verdict(str(p))
+        result = read_verdict(str(p))
         assert result.met is True
 
     def test_recovers_from_invalid_unicode_escape(self, tmp_path):
         p = tmp_path / "verdict.json"
         p.write_text(r'{"met": true, "reasoning": "bad unicode: \u12", "evidence": []}')
-        result = _read_verdict(str(p))
+        result = read_verdict(str(p))
         assert result.met is True
 
 
@@ -310,7 +310,7 @@ class TestReadBatchVerdict:
                 ]
             )
         )
-        results = _read_batch_verdict(str(p), 2)
+        results = read_batch_verdict(str(p), 2)
         assert len(results) == 2
         assert results[0]["met"] is True
         assert results[1]["met"] is False
@@ -318,7 +318,7 @@ class TestReadBatchVerdict:
     def test_missing_index_gets_default_fail(self, tmp_path):
         p = tmp_path / "verdict.json"
         p.write_text(json.dumps([{"index": 0, "met": True, "reasoning": "ok"}]))
-        results = _read_batch_verdict(str(p), 2)
+        results = read_batch_verdict(str(p), 2)
         assert results[0]["met"] is True
         assert results[1]["met"] is None
         assert "did not return" in results[1]["reasoning"].lower()
@@ -328,13 +328,13 @@ class TestReadBatchVerdict:
         p.write_text(
             json.dumps([{"index": "zero", "met": True, "reasoning": "ok"}])
         )
-        results = _read_batch_verdict(str(p), 1)
+        results = read_batch_verdict(str(p), 1)
         assert results[0]["met"] is None
 
     def test_out_of_range_index_skipped(self, tmp_path):
         p = tmp_path / "verdict.json"
         p.write_text(json.dumps([{"index": 5, "met": True, "reasoning": "ok"}]))
-        results = _read_batch_verdict(str(p), 2)
+        results = read_batch_verdict(str(p), 2)
         assert all(r["met"] is None for r in results)
 
     def test_duplicate_index_last_wins(self, tmp_path):
@@ -347,32 +347,32 @@ class TestReadBatchVerdict:
                 ]
             )
         )
-        results = _read_batch_verdict(str(p), 1)
+        results = read_batch_verdict(str(p), 1)
         assert results[0]["met"] is True
         assert results[0]["reasoning"] == "second"
 
     def test_empty_file(self, tmp_path):
         p = tmp_path / "verdict.json"
         p.write_text("")
-        results = _read_batch_verdict(str(p), 2)
+        results = read_batch_verdict(str(p), 2)
         assert len(results) == 2
         assert all(r["met"] is None for r in results)
 
     def test_missing_file(self):
-        results = _read_batch_verdict("/nonexistent/verdict.json", 2)
+        results = read_batch_verdict("/nonexistent/verdict.json", 2)
         assert len(results) == 2
         assert all(r["met"] is None for r in results)
 
     def test_invalid_json(self, tmp_path):
         p = tmp_path / "verdict.json"
         p.write_text("not json")
-        results = _read_batch_verdict(str(p), 1)
+        results = read_batch_verdict(str(p), 1)
         assert results[0]["met"] is None
 
     def test_non_array_json(self, tmp_path):
         p = tmp_path / "verdict.json"
         p.write_text(json.dumps({"not": "an array"}))
-        results = _read_batch_verdict(str(p), 1)
+        results = read_batch_verdict(str(p), 1)
         assert results[0]["met"] is None
 
     def test_recovers_from_invalid_escape(self, tmp_path):
@@ -380,7 +380,7 @@ class TestReadBatchVerdict:
         p.write_text(
             r'[{"index": 0, "met": true, "reasoning": "ok", "evidence": ["format: \$#,##0;(\$#,##0)"]}]'
         )
-        results = _read_batch_verdict(str(p), 1)
+        results = read_batch_verdict(str(p), 1)
         assert results[0]["met"] is True
         assert r"\$" in results[0]["evidence"][0]
 
@@ -389,7 +389,7 @@ class TestReadBatchVerdict:
         p.write_text(
             r'[{"index": 0, "met": true, "reasoning": "ok", "evidence": ["bad unicode: \u12"]}]'
         )
-        results = _read_batch_verdict(str(p), 1)
+        results = read_batch_verdict(str(p), 1)
         assert results[0]["met"] is True
         assert r"\u12" in results[0]["evidence"][0]
 
@@ -408,7 +408,7 @@ def _make_judge_input_json(tmp_path, criteria="check something"):
         "model": "test-model",
         "instructions": "do a thing",
         "final_output": "done",
-        "criteria": criteria,
+        "criterion": criteria,
         "workdir": str(tmp_path),
     }
     p = tmp_path / "input.json"
@@ -423,7 +423,7 @@ def _make_batch_judge_input_json(tmp_path, n=2):
         "instructions": "do a thing",
         "final_output": "done",
         "criteria": [
-            {"index": i, "criteria": f"criterion {i}"}
+            {"index": i, "criterion": f"criterion {i}"}
             for i in range(n)
         ],
         "workdir": str(tmp_path),
@@ -434,18 +434,18 @@ def _make_batch_judge_input_json(tmp_path, n=2):
 
 
 class TestRunJudge:
-    """Tests for run_judge — mocks _run_agent_session to avoid OpenHands."""
+    """Tests for run_judge — mocks run_agent_session to avoid OpenHands."""
 
-    @patch("gandalf_grader.judge._run_agent_session", return_value=MOCK_USAGE)
+    @patch("gandalf.judge.run_agent_session", return_value=MOCK_USAGE)
     def test_success_includes_usage(self, mock_session, tmp_path):
         input_path = _make_judge_input_json(tmp_path)
         output_path = str(tmp_path / "output.json")
 
         # Pre-create the verdict file that the agent would write.
-        # _make_verdict_path uses tempfile.gettempdir(), so we patch it.
+        # make_verdict_path uses tempfile.gettempdir(), so we patch it.
         verdict_data = {"met": True, "reasoning": "ok", "evidence": ["e1"]}
         with patch(
-            "gandalf_grader.judge._make_verdict_path",
+            "gandalf.judge.make_verdict_path",
             return_value=str(tmp_path / "verdict.json"),
         ):
             (tmp_path / "verdict.json").write_text(json.dumps(verdict_data))
@@ -455,14 +455,14 @@ class TestRunJudge:
         assert result["met"] is True
         assert result["llm_usage"]["cost_usd"] == 0.05
 
-    @patch("gandalf_grader.judge._run_agent_session", return_value=MOCK_USAGE)
+    @patch("gandalf.judge.run_agent_session", return_value=MOCK_USAGE)
     def test_preserves_usage_when_verdict_missing(self, mock_session, tmp_path):
-        """If _run_agent_session succeeds but verdict file is missing, cost is kept."""
+        """If run_agent_session succeeds but verdict file is missing, cost is kept."""
         input_path = _make_judge_input_json(tmp_path)
         output_path = str(tmp_path / "output.json")
 
         with patch(
-            "gandalf_grader.judge._make_verdict_path",
+            "gandalf.judge.make_verdict_path",
             return_value=str(tmp_path / "no_such_verdict.json"),
         ):
             run_judge(input_path, output_path)
@@ -473,16 +473,16 @@ class TestRunJudge:
         assert result["llm_usage"]["prompt_tokens"] == 1000
 
     @patch(
-        "gandalf_grader.judge._run_agent_session",
+        "gandalf.judge.run_agent_session",
         side_effect=RuntimeError("LLM exploded"),
     )
     def test_session_failure_has_empty_usage(self, mock_session, tmp_path):
-        """If _run_agent_session itself raises, usage stays empty."""
+        """If run_agent_session itself raises, usage stays empty."""
         input_path = _make_judge_input_json(tmp_path)
         output_path = str(tmp_path / "output.json")
 
         with patch(
-            "gandalf_grader.judge._make_verdict_path",
+            "gandalf.judge.make_verdict_path",
             return_value=str(tmp_path / "verdict.json"),
         ):
             run_judge(input_path, output_path)
@@ -492,20 +492,20 @@ class TestRunJudge:
         assert result["llm_usage"] == {}
         assert "LLM exploded" in result["reasoning"]
 
-    @patch("gandalf_grader.judge._run_agent_session", return_value=MOCK_USAGE)
+    @patch("gandalf.judge.run_agent_session", return_value=MOCK_USAGE)
     @patch(
-        "gandalf_grader.judge._read_verdict",
+        "gandalf.judge.read_verdict",
         side_effect=RuntimeError("Unexpected parsing error"),
     )
-    def test_preserves_usage_when_read_verdict_raises(
+    def test_preserves_usage_whenread_verdict_raises(
         self, mock_read, mock_session, tmp_path
     ):
-        """If _read_verdict raises after the session ran, usage is still preserved."""
+        """If read_verdict raises after the session ran, usage is still preserved."""
         input_path = _make_judge_input_json(tmp_path)
         output_path = str(tmp_path / "output.json")
 
         with patch(
-            "gandalf_grader.judge._make_verdict_path",
+            "gandalf.judge.make_verdict_path",
             return_value=str(tmp_path / "verdict.json"),
         ):
             run_judge(input_path, output_path)
@@ -518,9 +518,9 @@ class TestRunJudge:
 
 
 class TestRunJudgeBatch:
-    """Tests for run_judge_batch — mocks _run_agent_session to avoid OpenHands."""
+    """Tests for run_judge_batch — mocks run_agent_session to avoid OpenHands."""
 
-    @patch("gandalf_grader.judge._run_agent_session", return_value=MOCK_USAGE)
+    @patch("gandalf.judge.run_agent_session", return_value=MOCK_USAGE)
     def test_output_wraps_verdicts_and_usage(self, mock_session, tmp_path):
         input_path = _make_batch_judge_input_json(tmp_path, n=2)
         output_path = str(tmp_path / "output.json")
@@ -530,7 +530,7 @@ class TestRunJudgeBatch:
             {"index": 1, "met": False, "reasoning": "bad", "evidence": []},
         ]
         with patch(
-            "gandalf_grader.judge._make_verdict_path",
+            "gandalf.judge.make_verdict_path",
             return_value=str(tmp_path / "verdict.json"),
         ):
             (tmp_path / "verdict.json").write_text(json.dumps(verdict_data))
@@ -543,7 +543,7 @@ class TestRunJudgeBatch:
         assert data["verdicts"][0]["met"] is True
         assert data["llm_usage"]["cost_usd"] == 0.05
 
-    @patch("gandalf_grader.judge._run_agent_session", return_value=MOCK_USAGE)
+    @patch("gandalf.judge.run_agent_session", return_value=MOCK_USAGE)
     def test_no_per_verdict_usage_keys(self, mock_session, tmp_path):
         """Verdicts should NOT contain llm_usage — it's a sibling field."""
         input_path = _make_batch_judge_input_json(tmp_path, n=1)
@@ -551,7 +551,7 @@ class TestRunJudgeBatch:
 
         verdict_data = [{"index": 0, "met": True, "reasoning": "ok"}]
         with patch(
-            "gandalf_grader.judge._make_verdict_path",
+            "gandalf.judge.make_verdict_path",
             return_value=str(tmp_path / "verdict.json"),
         ):
             (tmp_path / "verdict.json").write_text(json.dumps(verdict_data))
@@ -561,13 +561,13 @@ class TestRunJudgeBatch:
         for v in data["verdicts"]:
             assert "llm_usage" not in v
 
-    @patch("gandalf_grader.judge._run_agent_session", return_value=MOCK_USAGE)
+    @patch("gandalf.judge.run_agent_session", return_value=MOCK_USAGE)
     def test_preserves_usage_when_verdict_missing(self, mock_session, tmp_path):
         input_path = _make_batch_judge_input_json(tmp_path, n=2)
         output_path = str(tmp_path / "output.json")
 
         with patch(
-            "gandalf_grader.judge._make_verdict_path",
+            "gandalf.judge.make_verdict_path",
             return_value=str(tmp_path / "no_such_verdict.json"),
         ):
             run_judge_batch(input_path, output_path)
@@ -577,7 +577,7 @@ class TestRunJudgeBatch:
         assert all(v["met"] is None for v in data["verdicts"])
 
     @patch(
-        "gandalf_grader.judge._run_agent_session",
+        "gandalf.judge.run_agent_session",
         side_effect=RuntimeError("LLM exploded"),
     )
     def test_session_failure_has_empty_usage(self, mock_session, tmp_path):
@@ -585,7 +585,7 @@ class TestRunJudgeBatch:
         output_path = str(tmp_path / "output.json")
 
         with patch(
-            "gandalf_grader.judge._make_verdict_path",
+            "gandalf.judge.make_verdict_path",
             return_value=str(tmp_path / "verdict.json"),
         ):
             run_judge_batch(input_path, output_path)
@@ -594,20 +594,20 @@ class TestRunJudgeBatch:
         assert data["llm_usage"] == {}
         assert all(v["met"] is None for v in data["verdicts"])
 
-    @patch("gandalf_grader.judge._run_agent_session", return_value=MOCK_USAGE)
+    @patch("gandalf.judge.run_agent_session", return_value=MOCK_USAGE)
     @patch(
-        "gandalf_grader.judge._read_batch_verdict",
+        "gandalf.judge.read_batch_verdict",
         side_effect=RuntimeError("Batch parsing blew up"),
     )
-    def test_preserves_usage_when_read_batch_verdict_raises(
+    def test_preserves_usage_whenread_batch_verdict_raises(
         self, mock_read, mock_session, tmp_path
     ):
-        """If _read_batch_verdict raises after the session ran, usage is preserved."""
+        """If read_batch_verdict raises after the session ran, usage is preserved."""
         input_path = _make_batch_judge_input_json(tmp_path, n=2)
         output_path = str(tmp_path / "output.json")
 
         with patch(
-            "gandalf_grader.judge._make_verdict_path",
+            "gandalf.judge.make_verdict_path",
             return_value=str(tmp_path / "verdict.json"),
         ):
             run_judge_batch(input_path, output_path)

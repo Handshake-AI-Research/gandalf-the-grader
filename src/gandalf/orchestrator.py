@@ -30,18 +30,32 @@ import tempfile
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
-from gandalf_grader.config import (
+from gandalf.models import (
     BatchCriterion,
     BatchJudgeInput,
-    CriteriaResult,
+    CriterionResult,
     EvaluationInfo,
     JudgeInput,
     RubricItem,
-    VerifierConfig,
+    GraderConfig,
     load_config,
     load_rubric,
 )
-from gandalf_grader.trajectory import load_trajectory_final_output
+
+
+def load_trajectory_final_output(path: str) -> str:
+    """Load an ATIF trajectory file and extract the final agent message."""
+    with open(path) as f:
+        data = json.load(f)
+    steps = data.get("steps", [])
+    final_output = ""
+    for step in reversed(steps):
+        if step.get("source") == "agent" and not step.get("tool_calls"):
+            msg = step.get("message", "")
+            if msg.strip():
+                final_output = msg
+                break
+    return final_output
 
 # Environment variables forwarded to the inner judge subprocess (via sudo).
 # Only these are passed — everything else is stripped to avoid leaking secrets
@@ -62,12 +76,12 @@ _JUDGE_ENV_ALLOWLIST = (
 )
 
 
-def _judge_env_vars() -> list[str]:
+def judge_env_vars() -> list[str]:
     """Build the ``KEY=VALUE`` list for the judge subprocess environment."""
     return [f"{k}={v}" for k, v in os.environ.items() if k in _JUDGE_ENV_ALLOWLIST and v]
 
 
-def resolve_judge_guidance(config: VerifierConfig) -> str:
+def resolve_judge_guidance(config: GraderConfig) -> str:
     """Resolve and load judge guidance content.
 
     Resolution order:
@@ -98,7 +112,7 @@ def resolve_judge_guidance(config: VerifierConfig) -> str:
         return f.read()
 
 
-def _clone_workspace(src: str) -> str:
+def clone_workspace(src: str) -> str:
     """Clone workspace into a temp directory accessible to the sandbox user.
 
     Walks the source tree once, skipping unreadable directories and files with
@@ -159,7 +173,7 @@ def evaluate_criteria(
 ) -> dict[str, Any]:
     """Run the inner judge as the sandbox user for a single criteria."""
     try:
-        clone_dir = _clone_workspace(judge_input.workdir)
+        clone_dir = clone_workspace(judge_input.workdir)
     except Exception as e:
         return {"met": None, "reasoning": f"Failed to clone workspace: {e}"}
 
@@ -198,7 +212,7 @@ def evaluate_criteria(
             # SDK it imports, e.g. OpenHands) writes ephemeral state to a
             # writable, isolated directory instead of the original user's home.
             f"HOME={clone_dir}",
-            *_judge_env_vars(),
+            *judge_env_vars(),
             "gandalf-grader-judge",
             "--input",
             input_path,
@@ -214,7 +228,7 @@ def evaluate_criteria(
             cwd=clone_dir,
         )
 
-        _save_trace(trace_path, result.stdout, result.stderr, result.returncode)
+        save_trace(trace_path, result.stdout, result.stderr, result.returncode)
 
         if result.returncode != 0:
             return {
@@ -227,7 +241,7 @@ def evaluate_criteria(
             return result_data
 
     except subprocess.TimeoutExpired:
-        _save_trace(trace_path, "", "Judge execution timed out.", -1)
+        save_trace(trace_path, "", "Judge execution timed out.", -1)
         return {"met": None, "reasoning": "Judge execution timed out."}
     except (json.JSONDecodeError, FileNotFoundError) as e:
         return {"met": None, "reasoning": f"Failed to read judge output: {e}"}
@@ -238,7 +252,7 @@ def evaluate_criteria(
                 os.unlink(path)
 
 
-def _fail_all(n: int, reason: str) -> list[dict[str, Any]]:
+def fail_all(n: int, reason: str) -> list[dict[str, Any]]:
     """Return *n* fail verdicts that all share the same reason."""
     return [{"index": i, "met": None, "reasoning": reason, "evidence": []} for i in range(n)]
 
@@ -265,9 +279,9 @@ def evaluate_all_criteria(
     n_criteria = len(judge_input.criteria)
 
     try:
-        clone_dir = _clone_workspace(judge_input.workdir)
+        clone_dir = clone_workspace(judge_input.workdir)
     except Exception as e:
-        return _fail_all(n_criteria, f"Failed to clone workspace: {e}"), {}
+        return fail_all(n_criteria, f"Failed to clone workspace: {e}"), {}
 
     cloned_input = judge_input.model_copy(update={"workdir": clone_dir})
 
@@ -305,7 +319,7 @@ def evaluate_all_criteria(
             # SDK it imports, e.g. OpenHands) writes ephemeral state to a
             # writable, isolated directory instead of the original user's home.
             f"HOME={clone_dir}",
-            *_judge_env_vars(),
+            *judge_env_vars(),
             "gandalf-grader-judge",
             "--input",
             input_path,
@@ -322,11 +336,11 @@ def evaluate_all_criteria(
             cwd=clone_dir,
         )
 
-        _save_trace(trace_path, result.stdout, result.stderr, result.returncode)
+        save_trace(trace_path, result.stdout, result.stderr, result.returncode)
 
         if result.returncode != 0:
             reason = f"Judge process failed (exit {result.returncode}): {result.stderr[:500]}"
-            return _fail_all(n_criteria, reason), {}
+            return fail_all(n_criteria, reason), {}
 
         with open(output_path) as f:
             data = json.load(f)
@@ -341,13 +355,13 @@ def evaluate_all_criteria(
                 return data, {}
 
             reason = f"Unexpected JSON type from judge: {type(data).__name__}"
-            return _fail_all(n_criteria, reason), {}
+            return fail_all(n_criteria, reason), {}
 
     except subprocess.TimeoutExpired:
-        _save_trace(trace_path, "", "Batch judge execution timed out.", -1)
-        return _fail_all(n_criteria, "Judge execution timed out."), {}
+        save_trace(trace_path, "", "Batch judge execution timed out.", -1)
+        return fail_all(n_criteria, "Judge execution timed out."), {}
     except (json.JSONDecodeError, FileNotFoundError, TypeError, AttributeError) as e:
-        return _fail_all(n_criteria, f"Failed to read judge output: {e}"), {}
+        return fail_all(n_criteria, f"Failed to read judge output: {e}"), {}
     finally:
         shutil.rmtree(clone_dir, ignore_errors=True)
         for path in (input_path, output_path):
@@ -355,7 +369,7 @@ def evaluate_all_criteria(
                 os.unlink(path)
 
 
-def _save_trace(trace_path: str, stdout: str, stderr: str, returncode: int) -> None:
+def save_trace(trace_path: str, stdout: str, stderr: str, returncode: int) -> None:
     """Write the judge's stdout/stderr to a trace file."""
     with contextlib.suppress(OSError), open(trace_path, "w") as f:
         f.write(f"exit_code: {returncode}\n")
@@ -365,12 +379,12 @@ def _save_trace(trace_path: str, stdout: str, stderr: str, returncode: int) -> N
         f.write(stderr)
 
 
-def _run_individual(
-    config: VerifierConfig,
+def run_individual(
+    config: GraderConfig,
     rubric: list[RubricItem],
     final_output: str,
     judge_guidance: str,
-) -> tuple[list[CriteriaResult], dict[str, Any]]:
+) -> tuple[list[CriterionResult], dict[str, Any]]:
     """Evaluate each criterion in its own agent session.
 
     When max_concurrency > 1, up to N criteria are evaluated in parallel
@@ -379,14 +393,14 @@ def _run_individual(
     n = len(rubric)
     concurrency = config.max_concurrency or 1
 
-    def _eval_one(i: int, item: RubricItem) -> tuple[int, CriteriaResult, dict[str, Any]]:
-        print(f"[{i + 1}/{n}] Evaluating: {item.criteria[:80]}...")
+    def _eval_one(i: int, item: RubricItem) -> tuple[int, CriterionResult, dict[str, Any]]:
+        print(f"[{i + 1}/{n}] Evaluating: {item.criterion[:80]}...")
 
         judge_input = JudgeInput(
             model=config.model,
             instructions=config.instructions,
             final_output=final_output,
-            criteria=item.criteria,
+            criterion=item.criterion,
             workdir=config.workdir,
             mcp_servers=config.mcp_servers,
             judge_guidance=judge_guidance,
@@ -401,8 +415,8 @@ def _run_individual(
         )
 
         usage = verdict.get("llm_usage", {})
-        result = CriteriaResult(
-            criteria=item.criteria,
+        result = CriterionResult(
+            criterion=item.criterion,
             weight=item.weight,
             met=verdict.get("met"),
             reasoning=verdict.get("reasoning", "No reasoning provided."),
@@ -418,7 +432,7 @@ def _run_individual(
 
     if concurrency == 1:
         # Serial path — no thread pool overhead
-        results: list[CriteriaResult] = []
+        results: list[CriterionResult] = []
         for i, item in enumerate(rubric):
             _, result, usage = _eval_one(i, item)
             results.append(result)
@@ -428,7 +442,7 @@ def _run_individual(
 
     # Concurrent path
     print(f"[individual] Evaluating {n} criteria with max_concurrency={concurrency}")
-    indexed_results: list[tuple[int, CriteriaResult]] = []
+    indexed_results: list[tuple[int, CriterionResult]] = []
 
     with ThreadPoolExecutor(max_workers=min(concurrency, n)) as executor:
         futures = [
@@ -445,19 +459,19 @@ def _run_individual(
     return [r for _, r in indexed_results], total_usage
 
 
-def _run_batch(
-    config: VerifierConfig,
+def run_batch(
+    config: GraderConfig,
     rubric: list[RubricItem],
     final_output: str,
     judge_guidance: str,
-) -> tuple[list[CriteriaResult], dict[str, Any]]:
+) -> tuple[list[CriterionResult], dict[str, Any]]:
     """Evaluate all criteria in a single agent session.
 
     Returns (results, llm_usage) where llm_usage is the token/cost
     totals from the single batch agent session.
     """
     criteria_list = [
-        BatchCriterion(index=i, criteria=item.criteria)
+        BatchCriterion(index=i, criterion=item.criterion)
         for i, item in enumerate(rubric)
     ]
 
@@ -489,11 +503,11 @@ def _run_batch(
         timeout=batch_timeout,
     )
 
-    results: list[CriteriaResult] = []
+    results: list[CriterionResult] = []
     for i, item in enumerate(rubric):
         v = verdicts[i] if i < len(verdicts) else {}
-        result = CriteriaResult(
-            criteria=item.criteria,
+        result = CriterionResult(
+            criterion=item.criterion,
             weight=item.weight,
             met=v.get("met"),
             reasoning=v.get("reasoning", "No reasoning provided."),
@@ -507,12 +521,12 @@ def _run_batch(
     return results, llm_usage
 
 
-def _run_batch_concurrent(
-    config: VerifierConfig,
+def run_batch_concurrent(
+    config: GraderConfig,
     rubric: list[RubricItem],
     final_output: str,
     judge_guidance: str,
-) -> tuple[list[CriteriaResult], dict[str, Any]]:
+) -> tuple[list[CriterionResult], dict[str, Any]]:
     """Split criteria into N positional chunks and evaluate each as a parallel batch.
 
     Each chunk is sent to its own judge subprocess.  All chunks run in parallel
@@ -533,12 +547,12 @@ def _run_batch_concurrent(
         f"(sizes: {', '.join(str(len(c)) for c in chunks)})"
     )
 
-    def _run_split(split_idx: int, chunk: list[tuple[int, RubricItem]]) -> tuple[list[tuple[int, CriteriaResult]], dict[str, Any]]:
+    def _run_split(split_idx: int, chunk: list[tuple[int, RubricItem]]) -> tuple[list[tuple[int, CriterionResult]], dict[str, Any]]:
         # Use local 0-based indices for the judge — the prompt says
         # "0 through N-1" and _read_batch_verdict filters by 0 <= idx < N.
         # Global rubric indices are restored when building indexed_results.
         criteria_list = [
-            BatchCriterion(index=local_idx, criteria=item.criteria)
+            BatchCriterion(index=local_idx, criterion=item.criterion)
             for local_idx, (_orig_idx, item) in enumerate(chunk)
         ]
 
@@ -572,11 +586,11 @@ def _run_batch_concurrent(
             timeout=batch_timeout,
         )
 
-        indexed_results: list[tuple[int, CriteriaResult]] = []
+        indexed_results: list[tuple[int, CriterionResult]] = []
         for j, (orig_idx, item) in enumerate(chunk):
             v = verdicts[j] if j < len(verdicts) else {}
-            result = CriteriaResult(
-                criteria=item.criteria,
+            result = CriterionResult(
+                criterion=item.criterion,
                 weight=item.weight,
                 met=v.get("met"),
                 reasoning=v.get("reasoning", "No reasoning provided."),
@@ -592,7 +606,7 @@ def _run_batch_concurrent(
         return indexed_results, llm_usage
 
     # Run all splits in parallel
-    all_indexed_results: list[tuple[int, CriteriaResult]] = []
+    all_indexed_results: list[tuple[int, CriterionResult]] = []
     total_usage: dict[str, float | int] = {}
 
     with ThreadPoolExecutor(max_workers=len(chunks)) as executor:
@@ -616,8 +630,8 @@ def _run_batch_concurrent(
             print(f"[batch-concurrent] Split failed unexpectedly: {exc}", file=sys.stderr)
             return (
                 [
-                    CriteriaResult(
-                        criteria=item.criteria,
+                    CriterionResult(
+                        criterion=item.criterion,
                         weight=item.weight,
                         met=None,
                         reasoning=f"Batch split failed: {exc}",
@@ -634,15 +648,15 @@ def _run_batch_concurrent(
     return results, total_usage
 
 
-def _get_errored_indices(results: list[CriteriaResult]) -> list[int]:
+def get_errored_indices(results: list[CriterionResult]) -> list[int]:
     """Return indices of criteria where met is None (infrastructure error)."""
     return [i for i, r in enumerate(results) if r.met is None]
 
 
 def _retry_individual(
-    config: VerifierConfig,
+    config: GraderConfig,
     rubric: list[RubricItem],
-    results: list[CriteriaResult],
+    results: list[CriterionResult],
     llm_usage: dict[str, Any],
     final_output: str,
     judge_guidance: str,
@@ -651,13 +665,13 @@ def _retry_individual(
     """Re-run each errored criterion individually and merge results in-place."""
     for idx in errored_indices:
         item = rubric[idx]
-        print(f"  [retry {idx}] Evaluating: {item.criteria[:80]}...")
+        print(f"  [retry {idx}] Evaluating: {item.criterion[:80]}...")
 
         judge_input = JudgeInput(
             model=config.model,
             instructions=config.instructions,
             final_output=final_output,
-            criteria=item.criteria,
+            criterion=item.criterion,
             workdir=config.workdir,
             mcp_servers=config.mcp_servers,
             judge_guidance=judge_guidance,
@@ -675,8 +689,8 @@ def _retry_individual(
         for key in ("cost_usd", "prompt_tokens", "completion_tokens", "cache_read_tokens"):
             llm_usage[key] = llm_usage.get(key, 0) + usage.get(key, 0)
 
-        results[idx] = CriteriaResult(
-            criteria=item.criteria,
+        results[idx] = CriterionResult(
+            criterion=item.criterion,
             weight=item.weight,
             met=verdict.get("met"),
             reasoning=verdict.get("reasoning", "No reasoning provided."),
@@ -688,9 +702,9 @@ def _retry_individual(
 
 
 def _retry_batch(
-    config: VerifierConfig,
+    config: GraderConfig,
     rubric: list[RubricItem],
-    results: list[CriteriaResult],
+    results: list[CriterionResult],
     llm_usage: dict[str, Any],
     final_output: str,
     judge_guidance: str,
@@ -698,7 +712,7 @@ def _retry_batch(
 ) -> None:
     """Re-run errored criteria as a batch and merge results in-place."""
     retry_criteria = [
-        BatchCriterion(index=new_idx, criteria=rubric[orig_idx].criteria)
+        BatchCriterion(index=new_idx, criterion=rubric[orig_idx].criterion)
         for new_idx, orig_idx in enumerate(errored_indices)
     ]
 
@@ -732,8 +746,8 @@ def _retry_batch(
 
     for new_idx, orig_idx in enumerate(errored_indices):
         v = verdicts[new_idx] if new_idx < len(verdicts) else {}
-        results[orig_idx] = CriteriaResult(
-            criteria=rubric[orig_idx].criteria,
+        results[orig_idx] = CriterionResult(
+            criterion=rubric[orig_idx].criterion,
             weight=rubric[orig_idx].weight,
             met=v.get("met"),
             reasoning=v.get("reasoning", "No reasoning provided."),
@@ -745,9 +759,9 @@ def _retry_batch(
         print(f"    [{orig_idx}] {status}: {results[orig_idx].reasoning[:120]}")
 
 
-def _write_info(
-    config: VerifierConfig,
-    results: list[CriteriaResult],
+def write_info(
+    config: GraderConfig,
+    results: list[CriterionResult],
     llm_usage: dict[str, Any],
     errored_criteria_count: int,
 ) -> tuple[float, float]:
@@ -820,18 +834,18 @@ def main() -> None:
     # 1. Initial evaluation
     if config.mode == "batch":
         if concurrency > 1:
-            results, llm_usage = _run_batch_concurrent(config, rubric, final_output, judge_guidance)
+            results, llm_usage = run_batch_concurrent(config, rubric, final_output, judge_guidance)
         else:
-            results, llm_usage = _run_batch(config, rubric, final_output, judge_guidance)
+            results, llm_usage = run_batch(config, rubric, final_output, judge_guidance)
     else:
-        results, llm_usage = _run_individual(config, rubric, final_output, judge_guidance)
+        results, llm_usage = run_individual(config, rubric, final_output, judge_guidance)
 
     # 2. Record initial error count for observability
-    initial_errored = len(_get_errored_indices(results))
+    initial_errored = len(get_errored_indices(results))
 
     # 3. Retry loop
     for attempt in range(config.judge_retries):
-        errored = _get_errored_indices(results)
+        errored = get_errored_indices(results)
         if not errored:
             break
         print(f"\n[retry {attempt + 1}/{config.judge_retries}] Retrying {len(errored)} errored criteria...")
@@ -841,9 +855,9 @@ def main() -> None:
             _retry_individual(config, rubric, results, llm_usage, final_output, judge_guidance, errored)
 
     # 4. ALWAYS write info.json (even on hard fail)
-    final_errored = _get_errored_indices(results)
+    final_errored = get_errored_indices(results)
     errored_count = len(final_errored)
-    reward, raw_score = _write_info(config, results, llm_usage, errored_count)
+    reward, raw_score = write_info(config, results, llm_usage, errored_count)
 
     total_cost = llm_usage.get("cost_usd", 0)
     total_prompt = llm_usage.get("prompt_tokens", 0)

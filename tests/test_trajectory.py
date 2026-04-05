@@ -1,11 +1,11 @@
-"""Tests for gandalf_grader.trajectory."""
+"""Tests for gandalf.orchestrator (trajectory loading)."""
 
 import json
 import os
 
 import pytest
 
-from gandalf_grader.trajectory import load_trajectory_final_output
+from gandalf.orchestrator import load_trajectory_final_output
 
 FIXTURES = os.path.join(os.path.dirname(__file__), "fixtures")
 

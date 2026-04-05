@@ -1,17 +1,17 @@
-"""Tests for gandalf_grader.config."""
+"""Tests for gandalf.models."""
 
 import os
 
 import pytest
 from pydantic import ValidationError
 
-from gandalf_grader.config import (
-    CriteriaResult,
+from gandalf.models import (
+    CriterionResult,
     EvaluationInfo,
     JudgeInput,
     MCPServer,
     Verdict,
-    VerifierConfig,
+    GraderConfig,
     load_config,
     load_rubric,
 )
@@ -21,7 +21,7 @@ FIXTURES = os.path.join(os.path.dirname(__file__), "fixtures")
 
 class TestLoadConfig:
     def test_parses_all_fields(self):
-        cfg = load_config(os.path.join(FIXTURES, "sample_verifier.toml"))
+        cfg = load_config(os.path.join(FIXTURES, "sample_grader.toml"))
         assert cfg.model == "google/gemini-2.5-flash"
         assert cfg.sandbox_user == "sandbox"
         assert cfg.instructions == "Build a web app that displays hello world."
@@ -32,7 +32,7 @@ class TestLoadConfig:
         assert cfg.judge_timeout == 120
 
     def test_parses_mcp_servers(self):
-        cfg = load_config(os.path.join(FIXTURES, "sample_verifier.toml"))
+        cfg = load_config(os.path.join(FIXTURES, "sample_grader.toml"))
         assert len(cfg.mcp_servers) == 1
         mcp = cfg.mcp_servers[0]
         assert mcp.name == "magic-server"
@@ -83,7 +83,7 @@ class TestLoadRubric:
     def test_parses_items(self):
         rubric = load_rubric(os.path.join(FIXTURES, "sample_rubric.json"))
         assert len(rubric) == 3
-        assert rubric[0].criteria == "The file index.html exists in the workspace"
+        assert rubric[0].criterion == "The file index.html exists in the workspace"
         assert rubric[0].weight == 1.0
         assert rubric[1].weight == 2.0
 
@@ -116,7 +116,7 @@ class TestPydanticModels:
             MCPServer(name="test", command="/bin/test", transport="sse")
 
     def test_verifier_config_has_trajectory_path(self):
-        cfg = VerifierConfig(
+        cfg = GraderConfig(
             instructions="test",
             rubric_path="/rubric.json",
             workdir="/workspace",
@@ -127,7 +127,7 @@ class TestPydanticModels:
         assert cfg.model == "google/gemini-2.5-flash"
 
     def test_verifier_config_judge_guidance_path_defaults_none(self):
-        cfg = VerifierConfig(
+        cfg = GraderConfig(
             instructions="test",
             rubric_path="/rubric.json",
             workdir="/workspace",
@@ -137,7 +137,7 @@ class TestPydanticModels:
         assert cfg.judge_guidance_path is None
 
     def test_verifier_config_judge_guidance_path_set(self):
-        cfg = VerifierConfig(
+        cfg = GraderConfig(
             instructions="test",
             rubric_path="/rubric.json",
             workdir="/workspace",
@@ -152,7 +152,7 @@ class TestPydanticModels:
             model="test-model",
             instructions="test",
             final_output="agent said done",
-            criteria="check something",
+            criterion="check something",
             workdir="/workspace",
         )
         assert ji.final_output == "agent said done"
@@ -162,7 +162,7 @@ class TestPydanticModels:
             model="test-model",
             instructions="test",
             final_output="done",
-            criteria="check",
+            criterion="check",
             workdir="/workspace",
         )
         assert ji.judge_guidance == ""
@@ -172,7 +172,7 @@ class TestPydanticModels:
             model="test-model",
             instructions="test",
             final_output="done",
-            criteria="check",
+            criterion="check",
             workdir="/workspace",
             judge_guidance="Use openpyxl for .xlsx files.",
         )
@@ -201,8 +201,8 @@ class TestPydanticModels:
         assert restored.met is None
 
     def test_criteria_result(self):
-        r = CriteriaResult(
-            criteria="test",
+        r = CriterionResult(
+            criterion="test",
             weight=1.0,
             met=True,
             reasoning="ok",
@@ -210,8 +210,8 @@ class TestPydanticModels:
         assert r.evidence == []
 
     def test_criteria_result_negative_weight(self):
-        r = CriteriaResult(
-            criteria="used hardcoded values",
+        r = CriterionResult(
+            criterion="used hardcoded values",
             weight=-1.0,
             met=True,
             reasoning="found hardcoded values",
@@ -219,7 +219,7 @@ class TestPydanticModels:
         assert r.weight == -1.0
 
     def test_criteria_result_met_none(self):
-        r = CriteriaResult(criteria="test", weight=1.0, met=None, reasoning="error")
+        r = CriterionResult(criterion="test", weight=1.0, met=None, reasoning="error")
         assert r.met is None
         data = r.model_dump()
         assert data["met"] is None
@@ -231,9 +231,9 @@ class TestPydanticModels:
             minimum_score=-1.0,
             maximum_score=6.0,
             criteria_results=[
-                CriteriaResult(criteria="c1", weight=3.0, met=True, reasoning="ok"),
-                CriteriaResult(criteria="c2", weight=3.0, met=False, reasoning="fail"),
-                CriteriaResult(criteria="c3", weight=-1.0, met=False, reasoning="avoided"),
+                CriterionResult(criterion="c1", weight=3.0, met=True, reasoning="ok"),
+                CriterionResult(criterion="c2", weight=3.0, met=False, reasoning="fail"),
+                CriterionResult(criterion="c3", weight=-1.0, met=False, reasoning="avoided"),
             ],
         )
         assert info.reward == 0.5
@@ -243,7 +243,7 @@ class TestPydanticModels:
         assert len(info.criteria_results) == 3
 
     def test_verifier_config_judge_retries_default(self):
-        cfg = VerifierConfig(
+        cfg = GraderConfig(
             instructions="test",
             rubric_path="/rubric.json",
             workdir="/workspace",
@@ -253,7 +253,7 @@ class TestPydanticModels:
         assert cfg.judge_retries == 1
 
     def test_verifier_config_judge_retries_explicit(self):
-        cfg = VerifierConfig(
+        cfg = GraderConfig(
             instructions="test",
             rubric_path="/rubric.json",
             workdir="/workspace",
@@ -268,8 +268,8 @@ class TestPydanticModels:
             reward=0.5,
             raw_score=1.0,
             criteria_results=[
-                CriteriaResult(criteria="c1", weight=1.0, met=True, reasoning="ok"),
-                CriteriaResult(criteria="c2", weight=1.0, met=None, reasoning="error"),
+                CriterionResult(criterion="c1", weight=1.0, met=True, reasoning="ok"),
+                CriterionResult(criterion="c2", weight=1.0, met=None, reasoning="error"),
             ],
             errored_criteria_count=1,
             evaluated_criteria_pct=50.0,
@@ -282,7 +282,7 @@ class TestPydanticModels:
             reward=1.0,
             raw_score=1.0,
             criteria_results=[
-                CriteriaResult(criteria="c1", weight=1.0, met=True, reasoning="ok"),
+                CriterionResult(criterion="c1", weight=1.0, met=True, reasoning="ok"),
             ],
         )
         assert info.errored_criteria_count == 0
@@ -293,7 +293,7 @@ class TestPydanticModels:
             model="test-model",
             instructions="test",
             final_output="agent said done",
-            criteria="check something",
+            criterion="check something",
             workdir="/workspace",
         )
         cloned = ji.model_copy(update={"workdir": "/new-workspace"})
@@ -305,7 +305,7 @@ class TestPydanticModels:
             model="test-model",
             instructions="test",
             final_output="agent said done",
-            criteria="check something",
+            criterion="check something",
             workdir="/workspace",
             mcp_servers=[MCPServer(name="srv", command="/bin/srv")],
         )
@@ -316,7 +316,7 @@ class TestPydanticModels:
         assert len(restored.mcp_servers) == 1
 
     def test_verifier_config_max_concurrency_default(self):
-        cfg = VerifierConfig(
+        cfg = GraderConfig(
             instructions="test",
             rubric_path="/rubric.json",
             workdir="/workspace",
@@ -326,7 +326,7 @@ class TestPydanticModels:
         assert cfg.max_concurrency is None
 
     def test_verifier_config_max_concurrency_explicit(self):
-        cfg = VerifierConfig(
+        cfg = GraderConfig(
             instructions="test",
             rubric_path="/rubric.json",
             workdir="/workspace",
@@ -338,7 +338,7 @@ class TestPydanticModels:
 
     def test_verifier_config_max_concurrency_rejects_zero(self):
         with pytest.raises(ValidationError):
-            VerifierConfig(
+            GraderConfig(
                 instructions="test",
                 rubric_path="/rubric.json",
                 workdir="/workspace",
@@ -349,7 +349,7 @@ class TestPydanticModels:
 
     def test_verifier_config_max_concurrency_rejects_negative(self):
         with pytest.raises(ValidationError):
-            VerifierConfig(
+            GraderConfig(
                 instructions="test",
                 rubric_path="/rubric.json",
                 workdir="/workspace",
@@ -363,7 +363,7 @@ class TestPydanticModels:
         import warnings
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
-            cfg = VerifierConfig(
+            cfg = GraderConfig(
                 instructions="test",
                 rubric_path="/rubric.json",
                 workdir="/workspace",
@@ -376,7 +376,7 @@ class TestPydanticModels:
         assert "deprecated" in str(w[0].message).lower()
 
     def test_verifier_config_mode_individual(self):
-        cfg = VerifierConfig(
+        cfg = GraderConfig(
             instructions="test",
             rubric_path="/rubric.json",
             workdir="/workspace",

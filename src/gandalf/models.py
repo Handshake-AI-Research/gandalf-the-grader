@@ -21,7 +21,7 @@ class MCPServer(BaseModel):
     args: list[str] = Field(default_factory=list)
 
 
-class VerifierConfig(BaseModel):
+class GraderConfig(BaseModel):
     """Top-level verifier configuration loaded from a TOML file.
 
     mode controls the *granularity* of rubric evaluation — how many criteria
@@ -77,24 +77,24 @@ class VerifierConfig(BaseModel):
 
 
 class RubricItem(BaseModel):
-    """A single rubric item with evaluation criteria and weight.
+    """A single rubric item with evaluation criterion and weight.
 
     Weight can be negative to penalise undesired outcomes.  The sign of the
     weight carries the semantics: positive means "reward when met", negative
     means "penalise when met".
     """
 
-    criteria: str
+    criterion: str
     weight: float
 
 
 class JudgeInput(BaseModel):
-    """Input passed to the inner judge for a single criteria evaluation."""
+    """Input passed to the inner judge for a single criterion evaluation."""
 
     model: str
     instructions: str
     final_output: str
-    criteria: str
+    criterion: str
     workdir: str
     mcp_servers: list[MCPServer] = Field(default_factory=list)
     judge_guidance: str = ""
@@ -103,12 +103,12 @@ class JudgeInput(BaseModel):
 class BatchCriterion(BaseModel):
     """A single criterion entry within a batch judge input.
 
-    The judge sees only the index and criteria text — weights are intentionally
+    The judge sees only the index and criterion text — weights are intentionally
     omitted so the judge evaluates each criterion on its own merits.
     """
 
     index: int
-    criteria: str
+    criterion: str
 
 
 class BatchJudgeInput(BaseModel):
@@ -131,10 +131,10 @@ class Verdict(BaseModel):
     evidence: list[str] = Field(default_factory=list)
 
 
-class CriteriaResult(BaseModel):
-    """Result for a single criteria evaluation."""
+class CriterionResult(BaseModel):
+    """Result for a single criterion evaluation."""
 
-    criteria: str
+    criterion: str
     weight: float
     met: bool | None
     reasoning: str
@@ -148,17 +148,17 @@ class EvaluationInfo(BaseModel):
     raw_score: float
     minimum_score: float = 0.0
     maximum_score: float = 0.0
-    criteria_results: list[CriteriaResult]
+    criteria_results: list[CriterionResult]
     llm_usage: dict[str, float | int | str] = Field(default_factory=dict)
     errored_criteria_count: int = 0
     evaluated_criteria_pct: float = 100.0
 
 
-def load_config(path: str) -> VerifierConfig:
+def load_config(path: str) -> GraderConfig:
     """Load verifier configuration from a TOML file."""
     with open(path, "rb") as f:
         data = tomllib.load(f)
-    return VerifierConfig.model_validate(data)
+    return GraderConfig.model_validate(data)
 
 
 def load_rubric(path: str) -> list[RubricItem]:

@@ -1,6 +1,5 @@
 [project]
-name = "gandalf-grader"
-version = "0.4.6"
+name = "gandalf-the-grader"
 description = "Agent-as-judge grading framework for evaluating AI agent outputs against rubric criteria"
 readme = "README.md"
 license = "Apache-2.0"
@@ -22,7 +21,7 @@ dependencies = [
     "jinja2>=3.1,<4",
     "pydantic>=2.12.5,<3",
 ]
-dynamic = ["optional-dependencies"]
+dynamic = ["version", "optional-dependencies"]
 
 [project.urls]
 Homepage = "https://github.com/Handshake-AI-Research/gandalf-the-grader"
@@ -30,15 +29,18 @@ Repository = "https://github.com/Handshake-AI-Research/gandalf-the-grader"
 Issues = "https://github.com/Handshake-AI-Research/gandalf-the-grader/issues"
 
 [project.scripts]
-gandalf-grader = "gandalf_grader.__main__:main"
-gandalf-grader-judge = "gandalf_grader.judge:main"
+gandalf-the-grader = "gandalf.orchestrator:main"
+gandalf-the-grader-judge = "gandalf.judge:main"
 
 [build-system]
 requires = ["hatchling", "hatch-pinned-extra>=0.2.0,<0.3.0"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/gandalf_grader"]
+packages = ["src/gandalf"]
+
+[tool.hatch.version]
+path = "src/gandalf/__about__.py"
 
 [tool.hatch.metadata.hooks.pinned_extra]
 name = "pinned"

@@ -24,12 +24,12 @@ from typing import Any
 
 import jinja2
 
-from gandalf_grader.config import BatchJudgeInput, JudgeInput, Verdict
+from gandalf.models import BatchJudgeInput, JudgeInput, Verdict
 
 TEMPLATES_DIR = Path(__file__).parent / "templates"
 
 
-def _render_template(template_name: str, **variables: Any) -> str:
+def render_template(template_name: str, **variables: Any) -> str:
     """Render a Jinja2 prompt template from the templates directory."""
     template_str = (TEMPLATES_DIR / template_name).read_text()
     return jinja2.Template(template_str).render(**variables)
@@ -43,7 +43,7 @@ def build_judge_prompt(
     judge_guidance: str = "",
 ) -> str:
     """Build the user message sent to kick off a single-criterion judge session."""
-    return _render_template(
+    return render_template(
         "judge_single.j2",
         instructions=instructions,
         final_output=final_output,
@@ -65,7 +65,7 @@ def build_batch_judge_prompt(
     Mirrors build_judge_prompt but evaluates multiple criteria at once,
     writing a JSON array of verdicts instead of a single object.
     """
-    return _render_template(
+    return render_template(
         "judge_batch.j2",
         instructions=instructions,
         final_output=final_output,
@@ -85,7 +85,7 @@ def build_batch_judge_prompt(
 _ESCAPE_RE = re.compile(r'(\\(?:["\\/bfnrt]|u[0-9a-fA-F]{4}))|(\\)')
 
 
-def _sanitize_json(raw: str) -> str:
+def sanitize_json(raw: str) -> str:
     """Fix invalid backslash escapes in LLM-generated JSON.
 
     LLM agents sometimes embed content containing literal backslashes
@@ -107,14 +107,14 @@ def _sanitize_json(raw: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _read_verdict(verdict_path: str) -> Verdict:
+def read_verdict(verdict_path: str) -> Verdict:
     """Read and validate the verdict file written by the judge agent."""
     try:
         with open(verdict_path) as f:
             content = f.read().strip()
         if not content:
             return Verdict(met=None, reasoning="Judge agent wrote an empty verdict file.")
-        data = json.loads(_sanitize_json(content))
+        data = json.loads(sanitize_json(content))
         if "met" not in data:
             return Verdict(met=None, reasoning=f"Verdict missing 'met' field: {content[:200]}")
         raw_met = data["met"]
@@ -134,7 +134,7 @@ def _fail_all_verdicts(n: int, reason: str) -> list[dict[str, Any]]:
     return [{"index": i, "met": None, "reasoning": reason, "evidence": []} for i in range(n)]
 
 
-def _read_batch_verdict(verdict_path: str, n_criteria: int) -> list[dict[str, Any]]:
+def read_batch_verdict(verdict_path: str, n_criteria: int) -> list[dict[str, Any]]:
     """Read and validate the batch verdict file written by the judge agent.
 
     Returns a list of verdict dicts, one per criterion index.  Missing
@@ -149,7 +149,7 @@ def _read_batch_verdict(verdict_path: str, n_criteria: int) -> list[dict[str, An
                 "Judge agent wrote an empty verdict file.",
             )
 
-        verdicts_raw = json.loads(_sanitize_json(content))
+        verdicts_raw = json.loads(sanitize_json(content))
         if not isinstance(verdicts_raw, list):
             return _fail_all_verdicts(
                 n_criteria,
@@ -205,7 +205,7 @@ def _read_batch_verdict(verdict_path: str, n_criteria: int) -> list[dict[str, An
 # ---------------------------------------------------------------------------
 
 
-def _make_verdict_path(prefix: str = "verdict_", dir: str | None = None) -> str:
+def make_verdict_path(prefix: str = "verdict_", dir: str | None = None) -> str:
     """Generate a unique path for the judge to write verdicts to.
 
     Unlike mkstemp, this does NOT pre-create the file — allowing the agent
@@ -220,7 +220,7 @@ def _make_verdict_path(prefix: str = "verdict_", dir: str | None = None) -> str:
     return os.path.join(base, f"{prefix}{secrets.token_hex(8)}.json")
 
 
-def _run_agent_session(
+def run_agent_session(
     model: str,
     mcp_servers: list[dict[str, Any]],
     workdir: str,
@@ -304,12 +304,12 @@ def run_judge(input_path: str, output_path: str) -> None:
     with open(input_path) as f:
         judge_input = JudgeInput.model_validate_json(f.read())
 
-    verdict_path = _make_verdict_path(prefix="verdict_", dir=judge_input.workdir)
+    verdict_path = make_verdict_path(prefix="verdict_", dir=judge_input.workdir)
 
     prompt = build_judge_prompt(
         instructions=judge_input.instructions,
         final_output=judge_input.final_output,
-        criteria=judge_input.criteria,
+        criteria=judge_input.criterion,
         verdict_path=verdict_path,
         judge_guidance=judge_input.judge_guidance,
     )
@@ -325,10 +325,10 @@ def run_judge(input_path: str, output_path: str) -> None:
 
     llm_usage: dict[str, Any] = {}
     try:
-        llm_usage = _run_agent_session(
+        llm_usage = run_agent_session(
             judge_input.model, mcp_servers, judge_input.workdir, prompt
         )
-        verdict = _read_verdict(verdict_path)
+        verdict = read_verdict(verdict_path)
         output = {
             "met": verdict.met,
             "reasoning": verdict.reasoning,
@@ -366,7 +366,7 @@ def run_judge_batch(input_path: str, output_path: str) -> None:
     criteria_dicts = [c.model_dump() for c in judge_input.criteria]
     n_criteria = len(criteria_dicts)
 
-    verdict_path = _make_verdict_path(prefix="verdict_batch_", dir=judge_input.workdir)
+    verdict_path = make_verdict_path(prefix="verdict_batch_", dir=judge_input.workdir)
 
     prompt = build_batch_judge_prompt(
         instructions=judge_input.instructions,
@@ -387,10 +387,10 @@ def run_judge_batch(input_path: str, output_path: str) -> None:
 
     llm_usage: dict[str, Any] = {}
     try:
-        llm_usage = _run_agent_session(
+        llm_usage = run_agent_session(
             judge_input.model, mcp_servers, judge_input.workdir, prompt
         )
-        verdicts = _read_batch_verdict(verdict_path, n_criteria)
+        verdicts = read_batch_verdict(verdict_path, n_criteria)
     except Exception as e:
         verdicts = _fail_all_verdicts(
             n_criteria,
