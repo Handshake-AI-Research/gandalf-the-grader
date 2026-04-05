@@ -831,10 +831,7 @@ def main() -> None:
 
     config = load_config(args.config)
 
-    if config.rubric is not None:
-        rubric = config.rubric
-    else:
-        rubric = load_rubric(config.rubric_path)
+    rubric = load_rubric(config.rubric_path)
 
     final_output = load_trajectory_final_output(config.trajectory_path)
     judge_guidance = resolve_judge_guidance(config)
