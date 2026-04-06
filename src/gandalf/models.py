@@ -35,14 +35,20 @@ class GraderConfig(BaseModel):
     """Top-level grader configuration loaded from a TOML file.
 
     mode controls how rubric criteria are evaluated:
-      - "sequential" (default): each criterion is evaluated in its own agent
+      - "sequential": each criterion is evaluated in its own agent
         session (one invocation of gandalf-the-grader-judge per criterion).
-      - "batch": all criteria are sent to a single agent session, which writes
-        a JSON array of verdicts in one go.
+      - "batch" (default): all criteria are sent to a single agent session,
+        which writes a JSON array of verdicts in one go.
+
+    max_concurrency controls how many judge sessions run in parallel:
+      - None (default): no parallelism (1 session at a time).
+      - N (>= 1): up to N sessions in parallel.  For batch mode, criteria are
+        split into N positional chunks evaluated as separate batch sessions.
 
     judge_timeout is the per-criterion budget in seconds, regardless of mode.
-    In batch mode the effective timeout is ``judge_timeout * n_criteria``,
-    optionally capped by batch_timeout.
+    In batch mode the effective timeout per session is
+    ``judge_timeout * n_criteria_in_session``, optionally capped by
+    batch_timeout.
     """
 
     model: str = "gemini/gemini-2.5-flash"
@@ -62,6 +68,7 @@ class GraderConfig(BaseModel):
     judge_prompt_path: str | None = None
     batch_timeout: int | None = None
     mode: Literal["sequential", "batch"] = "batch"
+    max_concurrency: int | None = Field(default=None, ge=1)
     judge_retries: int = 1
 
     @model_validator(mode="after")
