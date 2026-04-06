@@ -17,6 +17,7 @@ classifiers = [
 ]
 dependencies = [
     "jinja2>=3.1,<4",
+    "litellm>=1.82.0,<2",
     "openhands-sdk>=1.11.2,<2",
     "openhands-tools>=1.11.2,<2",
     "pydantic>=2.12.5,<3",
@@ -53,7 +54,7 @@ lint.select = ["E", "W", "F", "UP", "B", "SIM", "I", "RUF"]
 strict = true
 
 [[tool.mypy.overrides]]
-module = ["openhands.sdk", "openhands.tools.*"]
+module = ["openhands.sdk", "openhands.tools.*", "litellm"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
