@@ -2,7 +2,7 @@
 
 import os
 import pathlib
-from typing import Any
+from typing import Any, ClassVar
 
 import pytest
 from pydantic import ValidationError
@@ -521,7 +521,7 @@ class TestJudgePrompt:
 class TestGraderConfigMode:
     """Validate mode, batch_splits, and max_concurrency field constraints."""
 
-    _DEFAULTS: dict[str, Any] = {
+    _DEFAULTS: ClassVar[dict[str, Any]] = {
         "instructions": "test",
         "rubric_path": "/rubric.json",
         "workdir": "/workspace",
@@ -571,7 +571,7 @@ class TestGraderConfigMode:
             self._cfg(mode="batch", batch_splits=-1)
 
     def test_batch_splits_with_individual_mode_rejected(self) -> None:
-        with pytest.raises(ValidationError, match="batch_splits.*batch"):
+        with pytest.raises(ValidationError, match=r"batch_splits.*batch"):
             self._cfg(mode="individual", batch_splits=3)
 
     # -- max_concurrency --

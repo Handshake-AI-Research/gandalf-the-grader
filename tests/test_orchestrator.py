@@ -5,6 +5,8 @@ import os
 import pathlib
 import shutil
 import subprocess
+import threading
+import time
 from collections.abc import Callable
 from typing import Any
 from unittest.mock import patch
@@ -1848,9 +1850,7 @@ class TestBatchConcurrent:
         assert results[3].met is None  # split 1, position 1 — no verdict, defaults to met=None
 
     @patch("gandalf.orchestrator.run_judge")
-    def test_batch_splits_independent_of_max_concurrency(
-        self, mock_run_judge: Any, tmp_path: pathlib.Path
-    ) -> None:
+    def test_batch_splits_independent_of_max_concurrency(self, mock_run_judge: Any, tmp_path: pathlib.Path) -> None:
         """batch_splits=4 with max_concurrency=2 creates 4 chunks but only 2 run at a time."""
         config = make_config(
             workdir=str(tmp_path),
@@ -1862,8 +1862,6 @@ class TestBatchConcurrent:
         os.makedirs(config.output_dir, exist_ok=True)
         rubric = self._make_rubric(8)  # 8 criteria / 4 splits = 2 per chunk
 
-        import threading
-
         peak_concurrent = 0
         current_concurrent = 0
         lock = threading.Lock()
@@ -1873,8 +1871,6 @@ class TestBatchConcurrent:
             with lock:
                 current_concurrent += 1
                 peak_concurrent = max(peak_concurrent, current_concurrent)
-            import time
-
             time.sleep(0.05)  # small delay to overlap threads
             with lock:
                 current_concurrent -= 1
@@ -1901,9 +1897,7 @@ class TestBatchConcurrent:
         assert usage.cost_usd == pytest.approx(0.4)
 
     @patch("gandalf.orchestrator.run_judge")
-    def test_max_concurrency_none_defaults_to_batch_splits(
-        self, mock_run_judge: Any, tmp_path: pathlib.Path
-    ) -> None:
+    def test_max_concurrency_none_defaults_to_batch_splits(self, mock_run_judge: Any, tmp_path: pathlib.Path) -> None:
         """When max_concurrency is None and batch_splits=3, all 3 splits run in parallel."""
         config = make_config(
             workdir=str(tmp_path),
@@ -1915,8 +1909,6 @@ class TestBatchConcurrent:
         os.makedirs(config.output_dir, exist_ok=True)
         rubric = self._make_rubric(6)
 
-        import threading
-
         peak_concurrent = 0
         current_concurrent = 0
         lock = threading.Lock()
@@ -1926,8 +1918,6 @@ class TestBatchConcurrent:
             with lock:
                 current_concurrent += 1
                 peak_concurrent = max(peak_concurrent, current_concurrent)
-            import time
-
             time.sleep(0.05)
             with lock:
                 current_concurrent -= 1
@@ -2039,9 +2029,7 @@ class TestBatchConcurrent:
         mock_run_batch_concurrent.assert_not_called()
 
     @patch("gandalf.orchestrator.run_judge")
-    def test_max_concurrency_capped_to_chunk_count(
-        self, mock_run_judge: Any, tmp_path: pathlib.Path
-    ) -> None:
+    def test_max_concurrency_capped_to_chunk_count(self, mock_run_judge: Any, tmp_path: pathlib.Path) -> None:
         """batch_splits=2, max_concurrency=10 — thread pool capped to 2 (the actual chunk count)."""
         config = make_config(
             workdir=str(tmp_path),
@@ -2053,8 +2041,6 @@ class TestBatchConcurrent:
         os.makedirs(config.output_dir, exist_ok=True)
         rubric = self._make_rubric(4)
 
-        import threading
-
         peak_concurrent = 0
         current_concurrent = 0
         lock = threading.Lock()
@@ -2064,8 +2050,6 @@ class TestBatchConcurrent:
             with lock:
                 current_concurrent += 1
                 peak_concurrent = max(peak_concurrent, current_concurrent)
-            import time
-
             time.sleep(0.05)
             with lock:
                 current_concurrent -= 1
@@ -2095,19 +2079,15 @@ class TestBatchConcurrent:
         os.makedirs(config.output_dir, exist_ok=True)
         rubric = self._make_rubric(6)
 
-        import threading
-
         peak_concurrent = 0
         current_concurrent = 0
         lock = threading.Lock()
 
-        def _side_effect(judge_input: JudgeInput, **_kwargs: Any) -> tuple[list[Verdict], LLMUsage]:
+        def _side_effect(_judge_input: JudgeInput, **_kwargs: Any) -> tuple[list[Verdict], LLMUsage]:
             nonlocal peak_concurrent, current_concurrent
             with lock:
                 current_concurrent += 1
                 peak_concurrent = max(peak_concurrent, current_concurrent)
-            import time
-
             time.sleep(0.05)
             with lock:
                 current_concurrent -= 1
