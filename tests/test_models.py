@@ -516,3 +516,89 @@ class TestJudgePrompt:
         raw = bji.model_dump_json()
         restored = BatchJudgeInput.model_validate_json(raw)
         assert restored.judge_prompt == "Batch {{ n_max }}"
+
+
+class TestGraderConfigMode:
+    """Validate mode, batch_splits, and max_concurrency field constraints."""
+
+    _DEFAULTS: dict[str, Any] = {
+        "instructions": "test",
+        "rubric_path": "/rubric.json",
+        "workdir": "/workspace",
+        "trajectory_path": "/logs/trajectory.json",
+        "output_dir": "/logs/grader",
+    }
+
+    def _cfg(self, **overrides: Any) -> GraderConfig:
+        return GraderConfig(**{**self._DEFAULTS, **overrides})
+
+    def test_mode_defaults_to_batch(self) -> None:
+        assert self._cfg().mode == "batch"
+
+    def test_mode_individual_accepted(self) -> None:
+        assert self._cfg(mode="individual").mode == "individual"
+
+    def test_mode_sequential_rejected(self) -> None:
+        with pytest.raises(ValidationError):
+            self._cfg(mode="sequential")
+
+    def test_mode_invalid_value_rejected(self) -> None:
+        with pytest.raises(ValidationError):
+            self._cfg(mode="parallel")
+
+    # -- batch_splits --
+
+    def test_batch_splits_defaults_none(self) -> None:
+        assert self._cfg().batch_splits is None
+
+    def test_batch_splits_2_accepted(self) -> None:
+        assert self._cfg(mode="batch", batch_splits=2).batch_splits == 2
+
+    def test_batch_splits_10_accepted(self) -> None:
+        assert self._cfg(mode="batch", batch_splits=10).batch_splits == 10
+
+    def test_batch_splits_1_rejected(self) -> None:
+        """batch_splits must be >= 2 (splitting into 1 chunk is meaningless)."""
+        with pytest.raises(ValidationError):
+            self._cfg(mode="batch", batch_splits=1)
+
+    def test_batch_splits_0_rejected(self) -> None:
+        with pytest.raises(ValidationError):
+            self._cfg(mode="batch", batch_splits=0)
+
+    def test_batch_splits_negative_rejected(self) -> None:
+        with pytest.raises(ValidationError):
+            self._cfg(mode="batch", batch_splits=-1)
+
+    def test_batch_splits_with_individual_mode_rejected(self) -> None:
+        with pytest.raises(ValidationError, match="batch_splits.*batch"):
+            self._cfg(mode="individual", batch_splits=3)
+
+    # -- max_concurrency --
+
+    def test_max_concurrency_defaults_none(self) -> None:
+        assert self._cfg().max_concurrency is None
+
+    def test_max_concurrency_1_accepted(self) -> None:
+        assert self._cfg(max_concurrency=1).max_concurrency == 1
+
+    def test_max_concurrency_0_rejected(self) -> None:
+        with pytest.raises(ValidationError):
+            self._cfg(max_concurrency=0)
+
+    def test_max_concurrency_negative_rejected(self) -> None:
+        with pytest.raises(ValidationError):
+            self._cfg(max_concurrency=-1)
+
+    # -- combined --
+
+    def test_batch_splits_and_max_concurrency_independent(self) -> None:
+        """batch_splits=10 with max_concurrency=2 is valid — 10 chunks, 2 parallel."""
+        cfg = self._cfg(mode="batch", batch_splits=10, max_concurrency=2)
+        assert cfg.batch_splits == 10
+        assert cfg.max_concurrency == 2
+
+    def test_individual_with_max_concurrency(self) -> None:
+        cfg = self._cfg(mode="individual", max_concurrency=4)
+        assert cfg.max_concurrency == 4
+        assert cfg.batch_splits is None

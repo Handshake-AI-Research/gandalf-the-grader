@@ -29,6 +29,7 @@ from gandalf.orchestrator import (
     resolve_judge_guidance,
     resolve_judge_prompt,
     run_batch_concurrent,
+    run_individual,
     run_judge,
     write_info,
 )
@@ -1845,3 +1846,284 @@ class TestBatchConcurrent:
         assert results[1].met is True  # split 0, verdict present
         assert results[2].met is True  # split 1, position 0 — verdict present
         assert results[3].met is None  # split 1, position 1 — no verdict, defaults to met=None
+
+    @patch("gandalf.orchestrator.run_judge")
+    def test_batch_splits_independent_of_max_concurrency(
+        self, mock_run_judge: Any, tmp_path: pathlib.Path
+    ) -> None:
+        """batch_splits=4 with max_concurrency=2 creates 4 chunks but only 2 run at a time."""
+        config = make_config(
+            workdir=str(tmp_path),
+            output_dir=str(tmp_path / "output"),
+            mode="batch",
+            batch_splits=4,
+            max_concurrency=2,
+        )
+        os.makedirs(config.output_dir, exist_ok=True)
+        rubric = self._make_rubric(8)  # 8 criteria / 4 splits = 2 per chunk
+
+        import threading
+
+        peak_concurrent = 0
+        current_concurrent = 0
+        lock = threading.Lock()
+
+        def _side_effect(judge_input: BatchJudgeInput, **_kwargs: Any) -> tuple[list[Verdict], LLMUsage]:
+            nonlocal peak_concurrent, current_concurrent
+            with lock:
+                current_concurrent += 1
+                peak_concurrent = max(peak_concurrent, current_concurrent)
+            import time
+
+            time.sleep(0.05)  # small delay to overlap threads
+            with lock:
+                current_concurrent -= 1
+            verdicts = [Verdict(met=True, reasoning="ok") for _ in judge_input.criteria]
+            return verdicts, LLMUsage(cost_usd=0.1)
+
+        mock_run_judge.side_effect = _side_effect
+
+        results, usage = run_batch_concurrent(config, rubric, "done", "test", "", None)
+
+        # 4 splits created (one per chunk)
+        assert mock_run_judge.call_count == 4
+        # Each chunk should have 2 criteria
+        for call in mock_run_judge.call_args_list:
+            judge_input = call[0][0]
+            assert len(judge_input.criteria) == 2
+        # All 8 results present and in order
+        assert len(results) == 8
+        for i, r in enumerate(results):
+            assert r.criterion == f"criterion {i}"
+        # Peak concurrency should be capped at 2 (not 4)
+        assert peak_concurrent <= 2
+        # Total usage from 4 splits
+        assert usage.cost_usd == pytest.approx(0.4)
+
+    @patch("gandalf.orchestrator.run_judge")
+    def test_max_concurrency_none_defaults_to_batch_splits(
+        self, mock_run_judge: Any, tmp_path: pathlib.Path
+    ) -> None:
+        """When max_concurrency is None and batch_splits=3, all 3 splits run in parallel."""
+        config = make_config(
+            workdir=str(tmp_path),
+            output_dir=str(tmp_path / "output"),
+            mode="batch",
+            batch_splits=3,
+            # max_concurrency deliberately omitted (None)
+        )
+        os.makedirs(config.output_dir, exist_ok=True)
+        rubric = self._make_rubric(6)
+
+        import threading
+
+        peak_concurrent = 0
+        current_concurrent = 0
+        lock = threading.Lock()
+
+        def _side_effect(judge_input: BatchJudgeInput, **_kwargs: Any) -> tuple[list[Verdict], LLMUsage]:
+            nonlocal peak_concurrent, current_concurrent
+            with lock:
+                current_concurrent += 1
+                peak_concurrent = max(peak_concurrent, current_concurrent)
+            import time
+
+            time.sleep(0.05)
+            with lock:
+                current_concurrent -= 1
+            verdicts = [Verdict(met=True, reasoning="ok") for _ in judge_input.criteria]
+            return verdicts, LLMUsage()
+
+        mock_run_judge.side_effect = _side_effect
+
+        results, _ = run_batch_concurrent(config, rubric, "done", "test", "", None)
+
+        assert mock_run_judge.call_count == 3
+        assert len(results) == 6
+        # All 3 should have been able to run concurrently
+        assert peak_concurrent == 3
+
+    @patch("gandalf.orchestrator.run_batch_concurrent")
+    @patch("gandalf.orchestrator.run_batch")
+    @patch("gandalf.orchestrator.resolve_instructions", return_value="test")
+    @patch("gandalf.orchestrator.resolve_judge_guidance", return_value="")
+    @patch("gandalf.orchestrator.resolve_judge_prompt", return_value=None)
+    @patch("gandalf.orchestrator.load_trajectory_final_output", return_value="done")
+    @patch("gandalf.orchestrator.load_rubric")
+    @patch("gandalf.orchestrator.load_config")
+    def test_main_batch_without_splits_dispatches_run_batch(
+        self,
+        mock_config: Any,
+        mock_rubric: Any,
+        mock_trajectory: Any,  # noqa: ARG002
+        mock_prompt: Any,  # noqa: ARG002
+        mock_guidance: Any,  # noqa: ARG002
+        mock_instructions: Any,  # noqa: ARG002
+        mock_run_batch: Any,
+        mock_run_batch_concurrent: Any,
+        tmp_path: pathlib.Path,
+    ) -> None:
+        """mode='batch' without batch_splits dispatches to run_batch, never run_batch_concurrent."""
+        output_dir = str(tmp_path / "output")
+        os.makedirs(output_dir, exist_ok=True)
+
+        mock_config.return_value = GraderConfig(
+            instructions="test",
+            rubric_path="/rubric.json",
+            workdir=str(tmp_path),
+            trajectory_path="/logs/trajectory.json",
+            sandbox_user="sandbox",
+            output_dir=output_dir,
+            mode="batch",
+            max_concurrency=4,  # should NOT trigger splitting without batch_splits
+        )
+        mock_rubric.return_value = self._make_rubric(4)
+        mock_run_batch.return_value = (
+            [CriterionResult(criterion=f"criterion {i}", weight=1.0, met=True, reasoning="ok") for i in range(4)],
+            LLMUsage(cost_usd=0.1),
+        )
+
+        with patch("sys.argv", ["prog", "--config", "dummy.toml"]):
+            main()
+
+        mock_run_batch.assert_called_once()
+        mock_run_batch_concurrent.assert_not_called()
+
+    @patch("gandalf.orchestrator.run_batch_concurrent")
+    @patch("gandalf.orchestrator.run_batch")
+    @patch("gandalf.orchestrator.run_individual")
+    @patch("gandalf.orchestrator.resolve_instructions", return_value="test")
+    @patch("gandalf.orchestrator.resolve_judge_guidance", return_value="")
+    @patch("gandalf.orchestrator.resolve_judge_prompt", return_value=None)
+    @patch("gandalf.orchestrator.load_trajectory_final_output", return_value="done")
+    @patch("gandalf.orchestrator.load_rubric")
+    @patch("gandalf.orchestrator.load_config")
+    def test_main_individual_mode_dispatches_run_individual(
+        self,
+        mock_config: Any,
+        mock_rubric: Any,
+        mock_trajectory: Any,  # noqa: ARG002
+        mock_prompt: Any,  # noqa: ARG002
+        mock_guidance: Any,  # noqa: ARG002
+        mock_instructions: Any,  # noqa: ARG002
+        mock_run_individual: Any,
+        mock_run_batch: Any,
+        mock_run_batch_concurrent: Any,
+        tmp_path: pathlib.Path,
+    ) -> None:
+        """mode='individual' with max_concurrency dispatches to run_individual."""
+        output_dir = str(tmp_path / "output")
+        os.makedirs(output_dir, exist_ok=True)
+
+        mock_config.return_value = GraderConfig(
+            instructions="test",
+            rubric_path="/rubric.json",
+            workdir=str(tmp_path),
+            trajectory_path="/logs/trajectory.json",
+            sandbox_user="sandbox",
+            output_dir=output_dir,
+            mode="individual",
+            max_concurrency=3,
+        )
+        mock_rubric.return_value = self._make_rubric(4)
+        mock_run_individual.return_value = (
+            [CriterionResult(criterion=f"criterion {i}", weight=1.0, met=True, reasoning="ok") for i in range(4)],
+            LLMUsage(cost_usd=0.1),
+        )
+
+        with patch("sys.argv", ["prog", "--config", "dummy.toml"]):
+            main()
+
+        mock_run_individual.assert_called_once()
+        mock_run_batch.assert_not_called()
+        mock_run_batch_concurrent.assert_not_called()
+
+    @patch("gandalf.orchestrator.run_judge")
+    def test_max_concurrency_capped_to_chunk_count(
+        self, mock_run_judge: Any, tmp_path: pathlib.Path
+    ) -> None:
+        """batch_splits=2, max_concurrency=10 — thread pool capped to 2 (the actual chunk count)."""
+        config = make_config(
+            workdir=str(tmp_path),
+            output_dir=str(tmp_path / "output"),
+            mode="batch",
+            batch_splits=2,
+            max_concurrency=10,
+        )
+        os.makedirs(config.output_dir, exist_ok=True)
+        rubric = self._make_rubric(4)
+
+        import threading
+
+        peak_concurrent = 0
+        current_concurrent = 0
+        lock = threading.Lock()
+
+        def _side_effect(judge_input: BatchJudgeInput, **_kwargs: Any) -> tuple[list[Verdict], LLMUsage]:
+            nonlocal peak_concurrent, current_concurrent
+            with lock:
+                current_concurrent += 1
+                peak_concurrent = max(peak_concurrent, current_concurrent)
+            import time
+
+            time.sleep(0.05)
+            with lock:
+                current_concurrent -= 1
+            verdicts = [Verdict(met=True, reasoning="ok") for _ in judge_input.criteria]
+            return verdicts, LLMUsage(cost_usd=0.1)
+
+        mock_run_judge.side_effect = _side_effect
+
+        results, _ = run_batch_concurrent(config, rubric, "done", "test", "", None)
+
+        assert mock_run_judge.call_count == 2
+        assert len(results) == 4
+        # Peak concurrency must be 2 (chunks), not 10 (max_concurrency)
+        assert peak_concurrent <= 2
+
+    @patch("gandalf.orchestrator.run_judge")
+    def test_individual_mode_parallelizes_with_max_concurrency(
+        self, mock_run_judge: Any, tmp_path: pathlib.Path
+    ) -> None:
+        """run_individual with max_concurrency=3 actually evaluates criteria concurrently."""
+        config = make_config(
+            workdir=str(tmp_path),
+            output_dir=str(tmp_path / "output"),
+            mode="individual",
+            max_concurrency=3,
+        )
+        os.makedirs(config.output_dir, exist_ok=True)
+        rubric = self._make_rubric(6)
+
+        import threading
+
+        peak_concurrent = 0
+        current_concurrent = 0
+        lock = threading.Lock()
+
+        def _side_effect(judge_input: JudgeInput, **_kwargs: Any) -> tuple[list[Verdict], LLMUsage]:
+            nonlocal peak_concurrent, current_concurrent
+            with lock:
+                current_concurrent += 1
+                peak_concurrent = max(peak_concurrent, current_concurrent)
+            import time
+
+            time.sleep(0.05)
+            with lock:
+                current_concurrent -= 1
+            return [Verdict(met=True, reasoning="ok")], LLMUsage(cost_usd=0.01)
+
+        mock_run_judge.side_effect = _side_effect
+
+        results, usage = run_individual(config, rubric, "done", "test", "", None)
+
+        # All 6 criteria evaluated individually
+        assert mock_run_judge.call_count == 6
+        assert len(results) == 6
+        for i, r in enumerate(results):
+            assert r.criterion == f"criterion {i}"
+            assert r.met is True
+        # Must have actually parallelized — peak > 1
+        assert peak_concurrent > 1
+        assert peak_concurrent <= 3
+        assert usage.cost_usd == pytest.approx(0.06)
