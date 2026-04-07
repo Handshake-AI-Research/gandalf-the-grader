@@ -1,10 +1,10 @@
-model = "google/gemini-2.5-flash"
+model = "gemini/gemini-2.5-flash"
 sandbox_user = "sandbox"
 instructions = "Build a web app that displays hello world."
 rubric_path = "/tests/rubric.json"
 workdir = "/home/agent/workspace"
 trajectory_path = "/logs/agent/trajectory.json"
-output_dir = "/logs/verifier"
+output_dir = "/logs/grader"
 judge_timeout = 120
 
 [[mcp_servers]]

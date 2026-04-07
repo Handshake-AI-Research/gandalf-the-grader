@@ -16,7 +16,7 @@ You are an expert judge evaluating whether an AI agent successfully completed a 
 
 <evaluation_criteria>
 {%- for c in criteria %}
-  [{{ c.index }}] {{ c.criteria }}
+  [{{ loop.index0 }}] {{ c }}
 {%- endfor %}
 </evaluation_criteria>
 
@@ -59,9 +59,8 @@ Example:
 ]
 ```
 
-You MUST include a verdict for every criterion index (0 through {{ n_max }}).
+You MUST include a verdict for every criterion index (0 through {{ criteria|length - 1 }}).
 Write ONLY valid JSON to that file, with no additional text.
-Remember: in JSON strings, backslashes must be escaped as \\. For example, write \\$ not \$.
 
 YOUR FINAL ACTION must be: use file_editor tool (create command) to write the complete JSON array to {{ verdict_path }}. Do not finish or end your response until this file is written. Do not print the verdicts in your response — only the file on disk counts.
 </judge_instructions>

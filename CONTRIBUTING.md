@@ -1,20 +1,8 @@
 # Contributing
 
-## Development Setup
+Thank you for your interest in contributing to gandalf-the-grader!
 
-```bash
-git clone https://github.com/Handshake-AI-Research/gandalf-the-grader.git
-cd gandalf-the-grader
-uv sync --dev
-```
-
-## Running Tests
-
-```bash
-uv run pytest
-uv run ruff check src/ tests/
-uv run mypy src/
-```
+See [DEVELOPMENT.md](DEVELOPMENT.md) for setting up your development environment.
 
 ## Pull Requests
 
@@ -22,9 +10,3 @@ uv run mypy src/
 2. Make your changes — keep diffs focused.
 3. Ensure all tests pass and linting is clean.
 4. Open a PR with a clear description of what changed and why.
-
-## Code Style
-
-- Formatted and linted with [Ruff](https://docs.astral.sh/ruff/).
-- Type-checked with [mypy](https://mypy-lang.org/) in strict mode.
-- Line length limit: 120 characters.

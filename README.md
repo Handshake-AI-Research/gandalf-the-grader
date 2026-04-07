@@ -1,13 +1,13 @@
 # gandalf-the-grader
 
 Agent-as-a-Judge grading framework for evaluating AI outputs against rubric criteria.
-Unlike simple LLM-as-a-Judge verifiers, this verifier can grade outputs that are complex files (such as Excel or Powerpoint deliverables).
+Unlike simple LLM-as-a-Judge graders, this grader can grade outputs that are complex files (such as Excel or Powerpoint deliverables).
 
-![You shall not pass quote](assets/shallnotpass.png)
+![You shall not pass quote](https://raw.githubusercontent.com/Handshake-AI-Research/assets/refs/heads/main/gandalf-the-grader/shallnotpass.png)
 
 ## Overview
 
-`gandalf-grader` uses LLM-powered judge agents to evaluate whether an AI agent successfully completed a task. It is the production verifier component of the [rle-pkg](https://github.com/Handshake-AI-Research/rle-pkg) architecture.
+`gandalf-the-grader` uses LLM-powered judge agents to evaluate whether an AI agent successfully completed a task. It is the production grader component of the [rle-pkg](https://github.com/Handshake-AI-Research/rle-pkg) architecture.
 
 Given a task description, a rubric of evaluation criteria, and the agent's trajectory, the grader spawns judge agents that inspect the agent's workspace — reading files, running commands, and using tools — to determine whether each criterion's condition is met. The final reward is always in [0, 1], with raw scoring details included in `info.json`.
 
@@ -15,20 +15,13 @@ Given a task description, a rubric of evaluation criteria, and the agent's traje
 
 The grader uses a two-process architecture:
 
-- **Outer orchestrator** (`gandalf-grader`) — runs as the verifier user, manages the evaluation loop, computes reward/raw scoring outputs, and writes output files.
-- **Inner judge** (`gandalf-grader-judge`) — runs as the sandbox user (via `sudo`), executes an [OpenHands](https://github.com/All-Hands-AI/OpenHands) agent-as-judge session that investigates the workspace and writes a verdict.
+- **Outer orchestrator** (`gandalf-the-grader`) — runs as the grader user, manages the evaluation loop, computes reward/raw scoring outputs, and writes output files.
+- **Inner judge** (`gandalf-the-grader-judge`) — runs as the sandbox user (via `sudo`), executes an [OpenHands](https://github.com/All-Hands-AI/OpenHands) agent-as-judge session that investigates the workspace and writes a verdict.
 
-Two evaluation modes are supported (configured via `mode` in the TOML config):
+Two evaluation modes are supported:
 
-- **Individual** (default): one agent session per rubric criterion.
-- **Batch**: all criteria evaluated in a single agent session.
-
-When `max_concurrency` > 1, multiple judge sessions run in parallel. For batch mode this splits criteria into positional chunks; for individual mode it runs multiple criterion evaluations concurrently.
-
-```toml
-mode = "batch"
-max_concurrency = 2   # split criteria into 2 chunks, evaluate in parallel
-```
+- **Batch** (default): all criteria evaluated in a single agent session.
+- **Sequential**: one agent session per rubric criterion.
 
 ## Installation
 
@@ -44,51 +37,56 @@ uv tool install git+https://github.com/Handshake-AI-Research/gandalf-the-grader.
 
 ## Quick Start
 
-Create a verifier config (`verifier.toml`):
+Create a grader config (`grader.toml`):
 
 ```toml
-model = "google/gemini-2.5-flash"
+model = "gemini/gemini-2.5-flash"
 sandbox_user = "sandbox"
 instructions = "Build a web app that displays hello world."
 rubric_path = "/tests/rubric.json"
 workdir = "/home/agent/workspace"
 trajectory_path = "/logs/agent/trajectory.json"
+output_dir = "/logs/grader"
 ```
 
 Create a rubric (`rubric.json`):
 
 ```json
 [
-  {"criteria": "The file index.html exists in the workspace", "weight": 1.0},
-  {"criteria": "The page displays 'Hello World'", "weight": 2.0}
+  {"criterion": "The file index.html exists in the workspace", "weight": 1.0},
+  {"criterion": "The page displays 'Hello World'", "weight": 2.0}
 ]
 ```
 
 Run the grader:
 
 ```bash
-gandalf-grader --config /tests/verifier.toml
+gandalf-the-grader --config /tests/grader.toml
 ```
 
 ## Configuration
 
-### `verifier.toml`
+### `grader.toml`
 
 | Field | Required | Default | Description |
 |---|---|---|---|
-| `model` | No | `google/gemini-2.5-flash` | LLM model for the judge agent |
-| `sandbox_user` | Yes | | Username for running the inner judge (via sudo) |
-| `instructions` | Yes | | Task instructions given to the original agent |
-| `rubric_path` | Yes | | Path to rubric JSON file |
+| `instructions` | Yes\* | | Inline task instructions given to the original agent (mutually exclusive with `instructions_path`) |
+| `instructions_path` | Yes\* | | Path to a file with task instructions (mutually exclusive with `instructions`) |
+| `rubric` | Yes\* | | Inline rubric as a TOML array of tables (mutually exclusive with `rubric_path`) |
+| `rubric_path` | Yes\* | | Path to rubric JSON file (mutually exclusive with `rubric`) |
+| `judge_guidance` | No | | Inline judge guidance text (mutually exclusive with `judge_guidance_path`) |
+| `judge_guidance_path` | No | | Path to a file with extra judge instructions (mutually exclusive with `judge_guidance`) |
 | `workdir` | Yes | | Agent workspace directory |
 | `trajectory_path` | Yes | | Path to ATIF trajectory JSON |
-| `output_dir` | No | `/logs/verifier` | Directory for output files |
+| `output_dir` | Yes | | Directory for grader output files |
+| `model` | No | `gemini/gemini-2.5-flash` | LLM model for the judge agent |
+| `mode` | No | `batch` | Evaluation mode: `batch` or `sequential` |
 | `judge_timeout` | No | `300` | Max seconds per judge invocation |
-| `mode` | No | `individual` | Evaluation mode: `individual` or `batch` |
-| `max_concurrency` | No | `None` | Max parallel judge sessions (None = no parallelism) |
-| `judge_retries` | No | `1` | Number of retry attempts for errored criteria |
-| `judge_guidance_path` | No | | Path to a markdown file with extra judge instructions |
-| `batch_timeout` | No | | Max seconds per batch session (caps `judge_timeout * N_criteria_in_session`) |
+| `batch_timeout` | No | | Max total seconds for batch mode (caps `judge_timeout * N`) |
+| `judge_retries` | No | `1` | Number of retry attempts for criteria that error due to infrastructure failures |
+| `sandbox_user` | No | | Username for running the inner judge (via sudo). When omitted the judge runs as the current user. |
+| `judge_prompt` | No | | Inline Jinja2 template that completely overrides the built-in judge task prompt (mutually exclusive with `judge_prompt_path`) |
+| `judge_prompt_path` | No | | Path to a Jinja2 template file that completely overrides the built-in judge task prompt (mutually exclusive with `judge_prompt`) |
 
 MCP servers can be configured as TOML array of tables:
 
@@ -100,15 +98,36 @@ command = "/usr/bin/mcp-server"
 args = ["--verbose"]
 ```
 
+### Custom Judge Prompt
+
+By default, the grader uses a built-in prompt template to kick off each judge session. `judge_prompt` / `judge_prompt_path` let you replace it entirely with a custom [Jinja2](https://jinja.palletsprojects.com/) template.
+
+> **Note:** This prompt is sent as the opening **user message** to the judge agent — it is not the LLM system prompt. The underlying agent framework (OpenHands) has its own immutable system message with coding and tool-use instructions that we never modify. Our prompt sits on top of that as the first user turn, setting up the grading task.
+
+For most use cases, `judge_guidance` / `judge_guidance_path` is all you need — it injects extra instructions into the built-in prompt without replacing it. Fully overriding the judge prompt is an uncommon escape hatch for situations where the built-in prompt structure itself is unsuitable.
+
+The template receives these variables:
+
+| Variable | Type | Mode | Description |
+|---|---|---|---|
+| `instructions` | `str` | both | Task instructions given to the original agent |
+| `final_output` | `str` | both | Agent's final message from the trajectory |
+| `criterion` | `str` | sequential | The single criterion string to evaluate |
+| `criteria` | `list[str]` | batch | List of all criterion strings to evaluate |
+| `verdict_path` | `str` | both | File path the judge must write its verdict to |
+| `judge_guidance` | `str` | both | Additional guidance text (may be empty) |
+
+Sequential and batch modes use separate built-in templates. In a custom template, use `{% if criterion is defined %}` vs `{% if criteria is defined %}` if you need to distinguish modes. In batch mode, use `loop.index0` for the criterion index (e.g., `{% for c in criteria %}[{{ loop.index0 }}] {{ c }}{% endfor %}`).
+
 ### Rubric JSON
 
-A JSON array of objects with `criteria` (string) and `weight` (float). Weights can be negative to penalise undesired outcomes:
+A JSON array of objects with `criterion` (string) and `weight` (float). Weights can be negative to penalise undesired outcomes:
 
 ```json
 [
-  {"criteria": "The output file exists", "weight": 2.0},
-  {"criteria": "The output contains correct totals", "weight": 3.0},
-  {"criteria": "The agent used hardcoded values instead of computing", "weight": -1.0}
+  {"criterion": "The output file exists", "weight": 2.0},
+  {"criterion": "The output contains correct totals", "weight": 3.0},
+  {"criterion": "The agent used hardcoded values instead of computing", "weight": -1.0}
 ]
 ```
 
@@ -150,7 +169,9 @@ For a complete container architecture with task runners and agent environments, 
 |---|---|
 | `LLM_API_KEY` | API key for the LLM provider |
 | `LLM_BASE_URL` | Base URL for the LLM API (optional) |
-| `VERIFIER_JUDGE_GUIDANCE_PATH` | Fallback path to judge guidance file (if not set in TOML) |
+| `GRADER_INSTRUCTIONS_PATH` | Fallback path to task instructions file (if not set in TOML) |
+| `GRADER_JUDGE_GUIDANCE_PATH` | Fallback path to judge guidance file (if not set in TOML) |
+| `GRADER_JUDGE_PROMPT_PATH` | Fallback path to custom judge prompt template (if not set in TOML) |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | OTLP endpoint URL for trace export (optional) |
 | `OTEL_EXPORTER_OTLP_HEADERS` | OTLP auth headers, URL-encoded (optional) |
 | `OTEL_EXPORTER_OTLP_TRACES_PROTOCOL` | OTLP transport protocol, e.g. `http/protobuf` (optional) |
@@ -173,10 +194,10 @@ export OTEL_EXPORTER_OTLP_TRACES_PROTOCOL=http/protobuf
 
 ## Output
 
-The grader writes to `output_dir` (default `/logs/verifier`):
+The grader writes to `output_dir`:
 
 - `reward.json` — Reward file: `{"reward": 0.75}` (always in [0, 1])
-- `info.json` — Per-criteria results with `met`/not-met, reasoning, evidence, LLM usage, plus `reward`, `raw_score`, `minimum_score`, and `maximum_score`
+- `info.json` — Per-criterion results with `met`/not-met, reasoning, evidence, LLM usage, plus `reward`, `raw_score`, `minimum_score`, and `maximum_score`
 - `judge_trace_<i>.txt` — stdout/stderr capture for each judge invocation
 
 The `reward` in `reward.json` is `clip(0, 1, raw_score / sum_of_positive_weights)`, always in [0, 1]. `info.json` additionally includes `raw_score` (the raw sum of weights for met criteria, which can be negative) and `minimum_score`/`maximum_score` bounds for reference.
@@ -186,11 +207,12 @@ The `reward` in `reward.json` is `clip(0, 1, raw_score / sum_of_positive_weights
 ```bash
 git clone https://github.com/Handshake-AI-Research/gandalf-the-grader.git
 cd gandalf-the-grader
-uv sync --dev
-uv run pytest
-uv run ruff check src/ tests/
-uv run mypy src/
+hatch test
+hatch fmt --check
+hatch run types:check
 ```
+
+See [DEVELOPMENT.md](DEVELOPMENT.md) for full setup details.
 
 ## License
 

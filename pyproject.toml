@@ -1,6 +1,6 @@
 [project]
-name = "gandalf-grader"
-version = "0.4.6"
+name = "gandalf-the-grader"
+dynamic = ["version", "optional-dependencies"]
 description = "Agent-as-judge grading framework for evaluating AI agent outputs against rubric criteria"
 readme = "README.md"
 license = "Apache-2.0"
@@ -13,32 +13,38 @@ classifiers = [
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
 dependencies = [
+    "jinja2>=3.1,<4",
     "litellm>=1.82.0,<2",
     "openhands-sdk>=1.11.2,<1.16.1",
     "openhands-tools>=1.11.2,<1.16.1",
-    "jinja2>=3.1,<4",
     "pydantic>=2.12.5,<3",
 ]
-dynamic = ["optional-dependencies"]
 
 [project.urls]
-Homepage = "https://github.com/Handshake-AI-Research/gandalf-the-grader"
-Repository = "https://github.com/Handshake-AI-Research/gandalf-the-grader"
-Issues = "https://github.com/Handshake-AI-Research/gandalf-the-grader/issues"
+homepage = "https://github.com/Handshake-AI-Research/gandalf-the-grader"
+repository = "https://github.com/Handshake-AI-Research/gandalf-the-grader"
+issues = "https://github.com/Handshake-AI-Research/gandalf-the-grader/issues"
 
 [project.scripts]
-gandalf-grader = "gandalf_grader.__main__:main"
-gandalf-grader-judge = "gandalf_grader.judge:main"
+gandalf-the-grader = "gandalf.orchestrator:main"
+gandalf-the-grader-judge = "gandalf.judge:main"
 
 [build-system]
 requires = ["hatchling", "hatch-pinned-extra>=0.2.0,<0.3.0"]
 build-backend = "hatchling.build"
 
+[tool.hatch.version]
+path = "src/gandalf/__about__.py"
+
 [tool.hatch.build.targets.wheel]
-packages = ["src/gandalf_grader"]
+packages = ["src/gandalf"]
+
+[tool.hatch.envs.default]
+installer = "uv"
 
 [tool.hatch.metadata.hooks.pinned_extra]
 name = "pinned"
@@ -46,9 +52,33 @@ name = "pinned"
 [dependency-groups]
 dev = ["pytest>=8.0", "ruff>=0.15.0", "mypy>=1.19.0"]
 
-[tool.ruff]
-line-length = 120
-lint.select = ["E", "W", "F", "UP", "B", "SIM", "I", "RUF"]
+[[tool.hatch.envs.hatch-test.matrix]]
+python = ["3.12", "3.13", "3.14"]
+
+[tool.hatch.envs.types]
+extra-dependencies = [
+    "mypy>=1.19.0",
+    "pytest>=8.0",
+]
+
+[tool.hatch.envs.types.scripts]
+check = "mypy {args:src tests}"
+
+[tool.hatch.envs.coverage]
+detached = true
+installer = "uv"
+dependencies = [
+    "coverage[toml]",
+]
+
+[tool.hatch.envs.coverage.scripts]
+html = "coverage html"
+xml = "coverage xml"
+
+[tool.coverage.run]
+omit = [
+    "*/tests/*",
+]
 
 [tool.mypy]
 strict = true
@@ -58,5 +88,5 @@ module = ["openhands.sdk", "openhands.tools.*", "litellm"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
 markers = ["llm: end-to-end tests that call a real LLM (require LLM_API_KEY)"]
+addopts = "-m 'not llm'"
