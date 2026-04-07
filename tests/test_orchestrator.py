@@ -1481,7 +1481,7 @@ class TestBatchConcurrent:
             workdir=str(tmp_path),
             output_dir=str(tmp_path / "output"),
             mode="batch",
-            max_concurrency=2,
+            batch_splits=2,
         )
         os.makedirs(config.output_dir, exist_ok=True)
 
@@ -1497,7 +1497,7 @@ class TestBatchConcurrent:
             workdir=str(tmp_path),
             output_dir=str(tmp_path / "output"),
             mode="batch",
-            max_concurrency=2,
+            batch_splits=2,
         )
         os.makedirs(config.output_dir, exist_ok=True)
         rubric = self._make_rubric(4)
@@ -1539,7 +1539,7 @@ class TestBatchConcurrent:
             workdir=str(tmp_path),
             output_dir=str(tmp_path / "output"),
             mode="batch",
-            max_concurrency=3,
+            batch_splits=3,
         )
         os.makedirs(config.output_dir, exist_ok=True)
         rubric = self._make_rubric(6)  # 6 criteria → 3 chunks of 2
@@ -1572,7 +1572,7 @@ class TestBatchConcurrent:
             workdir=str(tmp_path),
             output_dir=str(tmp_path / "output"),
             mode="batch",
-            max_concurrency=3,
+            batch_splits=3,
         )
         os.makedirs(config.output_dir, exist_ok=True)
         rubric = self._make_rubric(7)
@@ -1594,12 +1594,12 @@ class TestBatchConcurrent:
 
     @patch("gandalf.orchestrator.run_judge")
     def test_splits_exceeds_rubric_size(self, mock_run_judge: Any, tmp_path: pathlib.Path) -> None:
-        """max_concurrency=5 with 3 criteria → 3 chunks of 1 each."""
+        """batch_splits=5 with 3 criteria → 3 chunks of 1 each."""
         config = make_config(
             workdir=str(tmp_path),
             output_dir=str(tmp_path / "output"),
             mode="batch",
-            max_concurrency=5,
+            batch_splits=5,
         )
         os.makedirs(config.output_dir, exist_ok=True)
         rubric = self._make_rubric(3)
@@ -1623,7 +1623,7 @@ class TestBatchConcurrent:
             workdir=str(tmp_path),
             output_dir=str(tmp_path / "output"),
             mode="batch",
-            max_concurrency=2,
+            batch_splits=2,
         )
         os.makedirs(config.output_dir, exist_ok=True)
         rubric = self._make_rubric(4)
@@ -1655,7 +1655,7 @@ class TestBatchConcurrent:
             workdir=str(tmp_path),
             output_dir=str(tmp_path / "output"),
             mode="batch",
-            max_concurrency=2,
+            batch_splits=2,
         )
         os.makedirs(config.output_dir, exist_ok=True)
         rubric = self._make_rubric(4)
@@ -1688,7 +1688,7 @@ class TestBatchConcurrent:
             workdir=str(tmp_path),
             output_dir=str(tmp_path / "output"),
             mode="batch",
-            max_concurrency=2,
+            batch_splits=2,
             judge_timeout=100,
         )
         os.makedirs(config.output_dir, exist_ok=True)
@@ -1715,7 +1715,7 @@ class TestBatchConcurrent:
             workdir=str(tmp_path),
             output_dir=str(tmp_path / "output"),
             mode="batch",
-            max_concurrency=2,
+            batch_splits=2,
             judge_timeout=100,
             batch_timeout=150,
         )
@@ -1754,7 +1754,7 @@ class TestBatchConcurrent:
         mock_instructions: Any,  # noqa: ARG002
         tmp_path: pathlib.Path,
     ) -> None:
-        """main() dispatches to run_batch_concurrent when max_concurrency > 1."""
+        """main() dispatches to run_batch_concurrent when batch_splits is set."""
         output_dir = str(tmp_path / "output")
         os.makedirs(output_dir, exist_ok=True)
 
@@ -1766,7 +1766,7 @@ class TestBatchConcurrent:
             sandbox_user="sandbox",
             output_dir=output_dir,
             mode="batch",
-            max_concurrency=2,
+            batch_splits=2,
         )
         mock_rubric.return_value = self._make_rubric(4)
 
@@ -1793,7 +1793,7 @@ class TestBatchConcurrent:
             workdir=str(tmp_path),
             output_dir=str(tmp_path / "output"),
             mode="batch",
-            max_concurrency=2,
+            batch_splits=2,
         )
         os.makedirs(config.output_dir, exist_ok=True)
         rubric = self._make_rubric(4)
@@ -1823,7 +1823,7 @@ class TestBatchConcurrent:
             workdir=str(tmp_path),
             output_dir=str(tmp_path / "output"),
             mode="batch",
-            max_concurrency=2,
+            batch_splits=2,
         )
         os.makedirs(config.output_dir, exist_ok=True)
         rubric = self._make_rubric(4)

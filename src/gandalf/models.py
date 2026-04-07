@@ -35,15 +35,21 @@ class GraderConfig(BaseModel):
     """Top-level grader configuration loaded from a TOML file.
 
     mode controls how rubric criteria are evaluated:
-      - "sequential": each criterion is evaluated in its own agent
+      - "individual": each criterion is evaluated in its own agent
         session (one invocation of gandalf-the-grader-judge per criterion).
       - "batch" (default): all criteria are sent to a single agent session,
         which writes a JSON array of verdicts in one go.
 
+    batch_splits controls how many chunks criteria are split into for batch
+    mode.  Ignored in individual mode.
+      - None (default): all criteria in a single batch session.
+      - N (>= 2): criteria are split into N positional chunks, each sent as
+        a separate batch session.
+
     max_concurrency controls how many judge sessions run in parallel:
-      - None (default): no parallelism (1 session at a time).
-      - N (>= 1): up to N sessions in parallel.  For batch mode, criteria are
-        split into N positional chunks evaluated as separate batch sessions.
+      - None (default): interpreted as 1 for individual mode, and
+        batch_splits for batch mode (i.e. all splits run in parallel).
+      - N (>= 1): up to N sessions in parallel.
 
     judge_timeout is the per-criterion budget in seconds, regardless of mode.
     In batch mode the effective timeout per session is
@@ -67,7 +73,8 @@ class GraderConfig(BaseModel):
     judge_prompt: str | None = None
     judge_prompt_path: str | None = None
     batch_timeout: int | None = None
-    mode: Literal["sequential", "batch"] = "batch"
+    mode: Literal["individual", "batch"] = "batch"
+    batch_splits: int | None = Field(default=None, ge=2)
     max_concurrency: int | None = Field(default=None, ge=1)
     judge_retries: int = 1
 
@@ -87,6 +94,9 @@ class GraderConfig(BaseModel):
             raise ValueError(msg)
         if self.judge_prompt is not None and self.judge_prompt_path is not None:
             msg = "Cannot set both 'judge_prompt' and 'judge_prompt_path'"
+            raise ValueError(msg)
+        if self.batch_splits is not None and self.mode != "batch":
+            msg = "'batch_splits' can only be used with mode='batch'"
             raise ValueError(msg)
         return self
 

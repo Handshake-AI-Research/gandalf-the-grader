@@ -7,9 +7,9 @@ Supports two evaluation modes (configured via ``mode`` in the TOML config):
   - **individual** (default): one agent session per rubric criterion.
   - **batch**: all criteria evaluated in a single agent session.
 
-When ``max_concurrency`` > 1, multiple judge sessions run in parallel.
-For batch mode this splits criteria into positional chunks; for individual
-mode it runs multiple criterion evaluations concurrently.
+When ``batch_splits`` is set (batch mode only), criteria are split into
+positional chunks evaluated as separate batch sessions.  ``max_concurrency``
+controls the maximum number of parallel judge sessions (for both modes).
 
 Produces (in ``output_dir``):
   reward.json  - Reward file ([0,1] reward)
@@ -496,18 +496,19 @@ def run_batch_concurrent(
     via a thread pool (each thread blocks on subprocess.run).  Results are merged
     back in original rubric order.
     """
-    concurrency = config.max_concurrency or 1
+    splits = config.batch_splits or 1
+    concurrency = config.max_concurrency if config.max_concurrency is not None else splits
     n = len(rubric)
     if n == 0:
         return [], LLMUsage()
-    chunk_size = math.ceil(n / concurrency)
+    chunk_size = math.ceil(n / splits)
     chunks: list[list[tuple[int, RubricItem]]] = [
         [(i, rubric[i]) for i in range(start, min(start + chunk_size, n))] for start in range(0, n, chunk_size)
     ]
 
     print(  # noqa: T201
         f"[batch-concurrent] Splitting {n} criteria into {len(chunks)} chunks "
-        f"(sizes: {', '.join(str(len(c)) for c in chunks)})"
+        f"(max_concurrency={concurrency}, sizes: {', '.join(str(len(c)) for c in chunks)})"
     )
 
     def _run_split(
@@ -560,7 +561,7 @@ def run_batch_concurrent(
     all_indexed_results: list[tuple[int, CriterionResult]] = []
     total_usage = LLMUsage()
 
-    with ThreadPoolExecutor(max_workers=len(chunks)) as executor:
+    with ThreadPoolExecutor(max_workers=min(concurrency, len(chunks))) as executor:
         futures = [executor.submit(_run_split, idx, chunk) for idx, chunk in enumerate(chunks)]
         try:
             for future in futures:
@@ -674,9 +675,13 @@ def main() -> None:
 
     os.makedirs(config.output_dir, exist_ok=True)
 
-    concurrency = config.max_concurrency or 1
-
-    run = (run_batch_concurrent if concurrency > 1 else run_batch) if config.mode == "batch" else run_individual
+    if config.mode == "batch":
+        splits = config.batch_splits
+        concurrency = config.max_concurrency if config.max_concurrency is not None else (splits or 1)
+        run = run_batch_concurrent if splits is not None else run_batch
+    else:
+        concurrency = config.max_concurrency or 1
+        run = run_individual
 
     # 1. Initial evaluation
     results, llm_usage = run(config, rubric, final_output, instructions, judge_guidance, judge_prompt)
@@ -730,7 +735,12 @@ def main() -> None:
             f"({len(rubric)} criteria, "
             f"{llm_usage.prompt_tokens} prompt + {llm_usage.completion_tokens} completion tokens)"
         )
-    mode_display = f"{config.mode} (max_concurrency={concurrency})" if concurrency > 1 else config.mode
+    if config.mode == "batch" and config.batch_splits is not None:
+        mode_display = f"batch (batch_splits={config.batch_splits}, max_concurrency={concurrency})"
+    elif concurrency > 1:
+        mode_display = f"{config.mode} (max_concurrency={concurrency})"
+    else:
+        mode_display = config.mode
     print(f"Mode: {mode_display}")  # noqa: T201
     if initial_errored > 0:
         print(f"Retried: {initial_errored} criteria recovered after retry")  # noqa: T201
