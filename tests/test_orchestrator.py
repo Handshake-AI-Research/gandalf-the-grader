@@ -24,9 +24,11 @@ from gandalf.models import (
 )
 from gandalf.orchestrator import (
     JUDGE_ENV_ALLOWLIST,
+    check_tmux_available,
     clone_workspace,
     judge_env_vars,
     main,
+    preflight_check,
     resolve_instructions,
     resolve_judge_guidance,
     resolve_judge_prompt,
@@ -309,6 +311,62 @@ class TestJudgeEnvVars:
         result = judge_env_vars()
         keys = {item.split("=", 1)[0] for item in result}
         assert keys == JUDGE_ENV_ALLOWLIST
+
+
+class TestCheckTmuxAvailable:
+    """Tests for the `tmux -V` probe run by preflight_check."""
+
+    def test_passes_when_tmux_runs_successfully(self) -> None:
+        ok = subprocess.CompletedProcess(args=["tmux", "-V"], returncode=0, stdout="tmux 3.3a\n", stderr="")
+        with patch("gandalf.orchestrator.subprocess.run", return_value=ok):
+            check_tmux_available()  # does not raise
+
+    def test_raises_on_nonzero_returncode(self) -> None:
+        bad = subprocess.CompletedProcess(args=["tmux", "-V"], returncode=1, stdout="", stderr="broken")
+        with (
+            patch("gandalf.orchestrator.subprocess.run", return_value=bad),
+            pytest.raises(RuntimeError, match="tmux"),
+        ):
+            check_tmux_available()
+
+    def test_raises_when_tmux_not_found(self) -> None:
+        with (
+            patch("gandalf.orchestrator.subprocess.run", side_effect=FileNotFoundError),
+            pytest.raises(RuntimeError, match="tmux"),
+        ):
+            check_tmux_available()
+
+    def test_raises_on_timeout(self) -> None:
+        with (
+            patch(
+                "gandalf.orchestrator.subprocess.run",
+                side_effect=subprocess.TimeoutExpired(cmd="tmux", timeout=5.0),
+            ),
+            pytest.raises(RuntimeError, match="tmux"),
+        ):
+            check_tmux_available()
+
+    def test_invokes_tmux_dash_v(self) -> None:
+        ok = subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
+        with patch("gandalf.orchestrator.subprocess.run", return_value=ok) as mock_run:
+            check_tmux_available()
+        assert mock_run.call_args[0][0] == ["tmux", "-V"]
+
+
+class TestPreflightCheck:
+    """preflight_check is the single entry point for runtime prerequisites."""
+
+    def test_calls_check_tmux_available(self) -> None:
+        with patch("gandalf.orchestrator.check_tmux_available") as mock_check:
+            preflight_check()
+        mock_check.assert_called_once_with()
+
+    def test_propagates_check_failure(self) -> None:
+        with (
+            patch("gandalf.orchestrator.check_tmux_available", side_effect=RuntimeError("nope")),
+            pytest.raises(RuntimeError, match="nope"),
+        ):
+            preflight_check()
 
 
 def run_ok(output_path: str, content: Any) -> subprocess.CompletedProcess[str]:

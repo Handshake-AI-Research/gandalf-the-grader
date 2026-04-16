@@ -1,7 +1,11 @@
 """Shared test fixtures and helpers."""
 
 import pathlib
+from collections.abc import Iterator
 from typing import Any
+from unittest.mock import patch
+
+import pytest
 
 from gandalf.models import (
     BatchJudgeInput,
@@ -9,6 +13,17 @@ from gandalf.models import (
     GraderConfig,
     LLMUsage,
 )
+
+
+@pytest.fixture(autouse=True)
+def _stub_preflight() -> Iterator[None]:
+    """Silence the orchestrator preflight check during tests by default.
+
+    Tests that exercise the preflight or the underlying probes import them by
+    name and therefore bypass this patch of the orchestrator attribute.
+    """
+    with patch("gandalf.orchestrator.preflight_check"):
+        yield
 
 
 def make_config(**overrides: Any) -> GraderConfig:

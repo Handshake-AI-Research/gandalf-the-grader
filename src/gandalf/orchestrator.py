@@ -654,10 +654,45 @@ def write_info(
     return reward, raw_score
 
 
+def check_tmux_available() -> None:
+    """Verify tmux is installed and usable.
+
+    OpenHands silently falls back to a less stable subprocess-based terminal
+    when tmux is missing; we refuse to run in that mode.
+
+    Raises:
+        RuntimeError: If tmux is missing or cannot be run.
+    """
+    # Same probe as OpenHands terminal factory (_is_tmux_available): run tmux and
+    # require exit 0. OpenHands silently falls back to a subprocess terminal
+    # when this fails; we fail fast instead.
+    try:
+        result = subprocess.run(
+            ["tmux", "-V"],  # noqa: S607
+            capture_output=True,
+            text=True,
+            timeout=5.0,
+            check=False,
+        )
+        ok = result.returncode == 0
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        ok = False
+    if not ok:
+        msg = "tmux is not installed or not on PATH."
+        raise RuntimeError(msg)
+
+
+def preflight_check() -> None:
+    """Validate runtime prerequisites before doing any real work."""
+    check_tmux_available()
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Grader: evaluate agent output via agent-as-judge")
     parser.add_argument("--config", required=True, help="Path to grader config TOML file")
     args = parser.parse_args()
+
+    preflight_check()
 
     config = load_config(args.config)
 

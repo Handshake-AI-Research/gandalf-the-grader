@@ -36,6 +36,10 @@ For production use, we recommend that you pin a specific version of Gandalf, and
 uv tool install 'gandalf-the-grader[pinned]==1.0.0'
 ```
 
+## Runtime dependencies
+
+**Important**: Gandalf is built on top of OpenHands, which [works best](https://github.com/OpenHands/software-agent-sdk/pull/120) when `tmux` is installed. The judge refuses to run when `tmux` is not on `PATH` rather than silently falling back to a less stable subprocess-based terminal.
+
 ## Quick start
 
 The repo ships a runnable example under [`examples/quickstart/`](examples/quickstart) that grades a pre-staged workspace + ATIF trajectory against a 3-criterion rubric. Two criteria are designed to be met and one is designed to fail, so you can see Gandalf's partial-credit grading and per-criterion reasoning in one run. From a fresh clone:
