@@ -137,9 +137,7 @@ class TestMCPServerToConfig:
         assert "args" not in _mcp_server_to_config(srv)
 
     def test_remote_streamable_http(self) -> None:
-        srv = MCPServer(
-            name="x", transport="streamable-http", url="http://localhost:8000/mcp"
-        )
+        srv = MCPServer(name="x", transport="streamable-http", url="http://localhost:8000/mcp")
         assert _mcp_server_to_config(srv) == {
             "url": "http://localhost:8000/mcp",
             "transport": "streamable-http",
@@ -159,9 +157,7 @@ class TestMCPServerToConfig:
         }
 
     def test_remote_omits_empty_headers(self) -> None:
-        srv = MCPServer(
-            name="x", transport="sse", url="http://localhost:8000/sse"
-        )
+        srv = MCPServer(name="x", transport="sse", url="http://localhost:8000/sse")
         assert "headers" not in _mcp_server_to_config(srv)
 
 
