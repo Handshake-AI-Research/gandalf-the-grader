@@ -28,13 +28,12 @@ class MCPServer(BaseModel):
             if not self.command:
                 msg = f"MCP server {self.name!r}: 'command' is required for stdio transport"
                 raise ValueError(msg)
-        else:
-            if not self.url:
-                msg = (
-                    f"MCP server {self.name!r}: 'url' is required for "
-                    f"transport {self.transport!r}"
-                )
-                raise ValueError(msg)
+        elif not self.url:
+            msg = (
+                f"MCP server {self.name!r}: 'url' is required for "
+                f"transport {self.transport!r}"
+            )
+            raise ValueError(msg)
         return self
 
 
