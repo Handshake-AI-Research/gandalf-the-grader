@@ -115,10 +115,48 @@ class TestPydanticModels:
         srv = MCPServer(name="test", command="/bin/test")
         assert srv.transport == "stdio"
         assert srv.args == []
+        assert srv.url is None
+        assert srv.headers == {}
 
-    def test_mcp_server_rejects_non_stdio_transport(self) -> None:
+    def test_mcp_server_stdio_requires_command(self) -> None:
+        with pytest.raises(ValidationError, match="'command' is required"):
+            MCPServer(name="test")
+
+    def test_mcp_server_remote_streamable_http(self) -> None:
+        srv = MCPServer(
+            name="remote",
+            transport="streamable-http",
+            url="http://localhost:8000/mcp",
+        )
+        assert srv.transport == "streamable-http"
+        assert srv.url == "http://localhost:8000/mcp"
+        assert srv.command is None
+
+    def test_mcp_server_remote_http_with_headers(self) -> None:
+        srv = MCPServer(
+            name="remote",
+            transport="http",
+            url="https://api.example.com/mcp",
+            headers={"Authorization": "Bearer token"},
+        )
+        assert srv.transport == "http"
+        assert srv.headers == {"Authorization": "Bearer token"}
+
+    def test_mcp_server_remote_sse(self) -> None:
+        srv = MCPServer(
+            name="remote",
+            transport="sse",
+            url="http://localhost:8000/sse",
+        )
+        assert srv.transport == "sse"
+
+    def test_mcp_server_remote_requires_url(self) -> None:
+        with pytest.raises(ValidationError, match="'url' is required"):
+            MCPServer(name="remote", transport="streamable-http")
+
+    def test_mcp_server_rejects_unknown_transport(self) -> None:
         with pytest.raises(ValidationError):
-            MCPServer(name="test", command="/bin/test", transport="sse")  # type: ignore[arg-type]
+            MCPServer(name="test", command="/bin/test", transport="grpc")  # type: ignore[arg-type]
 
     def test_grader_config_has_trajectory_path(self) -> None:
         cfg = GraderConfig(
