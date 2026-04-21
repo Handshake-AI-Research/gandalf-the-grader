@@ -237,7 +237,7 @@ def run_agent_session(
     ]
 
     if mcp_servers:
-        mcp_config: dict[str, Any] = {"mcpServers": {srv.name: mcp_server_to_config(srv) for srv in mcp_servers}}
+        mcp_config = {"mcpServers": {srv.name: mcp_server_to_config(srv) for srv in mcp_servers}}
         agent = Agent(llm=llm, tools=tools, mcp_config=mcp_config)
     else:
         agent = Agent(llm=llm, tools=tools)
