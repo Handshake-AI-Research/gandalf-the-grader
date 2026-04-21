@@ -10,10 +10,10 @@ from unittest.mock import patch
 import pytest
 
 from gandalf.judge import (
-    _mcp_server_to_config,
     build_batch_judge_prompt,
     build_judge_prompt,
     make_verdict_path,
+    mcp_server_to_config,
     read_batch_verdict,
     read_verdict,
     run_judge,
@@ -123,22 +123,22 @@ class TestMCPServerToConfig:
 
     def test_stdio_minimal(self) -> None:
         srv = MCPServer(name="x", command="/bin/x")
-        assert _mcp_server_to_config(srv) == {"command": "/bin/x"}
+        assert mcp_server_to_config(srv) == {"command": "/bin/x"}
 
     def test_stdio_with_args(self) -> None:
         srv = MCPServer(name="x", command="/bin/x", args=["--verbose", "--port", "8000"])
-        assert _mcp_server_to_config(srv) == {
+        assert mcp_server_to_config(srv) == {
             "command": "/bin/x",
             "args": ["--verbose", "--port", "8000"],
         }
 
     def test_stdio_omits_empty_args(self) -> None:
         srv = MCPServer(name="x", command="/bin/x", args=[])
-        assert "args" not in _mcp_server_to_config(srv)
+        assert "args" not in mcp_server_to_config(srv)
 
     def test_remote_streamable_http(self) -> None:
         srv = MCPServer(name="x", transport="streamable-http", url="http://localhost:8000/mcp")
-        assert _mcp_server_to_config(srv) == {
+        assert mcp_server_to_config(srv) == {
             "url": "http://localhost:8000/mcp",
             "transport": "streamable-http",
         }
@@ -150,7 +150,7 @@ class TestMCPServerToConfig:
             url="https://api.example.com/mcp",
             headers={"Authorization": "Bearer token"},
         )
-        assert _mcp_server_to_config(srv) == {
+        assert mcp_server_to_config(srv) == {
             "url": "https://api.example.com/mcp",
             "transport": "http",
             "headers": {"Authorization": "Bearer token"},
@@ -158,7 +158,7 @@ class TestMCPServerToConfig:
 
     def test_remote_omits_empty_headers(self) -> None:
         srv = MCPServer(name="x", transport="sse", url="http://localhost:8000/sse")
-        assert "headers" not in _mcp_server_to_config(srv)
+        assert "headers" not in mcp_server_to_config(srv)
 
 
 class TestMakeVerdictPath:

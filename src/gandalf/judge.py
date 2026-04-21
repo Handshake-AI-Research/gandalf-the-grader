@@ -181,7 +181,7 @@ def make_verdict_path(prefix: str = "verdict_", directory: str | None = None) ->
     return os.path.join(base, f"{prefix}{secrets.token_hex(8)}.json")
 
 
-def _mcp_server_to_config(srv: MCPServer) -> dict[str, Any]:
+def mcp_server_to_config(srv: MCPServer) -> dict[str, Any]:
     """Render an MCPServer as the FastMCP MCPConfig server entry shape.
 
     Stdio servers map to ``{"command": ..., "args": ...}``; remote servers
@@ -237,7 +237,7 @@ def run_agent_session(
     ]
 
     if mcp_servers:
-        mcp_config: dict[str, Any] = {"mcpServers": {srv.name: _mcp_server_to_config(srv) for srv in mcp_servers}}
+        mcp_config: dict[str, Any] = {"mcpServers": {srv.name: mcp_server_to_config(srv) for srv in mcp_servers}}
         agent = Agent(llm=llm, tools=tools, mcp_config=mcp_config)
     else:
         agent = Agent(llm=llm, tools=tools)
