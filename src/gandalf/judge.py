@@ -181,6 +181,23 @@ def make_verdict_path(prefix: str = "verdict_", directory: str | None = None) ->
     return os.path.join(base, f"{prefix}{secrets.token_hex(8)}.json")
 
 
+def mcp_server_to_config(srv: MCPServer) -> dict[str, Any]:
+    """Render an MCPServer as the FastMCP MCPConfig server entry shape.
+
+    Stdio servers map to ``{"command": ..., "args": ...}``; remote servers
+    (streamable-http, http, sse) map to ``{"url": ..., "transport": ..., "headers": ...}``.
+    """
+    if srv.transport == "stdio":
+        entry: dict[str, Any] = {"command": srv.command}
+        if srv.args:
+            entry["args"] = srv.args
+        return entry
+    entry = {"url": srv.url, "transport": srv.transport}
+    if srv.headers:
+        entry["headers"] = srv.headers
+    return entry
+
+
 def run_agent_session(
     model: str,
     mcp_servers: list[MCPServer],
@@ -220,11 +237,7 @@ def run_agent_session(
     ]
 
     if mcp_servers:
-        mcp_config: dict[str, Any] = {
-            "mcpServers": {
-                srv.name: {"command": srv.command, **({"args": srv.args} if srv.args else {})} for srv in mcp_servers
-            }
-        }
+        mcp_config = {"mcpServers": {srv.name: mcp_server_to_config(srv) for srv in mcp_servers}}
         agent = Agent(llm=llm, tools=tools, mcp_config=mcp_config)
     else:
         agent = Agent(llm=llm, tools=tools)

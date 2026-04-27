@@ -8,15 +8,30 @@ from pydantic import BaseModel, Field, TypeAdapter, model_validator
 
 
 class MCPServer(BaseModel):
-    """Configuration for a stdio MCP server.
+    """Configuration for an MCP server.
 
-    Only stdio transport is supported (OpenHands SDK limitation).
+    Supports stdio (subprocess) and remote network transports
+    (streamable-http, http, sse).  Stdio servers require ``command``;
+    remote servers require ``url``.
     """
 
     name: str
-    transport: Literal["stdio"] = "stdio"
-    command: str
+    transport: Literal["stdio", "streamable-http", "http", "sse"] = "stdio"
+    command: str | None = None
     args: list[str] = Field(default_factory=list)
+    url: str | None = None
+    headers: dict[str, str] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def _check_transport_fields(self) -> "MCPServer":
+        if self.transport == "stdio":
+            if not self.command:
+                msg = f"MCP server {self.name!r}: 'command' is required for stdio transport"
+                raise ValueError(msg)
+        elif not self.url:
+            msg = f"MCP server {self.name!r}: 'url' is required for transport {self.transport!r}"
+            raise ValueError(msg)
+        return self
 
 
 class RubricItem(BaseModel):

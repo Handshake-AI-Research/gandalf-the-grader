@@ -13,12 +13,13 @@ from gandalf.judge import (
     build_batch_judge_prompt,
     build_judge_prompt,
     make_verdict_path,
+    mcp_server_to_config,
     read_batch_verdict,
     read_verdict,
     run_judge,
     run_judge_batch,
 )
-from gandalf.models import LLMUsage
+from gandalf.models import LLMUsage, MCPServer
 from tests.conftest import MOCK_USAGE
 
 
@@ -115,6 +116,49 @@ class TestBuildJudgePrompt:
         output_idx = prompt.index("OUTPUT")
         crit_idx = prompt.index("CRIT")
         assert preamble_idx < guidance_idx < instr_idx < output_idx < crit_idx
+
+
+class TestMCPServerToConfig:
+    """Verify MCPServer is rendered to FastMCP MCPConfig server-entry shape."""
+
+    def test_stdio_minimal(self) -> None:
+        srv = MCPServer(name="x", command="/bin/x")
+        assert mcp_server_to_config(srv) == {"command": "/bin/x"}
+
+    def test_stdio_with_args(self) -> None:
+        srv = MCPServer(name="x", command="/bin/x", args=["--verbose", "--port", "8000"])
+        assert mcp_server_to_config(srv) == {
+            "command": "/bin/x",
+            "args": ["--verbose", "--port", "8000"],
+        }
+
+    def test_stdio_omits_empty_args(self) -> None:
+        srv = MCPServer(name="x", command="/bin/x", args=[])
+        assert "args" not in mcp_server_to_config(srv)
+
+    def test_remote_streamable_http(self) -> None:
+        srv = MCPServer(name="x", transport="streamable-http", url="http://localhost:8000/mcp")
+        assert mcp_server_to_config(srv) == {
+            "url": "http://localhost:8000/mcp",
+            "transport": "streamable-http",
+        }
+
+    def test_remote_with_headers(self) -> None:
+        srv = MCPServer(
+            name="x",
+            transport="http",
+            url="https://api.example.com/mcp",
+            headers={"Authorization": "Bearer token"},
+        )
+        assert mcp_server_to_config(srv) == {
+            "url": "https://api.example.com/mcp",
+            "transport": "http",
+            "headers": {"Authorization": "Bearer token"},
+        }
+
+    def test_remote_omits_empty_headers(self) -> None:
+        srv = MCPServer(name="x", transport="sse", url="http://localhost:8000/sse")
+        assert "headers" not in mcp_server_to_config(srv)
 
 
 class TestMakeVerdictPath:
