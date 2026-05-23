@@ -1,12 +1,26 @@
 # Gandalf the Grader [![Build Status](https://github.com/Handshake-AI-Research/gandalf-the-grader/actions/workflows/ci.yml/badge.svg)](https://github.com/Handshake-AI-Research/gandalf-the-grader/actions/workflows/ci.yml) [![Coverage](https://codecov.io/gh/Handshake-AI-Research/gandalf-the-grader/branch/main/graph/badge.svg)](https://app.codecov.io/gh/Handshake-AI-Research/gandalf-the-grader) [![PyPI](https://img.shields.io/pypi/v/gandalf-the-grader.svg)](https://pypi.org/pypi/gandalf-the-grader/) [![PyPI - Python version](https://img.shields.io/pypi/pyversions/gandalf-the-grader.svg)](https://pypi.org/pypi/gandalf-the-grader/)
 
-Gandalf the Grader is an Agent-as-a-Judge verifier for reinforcement learning environments. Gandalf provides an evaluation score / reward signal, grading the final state of the environment (including text response from agents, state of the filesystem, and state backing MCP tools) against a set of natural-language criteria specified in a rubric.
+**Your verifier is probably the bottleneck. We built one that isn't.**
 
-Unlike LLM-as-a-Judge or simple workflows (e.g., serialize-then-judge), Gandalf is capable of verifying outputs that are complex files, such as Excel or PowerPoint deliverables, and checking them against sophisticated rubric criteria, like "sensitivity table is properly constructed using Excel Data Table functionality or equivalent formula array." Gandalf is able to do this because it grades rubric criteria by running an AI agent within the RL environment itself.
+Read the [launch blog post](TODO-BLOG-POST-URL) for the motivation, benchmark results, and design rationale behind Gandalf.
 
-See [BankerToolBench](https://github.com/Handshake-AI-Research/bankertoolbench) as a complete example of Gandalf being used as the verifier in a production RL environment. See [rle-pkg](https://github.com/Handshake-AI-Research/rle-pkg) as a reference RL environment runtime that includes integration with Gandalf.
+Gandalf is a reactive agent-as-judge for agentic RL environments. Given a rubric of binary criteria, it runs inside the rollout environment, uses the same tools as the rollout agent, and decides at inference time which files to open and which tool state to query.
 
-Gandalf is agnostic to RL environment framework/runtime; we have been using it mainly with [Harbor](https://github.com/harbor-framework/harbor).
+That lets Gandalf grade criteria that depend on artifacts or state — formulas in a workbook, charts in a deck, files on disk, MCP tool state, or whether an email was actually sent — rather than just the final text response.
+
+Gandalf is built around three design choices:
+
+- **Reactive verification:** Gandalf chooses what evidence to inspect while grading, instead of relying on a precomputed transcript or serialized snapshot.
+
+- **Environment alignment:** Gandalf runs in the same filesystem, Python runtime, installed packages, and tool environment as the rollout agent, using the [OpenHands](https://github.com/All-Hands-AI/OpenHands) SDK as the agent harness.
+
+- **Swappable domain guidance:** Domain knowledge lives in natural-language guidance, not verifier-specific code.
+
+In our evaluation, this design beat text-only and snapshot-based verifiers at a fraction of the cost — see the [blog post](TODO-BLOG-POST-URL) for the full meta-eval.
+
+![Gandalf vs. baseline verifiers on BankerVerifierBench (cost vs. F1)](TODO-ASSETS-REPO-URL/gandalf/pareto.png)
+
+**Examples and integrations:** [BankerToolBench](https://github.com/Handshake-AI-Research/bankertoolbench) is a public agentic RL benchmark environment that uses Gandalf as the verifier. [rle-pkg](https://github.com/Handshake-AI-Research/rle-pkg) is a reference runtime that integrates Gandalf. Both run under the [Harbor](https://github.com/harbor-framework/harbor) framework, but Gandalf's design and implementation are framework-agnostic.
 
 ## Installation
 
@@ -24,32 +38,26 @@ uv tool install 'gandalf-the-grader[pinned]==1.0.0'
 
 ## Quick start
 
-Create a grader config (`grader.toml`):
-
-```toml
-model = "gemini/gemini-2.5-flash"
-sandbox_user = "sandbox"
-instructions = "Build a web app that displays hello world."
-rubric_path = "/tests/rubric.json"
-workdir = "/home/agent/workspace"
-trajectory_path = "/logs/agent/trajectory.json"
-output_dir = "/logs/grader"
-```
-
-Create a rubric (`rubric.json`):
-
-```json
-[
-  {"criterion": "The file index.html exists in the workspace", "weight": 1.0},
-  {"criterion": "The page displays 'Hello World'", "weight": 2.0}
-]
-```
-
-Run the grader:
+The repo ships a runnable example under [`examples/quickstart/`](examples/quickstart) that grades a pre-staged workspace + ATIF trajectory against a 3-criterion rubric. Two criteria are designed to be met and one is designed to fail, so you can see Gandalf's partial-credit grading and per-criterion reasoning in one run. From a fresh clone:
 
 ```bash
-gandalf-the-grader --config /tests/grader.toml
+# 1. Install
+uv tool install gandalf-the-grader
+
+# 2. Provide a Gemini API key (any litellm-compatible model works; see Configuration)
+export LLM_API_KEY="<your-gemini-api-key>"
+
+# 3. Run from the repo root
+gandalf-the-grader --config examples/quickstart/grader.toml
+
+# 4. Inspect the result
+cat examples/quickstart/output/reward.json   # -> {"reward": 0.75}
+cat examples/quickstart/output/info.json     # per-criterion verdicts + reasoning
 ```
+
+Expected verdicts: the `welcome.txt` file exists (met), the message mentions Gandalf (met), and the message is *not* longer than 50 words (unmet, by design). Raw score 3.0 of a possible 4.0, for a reward of 0.75.
+
+The example uses [`gemini/gemini-2.5-flash`](examples/quickstart/grader.toml) and runs the inner judge as the current user (no `sandbox_user`, no sudo). To adapt it to your own setup, edit [`examples/quickstart/grader.toml`](examples/quickstart/grader.toml). See the [Configuration](#configuration) section below for the full field reference.
 
 ## Configuration
 
@@ -178,6 +186,11 @@ The grader writes to `output_dir`:
 - `judge_trace_*.txt`: stdout/stderr capture for each judge invocation. Naming varies by mode: `judge_trace_{i}.txt` (individual), `judge_trace_batch.txt` (batch), `judge_trace_batch_split{i}.txt` (batch with splits). Retries append a `_retry{N}` suffix.
 
 The `reward` in `reward.json` is `clip(0, 1, raw_score / sum_of_positive_weights)`, always in [0, 1]. `info.json` additionally includes `raw_score` (the raw sum of weights for met criteria, which can be negative) and `minimum_score`/`maximum_score` bounds for reference.
+
+## Next steps
+
+- **Try the benchmark environment.** [BankerToolBench on Hugging Face](https://huggingface.co/datasets/handshake-ai-research/bankertoolbench) is the public RL environment that Gandalf was originally evaluated against. Clone it, run rollouts, and grade them with Gandalf.
+- **Adapt Gandalf to a new rollout environment.** Edit [`examples/quickstart/grader.toml`](examples/quickstart/grader.toml) to point at your workspace, trajectory, and rubric. See the [Configuration](#configuration) and [Custom Judge Prompt](#custom-judge-prompt) sections for the full reference, including domain-specific judge guidance.
 
 ## License
 

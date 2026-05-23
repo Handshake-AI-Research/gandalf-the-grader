@@ -1,0 +1,20 @@
+# Quick-start grader config.
+#
+# Runs from the repo root: paths are relative to the working directory of the
+# `gandalf-the-grader` invocation, so all of these resolve correctly when you
+# run `gandalf-the-grader --config examples/quickstart/grader.toml`
+# from the repository root.
+#
+# Notes:
+# - `sandbox_user` is intentionally omitted so the inner judge runs as the
+#   current user. For production setups, configure a dedicated sandbox user
+#   (see the Configuration section of the README).
+# - `model` is any litellm-compatible identifier. `gemini/gemini-2.5-flash`
+#   requires `LLM_API_KEY` (a Gemini API key) in your environment.
+
+model = "gemini/gemini-2.5-flash"
+instructions = "Write a friendly welcome message to a text file in the workspace."
+rubric_path = "examples/quickstart/rubric.json"
+workdir = "examples/quickstart/workspace"
+trajectory_path = "examples/quickstart/trajectory.json"
+output_dir = "examples/quickstart/output"
