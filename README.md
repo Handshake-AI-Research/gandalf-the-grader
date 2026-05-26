@@ -4,19 +4,19 @@
 
 Read the [launch blog post](TODO-BLOG-POST-URL) for the motivation, benchmark results, and design rationale behind Gandalf.
 
-Gandalf is a reactive agent-as-judge for agentic RL environments. Given a rubric of binary criteria, it runs inside the rollout environment, uses the same tools as the rollout agent, and decides at inference time which files to open and which tool state to query.
+Gandalf is a reactive agent-as-judge for rubric-graded agent environments. Given a rubric of binary criteria, it runs inside the rollout environment, uses the same tools as the rollout agent, and decides at inference time which files to open and which tool state to query.
 
 That lets Gandalf grade criteria that depend on artifacts or state — formulas in a workbook, charts in a deck, files on disk, MCP tool state, or whether an email was actually sent — rather than just the final text response.
 
 Gandalf is built around three design choices:
 
-- **Reactive verification:** Gandalf chooses what evidence to inspect while grading, instead of relying on a precomputed transcript or serialized snapshot.
+- **Environment alignment:** Gandalf runs in the same filesystem, Python interpreter, installed packages, and tool environment as the rollout agent, using the [OpenHands](https://github.com/All-Hands-AI/OpenHands) SDK as the agent harness.
 
-- **Environment alignment:** Gandalf runs in the same filesystem, Python runtime, installed packages, and tool environment as the rollout agent, using the [OpenHands](https://github.com/All-Hands-AI/OpenHands) SDK as the agent harness.
+- **Reactive verification:** Gandalf chooses what evidence to inspect while grading, instead of relying on a precomputed transcript or serialized snapshot.
 
 - **Swappable domain guidance:** Domain knowledge lives in natural-language guidance, not verifier-specific code.
 
-In our evaluation, this design beat text-only and snapshot-based verifiers at a fraction of the cost — see the [blog post](TODO-BLOG-POST-URL) for the full meta-eval.
+In our evaluation, this design beat text-only, snapshot-based, and workflow-based agentic verifiers at a fraction of the cost — see the [blog post](TODO-BLOG-POST-URL) for the full meta-eval.
 
 ![Gandalf vs. baseline verifiers on BankerVerifierBench (cost vs. F1)](TODO-ASSETS-REPO-URL/gandalf/pareto.png)
 
