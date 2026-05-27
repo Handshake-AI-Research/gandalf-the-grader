@@ -14,7 +14,7 @@ Gandalf is built around three design choices:
 
 - **Reactive verification:** Gandalf chooses what evidence to inspect while grading, instead of relying on a precomputed transcript or serialized snapshot.
 
-- **Swappable domain guidance:** Domain knowledge lives in natural-language guidance, not verifier-specific code.
+- **Swappable domain guidance:** Domain knowledge enters as natural-language guidance at runtime, making the same verifier portable across domains.
 
 In our evaluation, this design beat text-only, snapshot-based, and workflow-based agentic verifiers at a fraction of the cost — see the [blog post](TODO-BLOG-POST-URL) for the full meta-eval.
 
