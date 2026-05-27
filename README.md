@@ -18,7 +18,7 @@ Gandalf is built around three design choices:
 
 In our evaluation, this design beat text-only, snapshot-based, and workflow-based agentic verifiers at a fraction of the cost — see the [blog post](TODO-BLOG-POST-URL) for the full meta-eval.
 
-![Gandalf vs. baseline verifiers on BankerVerifierBench (cost vs. F1)](TODO-ASSETS-REPO-URL/gandalf/pareto.png)
+![Gandalf vs. baseline verifiers on BankerVerifierBench (cost vs. F1)](https://raw.githubusercontent.com/Handshake-AI-Research/assets/main/gandalf-the-grader/pareto_frontier.png)
 
 **Examples and integrations:** [BankerToolBench](https://github.com/Handshake-AI-Research/bankertoolbench) is a public agentic RL benchmark environment that uses Gandalf as the verifier. [rle-pkg](https://github.com/Handshake-AI-Research/rle-pkg) is a reference runtime that integrates Gandalf. Both run under the [Harbor](https://github.com/harbor-framework/harbor) framework, but Gandalf's design and implementation are framework-agnostic.
 
