@@ -25,7 +25,33 @@ from openhands.tools.file_editor import FileEditorTool
 from openhands.tools.terminal import TerminalTool
 from pydantic import TypeAdapter
 
-from gandalf.models import BatchJudgeInput, JudgeInput, LLMUsage, MCPServer, Verdict
+from gandalf.guidance_evidence import (
+    extract_score_calibration_ceiling,
+    has_action_side_effect_audit,
+    has_output_location_conflict_audit,
+    has_score_calibration_audit,
+    has_score_calibration_audit_marker,
+    has_source_availability_audit,
+    has_source_guidance_conflict_audit,
+    has_source_guidance_conflict_language,
+    has_source_verification_audit,
+    has_trajectory_evidence,
+    has_workspace_artifact_evidence,
+    requires_above_midpoint_justification,
+    requires_action_side_effect_audit,
+    requires_output_location_conflict_audit,
+    requires_source_availability_audit,
+    requires_source_verification_audit,
+)
+from gandalf.models import (
+    BatchJudgeInput,
+    GuidanceJudgeInput,
+    GuidanceScore,
+    JudgeInput,
+    LLMUsage,
+    MCPServer,
+    Verdict,
+)
 
 TEMPLATES_DIR = Path(__file__).parent / "templates"
 
@@ -86,6 +112,29 @@ def build_batch_judge_prompt(
         criteria=criteria,
         verdict_path=verdict_path,
         judge_guidance=judge_guidance,
+    )
+
+
+def build_guidance_judge_prompt(
+    instructions: str,
+    final_output: str,
+    judge_guidance: str,
+    trajectory_path: str,
+    score_path: str,
+    judge_prompt: str | None = None,
+    workspace_path: str | None = None,
+) -> str:
+    """Build the user message sent to kick off a guidance-mode judge session."""
+    return render_template(
+        "judge_guidance.j2",
+        judge_prompt,
+        instructions=instructions,
+        final_output=final_output,
+        judge_guidance=judge_guidance,
+        trajectory_path=trajectory_path,
+        score_path=score_path,
+        workspace_path=workspace_path or "",
+        workdir=workspace_path or "",
     )
 
 
@@ -164,6 +213,81 @@ def read_batch_verdict(verdict_path: str, n_criteria: int) -> list[Verdict]:
         )
     else:
         return results
+
+
+def read_guidance_score(
+    score_path: str,
+    *,
+    require_action_side_effect_audit: bool = False,
+    require_output_location_conflict_audit: bool = False,
+    require_source_availability_audit: bool = False,
+    require_source_verification_audit: bool = False,
+) -> GuidanceScore:
+    """Read and validate the holistic guidance score written by the judge agent."""
+    try:
+        with open(score_path) as f:
+            content = f.read().strip()
+        if not content:
+            return GuidanceScore.error("Judge agent wrote an empty guidance score file.")
+
+        data = json.loads(content)
+        if not isinstance(data, dict):
+            return GuidanceScore.error(f"Expected JSON object, got {type(data).__name__}.")
+
+    except FileNotFoundError:
+        return GuidanceScore.error("Judge agent did not write a guidance score file.")
+    except json.JSONDecodeError as e:
+        return GuidanceScore.error(f"Judge agent wrote invalid JSON: {e}")
+    else:
+        score = GuidanceScore.from_raw(data)
+
+        def reject_score(reason: str) -> GuidanceScore:
+            return score.model_copy(update={"score": None, "reasoning": reason})
+
+        validation_errors: list[str] = []
+        if score.score is not None:
+            if not has_score_calibration_audit(score.evidence):
+                if has_score_calibration_audit_marker(score.evidence):
+                    validation_errors.append(
+                        'invalid "Score calibration/cap audit" evidence item: include a parseable concrete '
+                        'numeric maximum such as "maximum score allowed is 0.65"'
+                    )
+                else:
+                    validation_errors.append('missing required "Score calibration/cap audit" evidence item')
+            score_ceiling = extract_score_calibration_ceiling(score.evidence)
+            if score_ceiling is not None and score.score > score_ceiling:
+                validation_errors.append(
+                    f"score {score.score} exceeds score calibration/cap audit ceiling {score_ceiling}"
+                )
+            if requires_above_midpoint_justification(
+                score.score,
+                score_ceiling,
+                reasoning=score.reasoning,
+                evidence=score.evidence,
+            ):
+                validation_errors.append(
+                    "near declared ceiling with foundational failure language requires an explicit "
+                    "above-midpoint justification in the Score calibration/cap audit"
+                )
+            if not has_workspace_artifact_evidence(score.evidence):
+                validation_errors.append("missing required workspace/artifact evidence item")
+            if not has_trajectory_evidence(score.evidence):
+                validation_errors.append("missing required trajectory evidence item")
+            if require_output_location_conflict_audit and not has_output_location_conflict_audit(score.evidence):
+                validation_errors.append('missing required "Output-location conflict audit" evidence item')
+            if require_action_side_effect_audit and not has_action_side_effect_audit(score.evidence):
+                validation_errors.append('missing required "Action/side-effect audit" evidence item')
+            if require_source_availability_audit and not has_source_availability_audit(score.evidence):
+                validation_errors.append('missing required "Source availability audit" evidence item')
+            if require_source_verification_audit and not has_source_verification_audit(score.evidence):
+                validation_errors.append('missing required "Source verification audit" evidence item')
+            if any(has_source_guidance_conflict_language(part) for part in [score.reasoning, *score.evidence]) and not (
+                has_source_guidance_conflict_audit(score.evidence)
+            ):
+                validation_errors.append('missing required "Source/guidance conflict audit" evidence item')
+            if validation_errors:
+                return reject_score("Guidance score validation failed: " + "; ".join(validation_errors) + ".")
+        return score
 
 
 def make_verdict_path(prefix: str = "verdict_", directory: str | None = None) -> str:
@@ -336,6 +460,56 @@ def run_judge_batch(input_path: str, output_path: str) -> None:
         json.dump(output, f, indent=2)
 
 
+def run_judge_guidance(input_path: str, output_path: str) -> None:
+    """Run the agent-as-judge for one holistic grading-guidance evaluation."""
+    with open(input_path) as f:
+        judge_input = GuidanceJudgeInput.model_validate_json(f.read())
+
+    score_path = make_verdict_path(prefix="guidance_score_", directory=judge_input.workdir)
+
+    prompt = build_guidance_judge_prompt(
+        instructions=judge_input.instructions,
+        final_output=judge_input.final_output,
+        judge_guidance=judge_input.judge_guidance,
+        trajectory_path=judge_input.trajectory_path,
+        score_path=score_path,
+        judge_prompt=judge_input.judge_prompt,
+        workspace_path=judge_input.workdir,
+    )
+
+    llm_usage = LLMUsage()
+    try:
+        llm_usage = run_agent_session(judge_input.model, judge_input.mcp_servers, judge_input.workdir, prompt)
+        guidance_score = read_guidance_score(
+            score_path,
+            require_action_side_effect_audit=requires_action_side_effect_audit(
+                judge_input.instructions,
+                judge_input.judge_guidance,
+            ),
+            require_output_location_conflict_audit=requires_output_location_conflict_audit(
+                judge_input.instructions,
+                judge_input.judge_guidance,
+            ),
+            require_source_availability_audit=requires_source_availability_audit(
+                judge_input.instructions,
+                judge_input.judge_guidance,
+            ),
+            require_source_verification_audit=requires_source_verification_audit(
+                judge_input.instructions,
+                judge_input.judge_guidance,
+            ),
+        )
+    except Exception as e:  # noqa: BLE001
+        guidance_score = GuidanceScore.error(f"Judge execution error: {e}")
+    finally:
+        with contextlib.suppress(OSError):
+            os.unlink(score_path)
+
+    output = {"guidance_score": guidance_score.model_dump(), "llm_usage": llm_usage.model_dump()}
+    with open(output_path, "w") as f:
+        json.dump(output, f, indent=2)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Judge rubric criterion")
     parser.add_argument("--input", required=True, help="Path to judge input JSON")
@@ -345,9 +519,19 @@ def main() -> None:
         action="store_true",
         help="Batch mode: evaluate all criteria in a single agent session",
     )
+    parser.add_argument(
+        "--guidance",
+        action="store_true",
+        help="Guidance mode: run one holistic grading-guidance session",
+    )
     args = parser.parse_args()
 
-    if args.batch:
+    if args.batch and args.guidance:
+        parser.error("--batch and --guidance are mutually exclusive")
+
+    if args.guidance:
+        run_judge_guidance(args.input, args.output)
+    elif args.batch:
         run_judge_batch(args.input, args.output)
     else:
         run_judge(args.input, args.output)

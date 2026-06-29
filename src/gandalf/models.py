@@ -73,6 +73,7 @@ class GraderConfig(BaseModel):
     """
 
     model: str = "gemini/gemini-2.5-flash"
+    grading_mode: Literal["rubric", "guidance"] = "rubric"
     instructions: str | None = None
     instructions_path: str | None = None
     rubric: list[RubricItem] | None = None
@@ -101,18 +102,39 @@ class GraderConfig(BaseModel):
         if self.rubric is not None and self.rubric_path is not None:
             msg = "Cannot set both 'rubric' and 'rubric_path'"
             raise ValueError(msg)
-        if self.rubric is None and self.rubric_path is None:
-            msg = "Must set either 'rubric' or 'rubric_path'"
-            raise ValueError(msg)
         if self.judge_guidance is not None and self.judge_guidance_path is not None:
             msg = "Cannot set both 'judge_guidance' and 'judge_guidance_path'"
             raise ValueError(msg)
         if self.judge_prompt is not None and self.judge_prompt_path is not None:
             msg = "Cannot set both 'judge_prompt' and 'judge_prompt_path'"
             raise ValueError(msg)
-        if self.batch_splits is not None and self.mode != "batch":
-            msg = "'batch_splits' can only be used with mode='batch'"
-            raise ValueError(msg)
+
+        if self.grading_mode == "rubric":
+            if self.rubric is None and self.rubric_path is None:
+                msg = "Must set either 'rubric' or 'rubric_path'"
+                raise ValueError(msg)
+            if self.batch_splits is not None and self.mode != "batch":
+                msg = "'batch_splits' can only be used with mode='batch'"
+                raise ValueError(msg)
+        else:
+            if self.rubric is not None or self.rubric_path is not None:
+                msg = "Do not set 'rubric' or 'rubric_path' when grading_mode='guidance'"
+                raise ValueError(msg)
+            if self.judge_guidance is None and self.judge_guidance_path is None:
+                msg = "Must set either 'judge_guidance' or 'judge_guidance_path' when grading_mode='guidance'"
+                raise ValueError(msg)
+            if self.judge_guidance is not None and not self.judge_guidance.strip():
+                msg = "'judge_guidance' must not be empty when grading_mode='guidance'"
+                raise ValueError(msg)
+            if self.batch_splits is not None:
+                msg = "'batch_splits' cannot be used when grading_mode='guidance'"
+                raise ValueError(msg)
+            if self.batch_timeout is not None:
+                msg = "'batch_timeout' cannot be used when grading_mode='guidance'"
+                raise ValueError(msg)
+            if self.max_concurrency is not None:
+                msg = "'max_concurrency' cannot be used when grading_mode='guidance'"
+                raise ValueError(msg)
         return self
 
 
@@ -142,6 +164,12 @@ class BatchJudgeInput(_BaseJudgeInput):
     """
 
     criteria: list[str]
+
+
+class GuidanceJudgeInput(_BaseJudgeInput):
+    """Input passed to the inner judge for one holistic guidance evaluation."""
+
+    trajectory_path: str
 
 
 class LLMUsage(BaseModel):
@@ -185,6 +213,51 @@ class Verdict(BaseModel):
         return [cls(met=None, reasoning=reason) for _ in range(n)]
 
 
+class GuidanceScore(BaseModel):
+    """Holistic score returned by guidance-mode judging."""
+
+    score: float | None
+    reasoning: str
+    evidence: list[str] = Field(default_factory=list)
+
+    @classmethod
+    def from_raw(cls, data: dict[str, Any]) -> "GuidanceScore":
+        """Create a GuidanceScore from a raw JSON-parsed dict, validating score bounds."""
+        if "score" not in data:
+            return cls(score=None, reasoning="Guidance score missing 'score' field.")
+
+        raw_score = data.get("score")
+        if isinstance(raw_score, bool) or not isinstance(raw_score, (int, float)):
+            return cls(score=None, reasoning="Guidance score must be numeric in the range [0, 1].")
+
+        score = float(raw_score)
+        if score < 0.0 or score > 1.0:
+            return cls(score=None, reasoning=f"Guidance score {score} is outside the valid range [0, 1].")
+
+        reasoning = str(data.get("reasoning", "")).strip()
+        if not reasoning:
+            return cls(score=None, reasoning="Guidance score missing non-empty 'reasoning' field.")
+
+        evidence = data.get("evidence")
+        if not isinstance(evidence, list):
+            return cls(score=None, reasoning="Guidance score must include an 'evidence' array.")
+
+        evidence_items = [str(item).strip() for item in evidence if str(item).strip()]
+        if not evidence_items:
+            return cls(score=None, reasoning="Guidance score must include at least one evidence item.")
+
+        return cls(
+            score=score,
+            reasoning=reasoning,
+            evidence=evidence_items,
+        )
+
+    @classmethod
+    def error(cls, reason: str) -> "GuidanceScore":
+        """Return an invalid score with an error reason."""
+        return cls(score=None, reasoning=reason, evidence=[])
+
+
 class CriterionResult(BaseModel):
     """Result for a single criterion evaluation."""
 
@@ -206,6 +279,19 @@ class EvaluationInfo(BaseModel):
     llm_usage: LLMUsage = Field(default_factory=LLMUsage)
     errored_criterion_count: int = 0
     evaluated_criteria_pct: float = 100.0
+
+
+class GuidanceEvaluationInfo(BaseModel):
+    """Detailed guidance-mode evaluation output."""
+
+    grading_mode: Literal["guidance"] = "guidance"
+    reward: float | None
+    score: float | None
+    reasoning: str
+    evidence: list[str] = Field(default_factory=list)
+    llm_usage: LLMUsage = Field(default_factory=LLMUsage)
+    errored: bool = False
+    error: str | None = None
 
 
 def load_config(path: str) -> GraderConfig:

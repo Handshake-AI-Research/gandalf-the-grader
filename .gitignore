@@ -10,6 +10,7 @@ build/
 .coverage
 htmlcov/
 site/
+_run/
 *.egg
 .hatch/
 .DS_Store

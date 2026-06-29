@@ -51,6 +51,7 @@ name = "pinned"
 
 [dependency-groups]
 dev = ["pytest>=8.0", "ruff>=0.15.0", "mypy>=1.19.0"]
+eval = ["dspy-ai>=3.2,<4"]
 
 [[tool.hatch.envs.hatch-test.matrix]]
 python = ["3.12", "3.13", "3.14"]

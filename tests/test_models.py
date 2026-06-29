@@ -12,7 +12,11 @@ from gandalf.models import (
     CriterionResult,
     EvaluationInfo,
     GraderConfig,
+    GuidanceEvaluationInfo,
+    GuidanceJudgeInput,
+    GuidanceScore,
     JudgeInput,
+    LLMUsage,
     MCPServer,
     RubricItem,
     Verdict,
@@ -396,6 +400,128 @@ output_dir = "/logs/grader"
         assert restored.model == ji.model
         assert restored.final_output == ji.final_output
         assert len(restored.mcp_servers) == 1
+
+    def test_grading_mode_defaults_to_rubric(self) -> None:
+        cfg = GraderConfig(
+            instructions="test",
+            rubric_path="/rubric.json",
+            workdir="/workspace",
+            trajectory_path="/logs/trajectory.json",
+            output_dir="/logs/grader",
+        )
+        assert cfg.grading_mode == "rubric"
+
+    def test_guidance_config_accepts_inline_guidance_without_rubric(self) -> None:
+        cfg = GraderConfig(
+            grading_mode="guidance",
+            instructions="test",
+            judge_guidance="Grade holistically.",
+            workdir="/workspace",
+            trajectory_path="/logs/trajectory.json",
+            output_dir="/logs/grader",
+        )
+        assert cfg.grading_mode == "guidance"
+        assert cfg.rubric is None
+        assert cfg.rubric_path is None
+        assert cfg.judge_guidance == "Grade holistically."
+
+    def test_guidance_config_accepts_guidance_path_without_rubric(self) -> None:
+        cfg = GraderConfig(
+            grading_mode="guidance",
+            instructions="test",
+            judge_guidance_path="/tests/judge_guidance.md",
+            workdir="/workspace",
+            trajectory_path="/logs/trajectory.json",
+            output_dir="/logs/grader",
+        )
+        assert cfg.judge_guidance_path == "/tests/judge_guidance.md"
+
+    def test_guidance_config_requires_guidance(self) -> None:
+        with pytest.raises(ValidationError, match="judge_guidance"):
+            GraderConfig(
+                grading_mode="guidance",
+                instructions="test",
+                workdir="/workspace",
+                trajectory_path="/logs/trajectory.json",
+                output_dir="/logs/grader",
+            )
+
+    @pytest.mark.parametrize(
+        "field_value",
+        [
+            {"rubric": [RubricItem(criterion="c", weight=1.0)]},
+            {"rubric_path": "/rubric.json"},
+        ],
+    )
+    def test_guidance_config_rejects_rubric_fields(self, field_value: dict[str, Any]) -> None:
+        with pytest.raises(ValidationError, match="rubric"):
+            GraderConfig(
+                grading_mode="guidance",
+                instructions="test",
+                judge_guidance="Grade holistically.",
+                workdir="/workspace",
+                trajectory_path="/logs/trajectory.json",
+                output_dir="/logs/grader",
+                **field_value,
+            )
+
+    @pytest.mark.parametrize(
+        "field_value",
+        [
+            {"batch_splits": 2},
+            {"batch_timeout": 120},
+            {"max_concurrency": 2},
+        ],
+    )
+    def test_guidance_config_rejects_batch_only_fields(self, field_value: dict[str, Any]) -> None:
+        with pytest.raises(ValidationError, match="guidance"):
+            GraderConfig(
+                grading_mode="guidance",
+                instructions="test",
+                judge_guidance="Grade holistically.",
+                workdir="/workspace",
+                trajectory_path="/logs/trajectory.json",
+                output_dir="/logs/grader",
+                **field_value,
+            )
+
+    def test_guidance_judge_input_roundtrip(self) -> None:
+        gi = GuidanceJudgeInput(
+            model="test-model",
+            instructions="test",
+            final_output="done",
+            workdir="/workspace",
+            trajectory_path="/workspace/gandalf_trajectory.json",
+            judge_guidance="Grade holistically.",
+            mcp_servers=[MCPServer(name="srv", command="/bin/srv")],
+        )
+        raw = gi.model_dump_json()
+        restored = GuidanceJudgeInput.model_validate_json(raw)
+        assert restored.trajectory_path == "/workspace/gandalf_trajectory.json"
+        assert restored.judge_guidance == "Grade holistically."
+        assert len(restored.mcp_servers) == 1
+
+    def test_guidance_score_roundtrip(self) -> None:
+        score = GuidanceScore(score=0.875, reasoning="Mostly complete.", evidence=["Checked output.txt"])
+        raw = score.model_dump_json()
+        restored = GuidanceScore.model_validate_json(raw)
+        assert restored.score == 0.875
+        assert restored.evidence == ["Checked output.txt"]
+
+    def test_guidance_evaluation_info_shape(self) -> None:
+        info = GuidanceEvaluationInfo(
+            reward=0.75,
+            score=0.75,
+            reasoning="Good work.",
+            evidence=["Read report.md"],
+            llm_usage=LLMUsage(cost_usd=0.1),
+        )
+        data = info.model_dump()
+        assert data["grading_mode"] == "guidance"
+        assert data["reward"] == 0.75
+        assert data["score"] == 0.75
+        assert data["llm_usage"]["cost_usd"] == 0.1
+        assert data["errored"] is False
 
 
 class TestMutualExclusivity:

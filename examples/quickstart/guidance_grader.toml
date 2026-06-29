@@ -1,0 +1,9 @@
+model = "gemini/gemini-2.5-flash"
+grading_mode = "guidance"
+
+instructions = "Create a welcome.txt file that greets Gandalf in a short message."
+judge_guidance_path = "examples/quickstart/judge_guidance.md"
+
+workdir = "examples/quickstart/workspace"
+trajectory_path = "examples/quickstart/trajectory.json"
+output_dir = "examples/quickstart/guidance_output"

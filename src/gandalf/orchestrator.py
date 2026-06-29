@@ -34,6 +34,9 @@ from gandalf.models import (
     CriterionResult,
     EvaluationInfo,
     GraderConfig,
+    GuidanceEvaluationInfo,
+    GuidanceJudgeInput,
+    GuidanceScore,
     JudgeInput,
     LLMUsage,
     RubricItem,
@@ -341,6 +344,137 @@ def run_judge(
         shutil.rmtree(clone_dir, ignore_errors=True)
 
 
+def copy_trajectory_to_workspace(trajectory_path: str, clone_dir: str) -> str:
+    """Copy the ATIF trajectory into the cloned judge workspace and return its path."""
+    dst = os.path.join(clone_dir, "gandalf_trajectory.json")
+    shutil.copyfile(trajectory_path, dst)
+    os.chmod(dst, 0o644)
+    return dst
+
+
+def guidance_score_from_payload(raw: object) -> GuidanceScore:
+    """Parse the nested guidance_score payload from the inner judge output."""
+    if not isinstance(raw, dict):
+        return GuidanceScore.error(f"Expected guidance_score object, got {type(raw).__name__}.")
+
+    evidence_raw = raw.get("evidence", [])
+    evidence = [str(item) for item in evidence_raw] if isinstance(evidence_raw, list) else [str(evidence_raw)]
+
+    # The inner judge wrapper uses score=None to signal parse/infrastructure
+    # failures and preserves the specific reason.  Keep that reason intact.
+    if "score" in raw and raw.get("score") is None:
+        return GuidanceScore(
+            score=None,
+            reasoning=str(raw.get("reasoning", "Guidance score was invalid.")),
+            evidence=evidence,
+        )
+
+    return GuidanceScore.from_raw(raw)
+
+
+def round_guidance_score(score: GuidanceScore) -> GuidanceScore:
+    """Round a valid guidance score to the public reward precision."""
+    if score.score is None:
+        return score
+    return score.model_copy(update={"score": round(score.score, 4)})
+
+
+def run_guidance_judge(
+    judge_input: GuidanceJudgeInput,
+    sandbox_user: str | None,
+    trace_path: str,
+    timeout: int = 300,
+) -> tuple[GuidanceScore, LLMUsage]:
+    """Clone workspace, run the guidance judge subprocess, and return score + usage."""
+
+    def fail(msg: str, usage: LLMUsage | None = None) -> tuple[GuidanceScore, LLMUsage]:
+        return GuidanceScore.error(msg), usage or LLMUsage()
+
+    clone_dir: str | None = None
+    try:
+        clone_dir = clone_workspace(judge_input.workdir)
+        cloned_trajectory_path = copy_trajectory_to_workspace(judge_input.trajectory_path, clone_dir)
+    except Exception as e:  # noqa: BLE001
+        if clone_dir is not None:
+            shutil.rmtree(clone_dir, ignore_errors=True)
+        return fail(f"Failed to prepare guidance judge workspace: {e}")
+
+    assert clone_dir is not None  # noqa: S101
+    cloned_input = judge_input.model_copy(
+        update={
+            "workdir": clone_dir,
+            "trajectory_path": cloned_trajectory_path,
+        }
+    )
+
+    with tempfile.NamedTemporaryFile(
+        mode="w",
+        suffix=".json",
+        prefix="judge_guidance_input_",
+        dir=clone_dir,
+        delete=False,
+    ) as input_f:
+        input_f.write(cloned_input.model_dump_json())
+        input_path = input_f.name
+
+    with tempfile.NamedTemporaryFile(
+        mode="w",
+        suffix=".json",
+        prefix="judge_guidance_output_",
+        dir=clone_dir,
+        delete=False,
+    ) as output_f:
+        output_path = output_f.name
+    os.chmod(output_path, 0o666)  # noqa: S103
+
+    try:
+        os.chmod(input_path, 0o644)
+        env_vars = [f"HOME={clone_dir}", *judge_env_vars()]
+
+        cmd = []
+        if sandbox_user is not None:
+            cmd += ["sudo", "-u", sandbox_user]
+        cmd += [
+            "env",
+            *env_vars,
+            "gandalf-the-grader-judge",
+            "--input",
+            input_path,
+            "--output",
+            output_path,
+            "--guidance",
+        ]
+
+        result = subprocess.run(
+            cmd,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            cwd=clone_dir,
+        )
+
+        save_trace(trace_path, result.stdout, result.stderr, result.returncode)
+
+        if result.returncode != 0:
+            return fail(f"Judge process failed (exit {result.returncode}): {result.stderr[:500]}")
+
+        with open(output_path) as f:
+            data = json.load(f)
+
+    except subprocess.TimeoutExpired:
+        save_trace(trace_path, "", "Judge execution timed out.", -1)
+        return fail("Judge execution timed out.")
+    except (json.JSONDecodeError, FileNotFoundError) as e:
+        return fail(f"Failed to read judge output: {e}")
+    else:
+        usage = LLMUsage.model_validate(data.get("llm_usage", {}))
+        score = round_guidance_score(guidance_score_from_payload(data.get("guidance_score")))
+        return score, usage
+    finally:
+        shutil.rmtree(clone_dir, ignore_errors=True)
+
+
 def save_trace(trace_path: str, stdout: str, stderr: str, returncode: int) -> None:
     """Write the judge's stdout/stderr to a trace file."""
     with contextlib.suppress(OSError), open(trace_path, "w") as f:
@@ -593,6 +727,126 @@ def run_batch_concurrent(
     return results, total_usage
 
 
+def run_guidance_retry_guidance(
+    judge_guidance: str,
+    failed_scores: GuidanceScore | list[GuidanceScore],
+) -> str:
+    """Append validation-failure context for a guidance-mode retry."""
+    failures = [failed_scores] if isinstance(failed_scores, GuidanceScore) else failed_scores
+    combined_failure_reasoning = " ".join(score.reasoning for score in failures).lower()
+    feedback_lines = [
+        "",
+        "<previous_guidance_judge_validation_failure>",
+        "The previous guidance judge output was rejected before a reward could be accepted.",
+        "Validation failure history:",
+        *[f"{idx}. {score.reasoning}" for idx, score in enumerate(failures, start=1)],
+        (
+            "On this retry, perform a fresh holistic evaluation using the same grading standards; "
+            "do not change the score merely to satisfy validation. Correct the missing or invalid "
+            "score/evidence contract while still grading the final artifacts and trajectory accurately."
+        ),
+    ]
+    if "above-midpoint" in combined_failure_reasoning:
+        feedback_lines.extend(
+            [
+                "Above-midpoint validation repair:",
+                (
+                    'In the "Score calibration/cap audit" evidence item, include a sentence like: '
+                    '"The score is above the midpoint because <name the central requirements that were '
+                    'fully satisfied>, but remains below the ceiling because <name the foundational failures>."'
+                ),
+                "Name the central requirements that justify above-midpoint placement; do not raise the score solely to satisfy validation.",
+            ]
+        )
+    if (
+        "source availability audit" in combined_failure_reasoning
+        or "source verification audit" in combined_failure_reasoning
+    ):
+        feedback_lines.extend(
+            [
+                "Source audit validation repair:",
+                (
+                    'Use the exact audit labels the validator requires. Include "Source availability audit:" '
+                    "when named expected sources were accessible, missing, or only visible in the trajectory."
+                ),
+                (
+                    'Include "Source verification audit:" when the task or guidance required independent '
+                    "source-of-truth checks, recomputation, or source-backed numerical verification."
+                ),
+                "Do not hide those checks under generic labels such as trajectory/source check or artifact check.",
+            ]
+        )
+    evidence_excerpt_lines: list[str] = []
+    for idx, score in enumerate(failures, start=1):
+        if score.evidence:
+            evidence_excerpt_lines.append(f"Attempt {idx} rejected evidence excerpt:")
+            evidence_excerpt_lines.extend(f"- {item}" for item in score.evidence[:5])
+    if evidence_excerpt_lines:
+        feedback_lines.append("Previous rejected evidence excerpts:")
+        feedback_lines.extend(evidence_excerpt_lines)
+    feedback_lines.append("</previous_guidance_judge_validation_failure>")
+    return f"{judge_guidance.rstrip()}\n\n" + "\n".join(feedback_lines).strip()
+
+
+def run_guidance(
+    config: GraderConfig,
+    final_output: str,
+    instructions: str,
+    judge_guidance: str,
+    judge_prompt: str | None,
+) -> tuple[GuidanceScore, LLMUsage, bool]:
+    """Run one holistic guidance judge session, retrying invalid/error scores."""
+    judge_input = GuidanceJudgeInput(
+        model=config.model,
+        instructions=instructions,
+        final_output=final_output,
+        workdir=config.workdir,
+        trajectory_path=config.trajectory_path,
+        mcp_servers=config.mcp_servers,
+        judge_guidance=judge_guidance,
+        judge_prompt=judge_prompt,
+    )
+
+    total_usage = LLMUsage()
+    latest_score = GuidanceScore.error("Guidance judge did not run.")
+    failed_scores: list[GuidanceScore] = []
+    initial_errored = False
+
+    for attempt in range(config.judge_retries + 1):
+        attempt_judge_input = judge_input
+        if attempt == 0:
+            print(f"[guidance] Evaluating holistic score (timeout={config.judge_timeout}s)...")  # noqa: T201
+            trace_path = os.path.join(config.output_dir, "judge_trace_guidance.txt")
+        else:
+            print(  # noqa: T201
+                f"\n[retry {attempt}/{config.judge_retries}] Retrying guidance score..."
+            )
+            trace_path = os.path.join(config.output_dir, f"judge_trace_guidance_retry{attempt}.txt")
+            attempt_judge_input = judge_input.model_copy(
+                update={
+                    "judge_guidance": run_guidance_retry_guidance(judge_guidance, failed_scores),
+                }
+            )
+
+        latest_score, usage = run_guidance_judge(
+            attempt_judge_input,
+            sandbox_user=config.sandbox_user,
+            trace_path=trace_path,
+            timeout=config.judge_timeout,
+        )
+        latest_score = round_guidance_score(latest_score)
+        total_usage = total_usage + usage
+
+        if attempt == 0:
+            initial_errored = latest_score.score is None
+
+        if latest_score.score is not None:
+            break
+        failed_scores.append(latest_score)
+
+    return latest_score, total_usage, initial_errored
+
+
 def get_errored_indices(results: list[CriterionResult]) -> list[int]:
     """Return indices of criteria where met is None (infrastructure error)."""
     return [i for i, r in enumerate(results) if r.met is None]
@@ -654,6 +908,29 @@ def write_info(
     return reward, raw_score
 
 
+def write_guidance_info(
+    config: GraderConfig,
+    guidance_score: GuidanceScore,
+    llm_usage: LLMUsage,
+    *,
+    errored: bool,
+) -> float | None:
+    """Write guidance-mode info.json and return the reward when available."""
+    reward = round(guidance_score.score, 4) if guidance_score.score is not None else None
+    info = GuidanceEvaluationInfo(
+        reward=reward,
+        score=reward,
+        reasoning=guidance_score.reasoning,
+        evidence=guidance_score.evidence,
+        llm_usage=llm_usage,
+        errored=errored,
+        error=guidance_score.reasoning if errored else None,
+    )
+    with open(os.path.join(config.output_dir, "info.json"), "w") as f:
+        f.write(info.model_dump_json(indent=2))
+    return reward
+
+
 def check_tmux_available() -> None:
     """Verify tmux is installed and usable.
 
@@ -698,17 +975,63 @@ def main() -> None:
 
     instructions = resolve_instructions(config)
 
-    # The model validator guarantees exactly one of rubric / rubric_path is set.
-    if config.rubric is not None:
-        rubric = config.rubric
-    else:
-        assert config.rubric_path is not None  # noqa: S101  # guaranteed by model validator
-        rubric = load_rubric(config.rubric_path)
     final_output = load_trajectory_final_output(config.trajectory_path)
     judge_guidance = resolve_judge_guidance(config)
     judge_prompt = resolve_judge_prompt(config)
 
     os.makedirs(config.output_dir, exist_ok=True)
+
+    if config.grading_mode == "guidance":
+        if not judge_guidance.strip():
+            guidance_score = GuidanceScore.error("No judge guidance provided for guidance mode.")
+            write_guidance_info(config, guidance_score, LLMUsage(), errored=True)
+            print(  # noqa: T201
+                "ERROR: guidance mode requires non-empty judge_guidance or judge_guidance_path.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
+        guidance_score, llm_usage, guidance_initial_errored = run_guidance(
+            config,
+            final_output,
+            instructions,
+            judge_guidance,
+            judge_prompt,
+        )
+        guidance_errored = guidance_score.score is None
+        reward = write_guidance_info(config, guidance_score, llm_usage, errored=guidance_errored)
+
+        if guidance_errored:
+            print(  # noqa: T201
+                f"\nERROR: guidance score could not be produced "
+                f"(initial error: {guidance_initial_errored}, after retries: true).",
+                file=sys.stderr,
+            )
+            print(f"info.json written to {config.output_dir}/ (reward.json NOT written)", file=sys.stderr)  # noqa: T201
+            sys.exit(1)
+
+        assert reward is not None  # noqa: S101
+        with open(os.path.join(config.output_dir, "reward.json"), "w") as f:
+            json.dump({"reward": reward}, f, indent=2)
+
+        print(f"\nReward: {reward}")  # noqa: T201
+        if llm_usage.cost_usd > 0:
+            print(  # noqa: T201
+                f"Grader LLM cost: ${llm_usage.cost_usd:.4f} "
+                f"({llm_usage.prompt_tokens} prompt + {llm_usage.completion_tokens} completion tokens)"
+            )
+        print("Mode: guidance")  # noqa: T201
+        if guidance_initial_errored:
+            print("Retried: guidance score recovered after retry")  # noqa: T201
+        print(f"Results written to {config.output_dir}/")  # noqa: T201
+        return
+
+    # The model validator guarantees exactly one of rubric / rubric_path is set in rubric mode.
+    if config.rubric is not None:
+        rubric = config.rubric
+    else:
+        assert config.rubric_path is not None  # noqa: S101  # guaranteed by model validator
+        rubric = load_rubric(config.rubric_path)
 
     if config.mode == "batch":
         splits = config.batch_splits
