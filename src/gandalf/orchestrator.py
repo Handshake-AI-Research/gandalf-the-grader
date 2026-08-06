@@ -246,8 +246,15 @@ def run_judge(
     sandbox_user: str | None,
     trace_path: str,
     timeout: int = 300,
+    *,
+    workspace_is_disposable: bool = False,
 ) -> tuple[list[Verdict], LLMUsage]:
-    """Clone workspace, run the judge subprocess, and return parsed verdicts.
+    """Run the judge subprocess against the workspace and return parsed verdicts.
+
+    The workspace is normally cloned first — see ``clone_workspace``.  When
+    ``workspace_is_disposable`` the caller has guaranteed both of the things the
+    clone provides, so the judge runs against ``judge_input.workdir`` itself and a
+    full copy of the workspace is not made.  See ``GraderConfig``.
 
     Always returns a *list* of verdicts, even for a single-criterion
     ``JudgeInput`` (one-element list).  On any subprocess failure every
@@ -259,19 +266,37 @@ def run_judge(
     def fail(msg: str) -> tuple[list[Verdict], LLMUsage]:
         return Verdict.errors(n, msg), LLMUsage()
 
-    try:
-        clone_dir = clone_workspace(judge_input.workdir)
-    except Exception as e:  # noqa: BLE001
-        return fail(f"Failed to clone workspace: {e}")
+    if workspace_is_disposable:
+        workdir = judge_input.workdir
+        # The judge's scratch files still need somewhere world-writable to live, and it
+        # is not the workspace: these are the grader's own plumbing, and writing them
+        # into the tree under evaluation puts the criteria list in front of the judge as
+        # if it were part of the agent's work, and leaves them behind in anything that
+        # later inspects the graded tree.
+        try:
+            scratch_dir = tempfile.mkdtemp(prefix="judge_scratch_")
+            os.chmod(scratch_dir, 0o777)  # noqa: S103
+        except OSError as e:
+            return fail(f"Failed to create judge scratch directory: {e}")
+    else:
+        try:
+            workdir = clone_workspace(judge_input.workdir)
+        except Exception as e:  # noqa: BLE001
+            return fail(f"Failed to clone workspace: {e}")
+        scratch_dir = workdir
 
-    cloned_input = judge_input.model_copy(update={"workdir": clone_dir})
+    # Removing the clone removes its scratch files with it; a borrowed workspace must
+    # outlive the run, so only the scratch directory is ours to delete.
+    cleanup_dir = scratch_dir if workspace_is_disposable else workdir
+
+    cloned_input = judge_input.model_copy(update={"workdir": workdir})
 
     prefix = "judge_batch_" if batch else "judge_"
     with tempfile.NamedTemporaryFile(
         mode="w",
         suffix=".json",
         prefix=f"{prefix}input_",
-        dir=clone_dir,
+        dir=scratch_dir,
         delete=False,
     ) as input_f:
         input_f.write(cloned_input.model_dump_json())
@@ -283,7 +308,7 @@ def run_judge(
         mode="w",
         suffix=".json",
         prefix=f"{prefix}output_",
-        dir=clone_dir,
+        dir=scratch_dir,
         delete=False,
     ) as output_f:
         output_path = output_f.name
@@ -291,7 +316,9 @@ def run_judge(
 
     try:
         os.chmod(input_path, 0o644)
-        env_vars = [f"HOME={clone_dir}", *judge_env_vars()]
+        # HOME tracks the working directory in both modes, so a judge that resolves
+        # tooling through HOME behaves the same whether or not the workspace was cloned.
+        env_vars = [f"HOME={workdir}", *judge_env_vars()]
 
         cmd = []
         if sandbox_user is not None:
@@ -314,7 +341,7 @@ def run_judge(
             capture_output=True,
             text=True,
             timeout=timeout,
-            cwd=clone_dir,
+            cwd=workdir,
         )
 
         save_trace(trace_path, result.stdout, result.stderr, result.returncode)
@@ -338,7 +365,7 @@ def run_judge(
         usage = LLMUsage.model_validate(data["llm_usage"])
         return verdicts, usage
     finally:
-        shutil.rmtree(clone_dir, ignore_errors=True)
+        shutil.rmtree(cleanup_dir, ignore_errors=True)
 
 
 def save_trace(trace_path: str, stdout: str, stderr: str, returncode: int) -> None:
@@ -406,6 +433,7 @@ def run_individual(
             sandbox_user=config.sandbox_user,
             trace_path=trace_path,
             timeout=config.judge_timeout,
+            workspace_is_disposable=config.workspace_is_disposable,
         )
         result = verdict_to_result(item, verdicts[0])
         print(f"  [{i + 1}/{n}] {format_status(met=verdicts[0].met)}: {verdicts[0].reasoning[:120]}")  # noqa: T201
@@ -471,6 +499,7 @@ def run_batch(
         sandbox_user=config.sandbox_user,
         trace_path=trace_path,
         timeout=batch_timeout,
+        workspace_is_disposable=config.workspace_is_disposable,
     )
 
     results: list[CriterionResult] = []
@@ -545,6 +574,7 @@ def run_batch_concurrent(
             sandbox_user=config.sandbox_user,
             trace_path=trace_path,
             timeout=batch_timeout,
+            workspace_is_disposable=config.workspace_is_disposable,
         )
 
         indexed_results: list[tuple[int, CriterionResult]] = []

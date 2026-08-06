@@ -85,6 +85,7 @@ The example uses [`gemini/gemini-2.5-flash`](examples/quickstart/grader.toml) an
 | `judge_retries` | No | `1` | Number of retry attempts for criteria that error due to infrastructure failures |
 | `batch_splits` | No | | Split criteria into N chunks in batch mode (>= 2). Each chunk is evaluated as a separate batch session. Only valid with `mode = "batch"`. |
 | `max_concurrency` | No | | Max parallel judge sessions (>= 1). Defaults to 1 for individual mode, `batch_splits` for batch mode. |
+| `workspace_is_disposable` | No | `false` | Grade `workdir` directly instead of cloning it. Only set this when nothing reads the workspace after grading and `sandbox_user` can already read and write it — the judge writes to the tree it is grading. Cannot be combined with concurrent judge sessions. |
 | `sandbox_user` | No | | Username for running the inner judge (via sudo). When omitted the judge runs as the current user. |
 | `judge_prompt` | No | | Inline Jinja2 template that completely overrides the built-in judge task prompt (mutually exclusive with `judge_prompt_path`) |
 | `judge_prompt_path` | No | | Path to a Jinja2 template file that completely overrides the built-in judge task prompt (mutually exclusive with `judge_prompt`) |

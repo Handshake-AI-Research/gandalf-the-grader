@@ -70,6 +70,22 @@ class GraderConfig(BaseModel):
     In batch mode the effective timeout per session is
     ``judge_timeout * n_criteria_in_session``, optionally capped by
     batch_timeout.
+
+    workspace_is_disposable is the caller's assertion that workdir is a throwaway
+    copy which nothing will read after grading, and that sandbox_user can already
+    read and write it.  When set, the judge runs against workdir directly instead
+    of a clone.
+
+    The clone normally earns its cost twice over: it makes the tree accessible to
+    sandbox_user, and it keeps the judge's writes off the artifact being graded.
+    A caller that has already satisfied both is paying a full copy of the
+    workspace for nothing, which on a large workspace is the difference between
+    grading and running out of disk.
+
+    It is an assertion rather than something detected here because it is not a
+    property of the filesystem.  Whether anyone still needs the original is a
+    fact about the caller's environment, and a grader that guessed would silently
+    drop isolation for callers grading in a live workspace.
     """
 
     model: str = "gemini/gemini-2.5-flash"
@@ -92,6 +108,7 @@ class GraderConfig(BaseModel):
     batch_splits: int | None = Field(default=None, ge=2)
     max_concurrency: int | None = Field(default=None, ge=1)
     judge_retries: int = 1
+    workspace_is_disposable: bool = False
 
     @model_validator(mode="after")
     def _check_no_inline_and_path(self) -> "GraderConfig":
@@ -113,7 +130,34 @@ class GraderConfig(BaseModel):
         if self.batch_splits is not None and self.mode != "batch":
             msg = "'batch_splits' can only be used with mode='batch'"
             raise ValueError(msg)
+        if self.workspace_is_disposable and self.runs_concurrent_judges:
+            # Each session normally gets its own clone, so parallel judges never meet.
+            # Without one they would share a working directory and a HOME, and overwrite
+            # each other's scratch files mid-run — a wrong verdict, not a crash. Refuse
+            # the combination rather than silently cloning anyway, which would restore
+            # correctness while quietly spending the disk the caller opted out of.
+            msg = (
+                "'workspace_is_disposable' cannot be combined with concurrent judge "
+                "sessions: parallel judges would share one workspace. Set "
+                "max_concurrency=1, or drop 'workspace_is_disposable'."
+            )
+            raise ValueError(msg)
         return self
+
+    @property
+    def runs_concurrent_judges(self) -> bool:
+        """Whether more than one judge session can be in flight at once.
+
+        Mirrors how ``main`` resolves concurrency, so the two cannot disagree about
+        whether sessions overlap.
+        """
+        if self.mode == "batch":
+            if self.batch_splits is None:
+                return False
+            concurrency = self.max_concurrency if self.max_concurrency is not None else self.batch_splits
+        else:
+            concurrency = self.max_concurrency or 1
+        return concurrency > 1
 
 
 class _BaseJudgeInput(BaseModel):
