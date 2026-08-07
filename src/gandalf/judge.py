@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Any
 
 import jinja2
-from openhands.sdk import LLM, Agent, Conversation, Tool
+from openhands.sdk import LLM, Agent, BaseConversation, Conversation, Tool
 from openhands.tools.file_editor import FileEditorTool
 from openhands.tools.terminal import TerminalTool
 from pydantic import TypeAdapter
@@ -42,7 +42,8 @@ def render_template(
     it is used instead of the built-in template identified by *template_name*.
     """
     template_str = judge_prompt if judge_prompt is not None else (TEMPLATES_DIR / template_name).read_text()
-    return jinja2.Template(template_str).render(**variables)
+    rendered: str = jinja2.Template(template_str).render(**variables)
+    return rendered
 
 
 def build_judge_prompt(
@@ -242,9 +243,9 @@ def run_agent_session(
     else:
         agent = Agent(llm=llm, tools=tools)
 
-    conversation = Conversation(agent=agent, workspace=workdir)
-    conversation.send_message(prompt)  # type: ignore[attr-defined]
-    conversation.run()  # type: ignore[attr-defined]
+    conversation: BaseConversation = Conversation(agent=agent, workspace=workdir)
+    conversation.send_message(prompt)
+    conversation.run()
 
     try:
         token_usage = llm.metrics.accumulated_token_usage
