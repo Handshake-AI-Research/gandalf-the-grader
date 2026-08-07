@@ -61,7 +61,7 @@ cat examples/quickstart/output/info.json     # per-criterion verdicts + reasonin
 
 Expected verdicts: the `welcome.txt` file exists (met), the message mentions Gandalf (met), and the message is *not* longer than 50 words (unmet, by design). Raw score 3.0 of a possible 4.0, for a reward of 0.75.
 
-The example uses [`gemini/gemini-2.5-flash`](examples/quickstart/grader.toml) and runs the inner judge as the current user (no `sandbox_user`, no sudo). To adapt it to your own setup, edit [`examples/quickstart/grader.toml`](examples/quickstart/grader.toml). See the [Configuration](#configuration) section below for the full field reference.
+The example uses [`gemini/gemini-3.5-flash`](examples/quickstart/grader.toml) and runs the inner judge as the current user (no `sandbox_user`, no sudo). To adapt it to your own setup, edit [`examples/quickstart/grader.toml`](examples/quickstart/grader.toml). See the [Configuration](#configuration) section below for the full field reference.
 
 ## Configuration
 
@@ -78,7 +78,7 @@ The example uses [`gemini/gemini-2.5-flash`](examples/quickstart/grader.toml) an
 | `workdir` | Yes | | Agent workspace directory |
 | `trajectory_path` | Yes | | Path to ATIF trajectory JSON |
 | `output_dir` | Yes | | Directory for grader output files |
-| `model` | No | `gemini/gemini-2.5-flash` | LLM model for the judge agent |
+| `model` | No | `gemini/gemini-3.5-flash` | LLM model for the judge agent |
 | `mode` | No | `batch` | Evaluation mode: `batch` or `individual` |
 | `judge_timeout` | No | `300` | Max seconds per judge invocation |
 | `batch_timeout` | No | | Max total seconds for batch mode (caps `judge_timeout * N`) |
