@@ -640,3 +640,74 @@ class TestGraderConfigMode:
         cfg = self._cfg(mode="individual", max_concurrency=4)
         assert cfg.max_concurrency == 4
         assert cfg.batch_splits is None
+
+
+class TestWorkspaceIsDisposable:
+    """Validate the opt-out from cloning the workspace before grading."""
+
+    _DEFAULTS: ClassVar[dict[str, Any]] = {
+        "instructions": "test",
+        "rubric_path": "/rubric.json",
+        "workdir": "/workspace",
+        "trajectory_path": "/logs/trajectory.json",
+        "output_dir": "/logs/grader",
+    }
+
+    def _cfg(self, **overrides: Any) -> GraderConfig:
+        return GraderConfig(**{**self._DEFAULTS, **overrides})
+
+    def test_defaults_to_cloning(self) -> None:
+        """Isolation is the default; giving it up has to be asked for."""
+        assert self._cfg().workspace_is_disposable is False
+
+    def test_accepted_for_a_single_session(self) -> None:
+        assert self._cfg(workspace_is_disposable=True).workspace_is_disposable is True
+
+    @pytest.mark.parametrize(
+        "overrides",
+        [
+            {"mode": "individual", "max_concurrency": 2},
+            {"mode": "batch", "batch_splits": 2},
+            {"mode": "batch", "batch_splits": 4, "max_concurrency": 2},
+        ],
+    )
+    def test_rejected_when_judges_would_share_the_workspace(self, overrides: dict[str, Any]) -> None:
+        """Without a clone per session, parallel judges collide in one directory —
+        a wrong verdict rather than a crash, so refuse instead of grading."""
+        with pytest.raises(ValidationError, match="concurrent judge"):
+            self._cfg(workspace_is_disposable=True, **overrides)
+
+    @pytest.mark.parametrize(
+        "overrides",
+        [
+            {"mode": "batch"},
+            {"mode": "batch", "batch_splits": 4, "max_concurrency": 1},
+            {"mode": "individual"},
+            {"mode": "individual", "max_concurrency": 1},
+        ],
+    )
+    def test_allowed_whenever_sessions_run_one_at_a_time(self, overrides: dict[str, Any]) -> None:
+        assert self._cfg(workspace_is_disposable=True, **overrides).workspace_is_disposable is True
+
+    def test_concurrency_is_unconstrained_while_cloning(self) -> None:
+        """The restriction belongs to the opt-out, not to concurrency itself."""
+        assert self._cfg(mode="batch", batch_splits=4).runs_concurrent_judges is True
+
+    @pytest.mark.parametrize(
+        ("overrides", "expected"),
+        [
+            ({"mode": "batch"}, False),
+            ({"mode": "batch", "batch_splits": 3}, True),
+            ({"mode": "batch", "batch_splits": 3, "max_concurrency": 1}, False),
+            ({"mode": "individual"}, False),
+            ({"mode": "individual", "max_concurrency": 3}, True),
+        ],
+    )
+    def test_reports_whether_sessions_overlap(self, overrides: dict[str, Any], expected: bool) -> None:
+        """Mirrors how `main` resolves concurrency, so the two cannot disagree."""
+        assert self._cfg(**overrides).runs_concurrent_judges is expected
+
+    def test_unknown_keys_are_ignored(self) -> None:
+        """A grader older than the config that sets this key must still run: the flag is
+        an optimisation, and refusing to start would make rollout order load-bearing."""
+        assert self._cfg(some_future_flag=True).workdir == "/workspace"

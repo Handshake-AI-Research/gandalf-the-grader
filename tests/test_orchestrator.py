@@ -1075,6 +1075,120 @@ class TestRetryLogic:
         assert reward["reward"] == info["reward"]
 
 
+class TestDisposableWorkspace:
+    """Tests for grading a workspace directly instead of cloning it."""
+
+    @patch("gandalf.orchestrator.clone_workspace")
+    @patch("gandalf.orchestrator.subprocess.run")
+    def test_does_not_clone(self, mock_run: Any, mock_clone: Any, tmp_path: pathlib.Path) -> None:
+        """The whole point: no copy of the workspace is made."""
+        mock_run.side_effect = make_run_writing({"verdicts": [], "llm_usage": {}})
+        run_judge(
+            make_batch_input(tmp_path, n=1),
+            sandbox_user="sandbox",
+            trace_path=str(tmp_path / "trace.txt"),
+            workspace_is_disposable=True,
+        )
+        mock_clone.assert_not_called()
+
+    @patch("gandalf.orchestrator.subprocess.run")
+    def test_judge_runs_in_the_workspace_itself(self, mock_run: Any, tmp_path: pathlib.Path) -> None:
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        judge_input = make_batch_input(workspace, n=1)
+        mock_run.side_effect = make_run_writing({"verdicts": [], "llm_usage": {}})
+
+        run_judge(
+            judge_input,
+            sandbox_user="sandbox",
+            trace_path=str(tmp_path / "trace.txt"),
+            workspace_is_disposable=True,
+        )
+
+        _cmd, kwargs = mock_run.call_args
+        assert kwargs["cwd"] == str(workspace)
+
+    @patch("gandalf.orchestrator.subprocess.run")
+    def test_home_tracks_the_working_directory(self, mock_run: Any, tmp_path: pathlib.Path) -> None:
+        """A judge that resolves tooling through HOME must behave the same either way."""
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        mock_run.side_effect = make_run_writing({"verdicts": [], "llm_usage": {}})
+
+        run_judge(
+            make_batch_input(workspace, n=1),
+            sandbox_user="sandbox",
+            trace_path=str(tmp_path / "trace.txt"),
+            workspace_is_disposable=True,
+        )
+
+        cmd = mock_run.call_args[0][0]
+        assert f"HOME={workspace}" in cmd
+
+    @patch("gandalf.orchestrator.subprocess.run")
+    def test_scratch_files_stay_out_of_the_graded_tree(self, mock_run: Any, tmp_path: pathlib.Path) -> None:
+        """Grader plumbing in the workspace would show the judge the criteria list as if
+        it were part of the agent's work, and survive into whatever inspects the tree."""
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        mock_run.side_effect = make_run_writing({"verdicts": [], "llm_usage": {}})
+
+        run_judge(
+            make_batch_input(workspace, n=1),
+            sandbox_user="sandbox",
+            trace_path=str(tmp_path / "trace.txt"),
+            workspace_is_disposable=True,
+        )
+
+        cmd = mock_run.call_args[0][0]
+        for flag in ("--input", "--output"):
+            path = pathlib.Path(cmd[cmd.index(flag) + 1])
+            assert workspace not in path.parents
+        assert list(workspace.iterdir()) == []
+
+    @patch("gandalf.orchestrator.subprocess.run")
+    def test_workspace_survives_the_run(self, mock_run: Any, tmp_path: pathlib.Path) -> None:
+        """A borrowed workspace is not ours to delete — only a clone is."""
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        (workspace / "deliverable.md").write_text("the work")
+        mock_run.side_effect = make_run_writing({"verdicts": [], "llm_usage": {}})
+
+        run_judge(
+            make_batch_input(workspace, n=1),
+            sandbox_user="sandbox",
+            trace_path=str(tmp_path / "trace.txt"),
+            workspace_is_disposable=True,
+        )
+
+        assert (workspace / "deliverable.md").read_text() == "the work"
+
+    @patch("gandalf.orchestrator.subprocess.run")
+    def test_scratch_directory_is_removed(self, mock_run: Any, tmp_path: pathlib.Path) -> None:
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        mock_run.side_effect = make_run_writing({"verdicts": [], "llm_usage": {}})
+
+        run_judge(
+            make_batch_input(workspace, n=1),
+            sandbox_user="sandbox",
+            trace_path=str(tmp_path / "trace.txt"),
+            workspace_is_disposable=True,
+        )
+
+        scratch = pathlib.Path(mock_run.call_args[0][0][mock_run.call_args[0][0].index("--input") + 1]).parent
+        assert not scratch.exists()
+
+    @patch("gandalf.orchestrator.clone_workspace")
+    @patch("gandalf.orchestrator.subprocess.run")
+    def test_clones_by_default(self, mock_run: Any, mock_clone: Any, tmp_path: pathlib.Path) -> None:
+        """Isolation stays the default; skipping it must be asked for."""
+        mock_clone.return_value = str(tmp_path)
+        mock_run.side_effect = make_run_writing({"verdicts": [], "llm_usage": {}})
+        run_judge(make_batch_input(tmp_path, n=1), sandbox_user="sandbox", trace_path=str(tmp_path / "t.txt"))
+        mock_clone.assert_called_once()
+
+
 class TestCloneWorkspace:
     """Tests for clone_workspace resilience to unreadable files."""
 
