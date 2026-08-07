@@ -6,7 +6,7 @@
 
 Read the [launch blog post](https://joinhandshake.com/research/ai/gandalf-the-grader/) for the motivation, benchmark results, and design rationale behind Gandalf.
 
-Gandalf is a reactive agent-as-judge for rubric-graded agent environments. Given a rubric of binary criteria, it runs inside the rollout environment, uses the same tools as the rollout agent, and decides at inference time which files to open and which tool state to query.
+Gandalf is a reactive agent-as-judge for agent environments. In its default rubric mode, it grades binary criteria and computes a weighted reward. In guidance mode, it uses free-form grading guidance to assign one holistic score in `[0, 1]`. In both modes, it runs inside the rollout environment, uses the same tools as the rollout agent, and decides at inference time which files to open and which tool state to query.
 
 That lets Gandalf grade criteria that depend on artifacts or state — formulas in a workbook, charts in a deck, files on disk, MCP tool state, or whether an email was actually sent — rather than just the final text response.
 
@@ -63,28 +63,37 @@ Expected verdicts: the `welcome.txt` file exists (met), the message mentions Gan
 
 The example uses [`gemini/gemini-2.5-flash`](examples/quickstart/grader.toml) and runs the inner judge as the current user (no `sandbox_user`, no sudo). To adapt it to your own setup, edit [`examples/quickstart/grader.toml`](examples/quickstart/grader.toml). See the [Configuration](#configuration) section below for the full field reference.
 
+The same fixture can also be graded holistically with free-form guidance:
+
+```bash
+gandalf-the-grader --config examples/quickstart/guidance_grader.toml
+cat examples/quickstart/guidance_output/reward.json
+cat examples/quickstart/guidance_output/info.json
+```
+
 ## Configuration
 
 ### `grader.toml`
 
 | Field | Required | Default | Description |
 |---|---|---|---|
+| `grading_mode` | No | `rubric` | Grading path: `rubric` for weighted criteria, or `guidance` for one holistic score |
 | `instructions` | Yes\* | | Inline task instructions given to the original agent (mutually exclusive with `instructions_path`) |
 | `instructions_path` | Yes\* | | Path to a file with task instructions (mutually exclusive with `instructions`) |
-| `rubric` | Yes\* | | Inline rubric as a TOML array of tables (mutually exclusive with `rubric_path`) |
-| `rubric_path` | Yes\* | | Path to rubric JSON file (mutually exclusive with `rubric`) |
-| `judge_guidance` | No | | Inline judge guidance text (mutually exclusive with `judge_guidance_path`) |
-| `judge_guidance_path` | No | | Path to a file with extra judge instructions (mutually exclusive with `judge_guidance`) |
+| `rubric` | Rubric mode\* | | Inline rubric as a TOML array of tables (mutually exclusive with `rubric_path`; invalid in guidance mode) |
+| `rubric_path` | Rubric mode\* | | Path to rubric JSON file (mutually exclusive with `rubric`; invalid in guidance mode) |
+| `judge_guidance` | Guidance mode\* | | Inline judge guidance text (mutually exclusive with `judge_guidance_path`; optional extra context in rubric mode) |
+| `judge_guidance_path` | Guidance mode\* | | Path to a file with extra judge instructions (mutually exclusive with `judge_guidance`; optional extra context in rubric mode) |
 | `workdir` | Yes | | Agent workspace directory |
 | `trajectory_path` | Yes | | Path to ATIF trajectory JSON |
 | `output_dir` | Yes | | Directory for grader output files |
 | `model` | No | `gemini/gemini-2.5-flash` | LLM model for the judge agent |
-| `mode` | No | `batch` | Evaluation mode: `batch` or `individual` |
+| `mode` | No | `batch` | Rubric evaluation mode: `batch` or `individual` |
 | `judge_timeout` | No | `300` | Max seconds per judge invocation |
-| `batch_timeout` | No | | Max total seconds for batch mode (caps `judge_timeout * N`) |
-| `judge_retries` | No | `1` | Number of retry attempts for criteria that error due to infrastructure failures |
-| `batch_splits` | No | | Split criteria into N chunks in batch mode (>= 2). Each chunk is evaluated as a separate batch session. Only valid with `mode = "batch"`. |
-| `max_concurrency` | No | | Max parallel judge sessions (>= 1). Defaults to 1 for individual mode, `batch_splits` for batch mode. |
+| `batch_timeout` | No | | Rubric batch-mode max total seconds (caps `judge_timeout * N`; invalid in guidance mode) |
+| `judge_retries` | No | `1` | Number of retry attempts for criteria or guidance scores that error due to infrastructure/parse failures |
+| `batch_splits` | No | | Split rubric criteria into N chunks in batch mode (>= 2). Only valid with `mode = "batch"` and rubric mode. |
+| `max_concurrency` | No | | Max parallel rubric judge sessions (>= 1). Invalid in guidance mode. |
 | `sandbox_user` | No | | Username for running the inner judge (via sudo). When omitted the judge runs as the current user. |
 | `judge_prompt` | No | | Inline Jinja2 template that completely overrides the built-in judge task prompt (mutually exclusive with `judge_prompt_path`) |
 | `judge_prompt_path` | No | | Path to a Jinja2 template file that completely overrides the built-in judge task prompt (mutually exclusive with `judge_prompt`) |
@@ -111,14 +120,31 @@ The template receives these variables:
 
 | Variable | Type | Mode | Description |
 |---|---|---|---|
-| `instructions` | `str` | both | Task instructions given to the original agent |
-| `final_output` | `str` | both | Agent's final message from the trajectory |
+| `instructions` | `str` | all | Task instructions given to the original agent |
+| `final_output` | `str` | all | Agent's final message from the trajectory |
 | `criterion` | `str` | individual | The single criterion string to evaluate |
 | `criteria` | `list[str]` | batch | List of all criterion strings to evaluate |
-| `verdict_path` | `str` | both | File path the judge must write its verdict to |
-| `judge_guidance` | `str` | both | Additional guidance text (may be empty) |
+| `verdict_path` | `str` | individual, batch | File path the judge must write its verdict to |
+| `judge_guidance` | `str` | all | Additional guidance text; required in guidance mode |
+| `trajectory_path` | `str` | guidance | Path to the copied trajectory JSON inside the cloned judge workspace |
+| `score_path` | `str` | guidance | File path the judge must write its holistic score to |
 
-Individual and batch modes use separate built-in templates. In a custom template, use `{% if criterion is defined %}` vs `{% if criteria is defined %}` if you need to distinguish modes. In batch mode, use `loop.index0` for the criterion index (e.g., `{% for c in criteria %}[{{ loop.index0 }}] {{ c }}{% endfor %}`).
+Individual, batch, and guidance modes use separate built-in templates. In a custom template, use `{% if criterion is defined %}`, `{% if criteria is defined %}`, or `{% if score_path is defined %}` if you need to distinguish modes. In batch mode, use `loop.index0` for the criterion index (e.g., `{% for c in criteria %}[{{ loop.index0 }}] {{ c }}{% endfor %}`).
+
+### Guidance Mode
+
+Set `grading_mode = "guidance"` to grade with free-form guidance instead of a rubric:
+
+```toml
+grading_mode = "guidance"
+instructions_path = "/path/to/instruction.md"
+judge_guidance_path = "/path/to/judge_guidance.md"
+workdir = "/path/to/final/workspace"
+trajectory_path = "/path/to/agent/trajectory.json"
+output_dir = "/path/to/grader-output"
+```
+
+Guidance mode rejects `rubric`, `rubric_path`, `batch_splits`, `batch_timeout`, and `max_concurrency` so those fields are not silently ignored. It runs one holistic judge session per attempt. The judge sees the final output as context, but the full trajectory JSON is copied into the cloned judge workspace and passed as `trajectory_path`; the full trajectory is not inlined into the prompt.
 
 ### Rubric JSON
 
@@ -183,13 +209,50 @@ export OTEL_EXPORTER_OTLP_TRACES_PROTOCOL=http/protobuf
 
 ## Output
 
-The grader writes to `output_dir`:
+In rubric mode, the grader writes to `output_dir`:
 
 - `reward.json`: Reward file (e.g., `{"reward": 0.75}`) (always in [0, 1]). **Only written when all criteria are successfully evaluated.** If any criteria still have errors after retries, the grader writes `info.json` but skips `reward.json` and exits with code 1.
 - `info.json`: Always written. Per-criterion results with `met`/not-met, reasoning, evidence, LLM usage, plus `reward`, `raw_score`, `minimum_score`, `maximum_score`, `errored_criterion_count`, and `evaluated_criteria_pct`.
 - `judge_trace_*.txt`: stdout/stderr capture for each judge invocation. Naming varies by mode: `judge_trace_{i}.txt` (individual), `judge_trace_batch.txt` (batch), `judge_trace_batch_split{i}.txt` (batch with splits). Retries append a `_retry{N}` suffix.
 
 The `reward` in `reward.json` is `clip(0, 1, raw_score / sum_of_positive_weights)`, always in [0, 1]. `info.json` additionally includes `raw_score` (the raw sum of weights for met criteria, which can be negative) and `minimum_score`/`maximum_score` bounds for reference.
+
+In guidance mode:
+
+- `reward.json`: `{"reward": <score>}` where score is the holistic judge score rounded to 4 decimals. Only written when the judge returns a valid numeric score in `[0, 1]`.
+- `info.json`: Always written after the guidance judge runs. Contains `grading_mode`, `reward`, `score`, `reasoning`, `evidence`, `llm_usage`, `errored`, and `error`.
+- `judge_trace_guidance*.txt`: stdout/stderr capture for each holistic judge attempt. Retries are named `judge_trace_guidance_retry{N}.txt`.
+
+The guidance judge output is considered valid only when it includes a numeric score, non-empty reasoning, and a non-empty evidence array. Missing or malformed audit fields are treated like invalid judge output and retried according to `judge_retries`. The default guidance prompt asks the judge to include artifact evidence, trajectory evidence, and an explicit score calibration/cap audit so score bands and hard penalties from the guidance are applied visibly. It also asks the judge to reconcile conflicts between the task instructions and grading guidance, especially artifact output-location conflicts, before applying path-related penalties. When tasks mention required or forbidden external actions, the prompt asks for an action/side-effect audit based on trajectory tool calls and final state.
+
+Example guidance `info.json`:
+
+```json
+{
+  "grading_mode": "guidance",
+  "reward": 0.8,
+  "score": 0.8,
+  "reasoning": "The final artifact is mostly correct but omits one requested comparison.",
+  "evidence": ["Read /workspace/report.md", "Inspected trajectory file for failed command"],
+  "llm_usage": {"cost_usd": 0.02, "prompt_tokens": 1200, "completion_tokens": 400, "cache_read_tokens": 0},
+  "errored": false,
+  "error": null
+}
+```
+
+## Harbor Rollouts and DSPy Calibration
+
+The repo includes helper scripts for collecting Harbor rollouts without running any verifier, then evaluating rubric and guidance scoring later. The analysis helper reports rubric/guidance score agreement as a calibration signal, plus guidance-grounded audit signals such as guidance vocabulary coverage, trajectory evidence, score-cap audit evidence, output-location conflict audits, and required-action evidence:
+
+```bash
+scripts/collect_harbor_rollouts.sh
+scripts/index_harbor_rollouts.py
+scripts/eval_guidance_scores.py --mode rubric
+scripts/eval_guidance_scores.py --mode guidance
+uv run --group eval scripts/dspy_optimize_guidance.py
+```
+
+`collect_harbor_rollouts.sh` sources `$ENV_FILE` (default: `$HOME/Downloads/env`), discovers Harbor-format tasks under `$TASK_ROOT` (default: `$HOME/Downloads/harbor-research-v2-Batch1-2`), runs `harbor run` with `--disable-verification`, and caps outer concurrency at 5. DSPy is used only by the evaluation/calibration script; Gandalf's runtime guidance mode remains the reactive environment-inspecting judge.
 
 ## Next steps
 

@@ -17,6 +17,8 @@ from gandalf.models import (
     BatchJudgeInput,
     CriterionResult,
     GraderConfig,
+    GuidanceJudgeInput,
+    GuidanceScore,
     JudgeInput,
     LLMUsage,
     RubricItem,
@@ -33,6 +35,9 @@ from gandalf.orchestrator import (
     resolve_judge_guidance,
     resolve_judge_prompt,
     run_batch_concurrent,
+    run_guidance,
+    run_guidance_judge,
+    run_guidance_retry_guidance,
     run_individual,
     run_judge,
     write_info,
@@ -570,6 +575,385 @@ class TestSandboxUserNone:
         assert len(verdicts) == 2
         assert all(v.met is True for v in verdicts)
         assert usage.cost_usd == 0.01
+
+
+class TestGuidanceModeOrchestration:
+    """Tests for the guidance-mode outer orchestration path."""
+
+    @patch("gandalf.orchestrator.clone_workspace")
+    @patch("gandalf.orchestrator.subprocess.run")
+    def test_run_guidance_judge_copies_trajectory_and_uses_guidance_flag(
+        self,
+        mock_run: Any,
+        mock_clone: Any,
+        tmp_path: pathlib.Path,
+    ) -> None:
+        workdir = tmp_path / "workspace"
+        workdir.mkdir()
+        (workdir / "artifact.txt").write_text("result")
+        trajectory = tmp_path / "trajectory.json"
+        trajectory.write_text(json.dumps({"steps": [{"source": "agent", "message": "done"}]}))
+
+        clone_dir = tmp_path / "clone"
+        clone_dir.mkdir()
+        mock_clone.return_value = str(clone_dir)
+        captured: dict[str, Any] = {}
+
+        def capture(cmd: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[str]:
+            input_path = pathlib.Path(cmd[cmd.index("--input") + 1])
+            output_path = pathlib.Path(cmd[cmd.index("--output") + 1])
+            payload = json.loads(input_path.read_text())
+            copied_trajectory = pathlib.Path(payload["trajectory_path"])
+            captured["cmd"] = cmd
+            captured["payload"] = payload
+            captured["trajectory_exists"] = copied_trajectory.exists()
+            captured["trajectory_content"] = json.loads(copied_trajectory.read_text())
+            output_path.write_text(
+                json.dumps(
+                    {
+                        "guidance_score": {
+                            "score": 0.9,
+                            "reasoning": "Strong result.",
+                            "evidence": ["Inspected artifact.txt"],
+                        },
+                        "llm_usage": {"cost_usd": 0.2, "prompt_tokens": 10},
+                    }
+                )
+            )
+            return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+
+        mock_run.side_effect = capture
+        judge_input = GuidanceJudgeInput(
+            model="test-model",
+            instructions="test",
+            final_output="done",
+            workdir=str(workdir),
+            trajectory_path=str(trajectory),
+            judge_guidance="Grade holistically.",
+        )
+
+        score, usage = run_guidance_judge(
+            judge_input,
+            sandbox_user=None,
+            trace_path=str(tmp_path / "trace.txt"),
+            timeout=123,
+        )
+
+        assert score.score == 0.9
+        assert usage.cost_usd == 0.2
+        assert "--guidance" in captured["cmd"]
+        assert captured["payload"]["workdir"] == str(clone_dir)
+        assert captured["payload"]["trajectory_path"] == str(clone_dir / "gandalf_trajectory.json")
+        assert captured["trajectory_exists"] is True
+        assert captured["trajectory_content"]["steps"][0]["message"] == "done"
+
+    @patch("gandalf.orchestrator.clone_workspace")
+    @patch("gandalf.orchestrator.subprocess.run")
+    def test_run_guidance_judge_preserves_usage_on_invalid_score(
+        self,
+        mock_run: Any,
+        mock_clone: Any,
+        tmp_path: pathlib.Path,
+    ) -> None:
+        trajectory = tmp_path / "trajectory.json"
+        trajectory.write_text(json.dumps({"steps": []}))
+        clone_dir = tmp_path / "clone"
+        clone_dir.mkdir()
+        mock_clone.return_value = str(clone_dir)
+
+        def write_invalid_score(cmd: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[str]:
+            output_path = pathlib.Path(cmd[cmd.index("--output") + 1])
+            output_path.write_text(
+                json.dumps(
+                    {
+                        "guidance_score": {"score": 2, "reasoning": "too high"},
+                        "llm_usage": {"cost_usd": 0.3, "prompt_tokens": 11},
+                    }
+                )
+            )
+            return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+
+        mock_run.side_effect = write_invalid_score
+        judge_input = GuidanceJudgeInput(
+            model="test-model",
+            instructions="test",
+            final_output="done",
+            workdir=str(tmp_path),
+            trajectory_path=str(trajectory),
+            judge_guidance="Grade holistically.",
+        )
+
+        score, usage = run_guidance_judge(
+            judge_input,
+            sandbox_user=None,
+            trace_path=str(tmp_path / "trace.txt"),
+        )
+
+        assert score.score is None
+        assert "range" in score.reasoning.lower()
+        assert usage.cost_usd == 0.3
+
+    @patch("gandalf.orchestrator.run_guidance_judge")
+    def test_run_guidance_retries_invalid_score_then_succeeds(
+        self,
+        mock_run_guidance_judge: Any,
+        tmp_path: pathlib.Path,
+    ) -> None:
+        output_dir = tmp_path / "output"
+        output_dir.mkdir()
+        trajectory = tmp_path / "trajectory.json"
+        trajectory.write_text(json.dumps({"steps": []}))
+        config = GraderConfig(
+            grading_mode="guidance",
+            instructions="test",
+            judge_guidance="Grade holistically.",
+            workdir=str(tmp_path),
+            trajectory_path=str(trajectory),
+            output_dir=str(output_dir),
+            judge_retries=1,
+        )
+        mock_run_guidance_judge.side_effect = [
+            (GuidanceScore(score=None, reasoning="Missing score.", evidence=[]), LLMUsage(cost_usd=0.1)),
+            (GuidanceScore(score=0.81234, reasoning="Recovered.", evidence=["Checked files"]), LLMUsage(cost_usd=0.2)),
+        ]
+
+        score, usage, initial_errored = run_guidance(
+            config,
+            final_output="done",
+            instructions="test",
+            judge_guidance="Grade holistically.",
+            judge_prompt=None,
+        )
+
+        assert score.score == 0.8123
+        assert usage.cost_usd == pytest.approx(0.3)
+        assert initial_errored is True
+        assert mock_run_guidance_judge.call_count == 2
+        first_input = mock_run_guidance_judge.call_args_list[0].args[0]
+        retry_input = mock_run_guidance_judge.call_args_list[1].args[0]
+        assert first_input.judge_guidance == "Grade holistically."
+        assert retry_input.judge_guidance != first_input.judge_guidance
+        assert "Grade holistically." in retry_input.judge_guidance
+        assert "previous guidance judge output was rejected" in retry_input.judge_guidance
+        assert "Missing score." in retry_input.judge_guidance
+
+    def test_run_guidance_retry_guidance_preserves_original_and_adds_failure_context(self) -> None:
+        guidance = run_guidance_retry_guidance(
+            "Grade with the customer-facing guidance.",
+            GuidanceScore(
+                score=None,
+                reasoning='Guidance score missing required "Source availability audit" evidence item.',
+                evidence=[
+                    "Workspace/artifact check: read /workspace/report.xlsx.",
+                    "Inspected trajectory file: final command succeeded.",
+                ],
+            ),
+        )
+
+        assert guidance.startswith("Grade with the customer-facing guidance.")
+        assert "previous guidance judge output was rejected" in guidance
+        assert "Source availability audit" in guidance
+        assert "perform a fresh holistic evaluation" in guidance
+        assert "do not change the score merely to satisfy validation" in guidance
+        assert "Workspace/artifact check: read /workspace/report.xlsx." in guidance
+
+    def test_run_guidance_retry_guidance_adds_above_midpoint_repair_example(self) -> None:
+        guidance = run_guidance_retry_guidance(
+            "Grade with the customer-facing guidance.",
+            GuidanceScore(
+                score=None,
+                reasoning=(
+                    "Guidance score validation failed: near declared ceiling with foundational failure language "
+                    "requires an explicit above-midpoint justification in the Score calibration/cap audit."
+                ),
+                evidence=[
+                    "Score calibration/cap audit: maximum score allowed is 0.60.",
+                ],
+            ),
+        )
+
+        assert "above-midpoint validation repair" in guidance.lower()
+        assert "score calibration/cap audit" in guidance.lower()
+        assert "above the midpoint because" in guidance.lower()
+        assert "name the central requirements" in guidance.lower()
+
+    def test_run_guidance_retry_guidance_adds_source_audit_repair_examples(self) -> None:
+        guidance = run_guidance_retry_guidance(
+            "Grade with the customer-facing guidance.",
+            GuidanceScore(
+                score=None,
+                reasoning=(
+                    'Guidance score validation failed: missing required "Source availability audit" '
+                    'evidence item; missing required "Source verification audit" evidence item.'
+                ),
+                evidence=[
+                    "Trajectory/source check: recomputed Shopify totals from orders.json.",
+                ],
+            ),
+        )
+        lowered = guidance.lower()
+
+        assert "source audit validation repair" in lowered
+        assert "source availability audit:" in lowered
+        assert "source verification audit:" in lowered
+        assert "use the exact audit labels" in lowered
+
+    @patch("gandalf.orchestrator.run_guidance_judge")
+    def test_run_guidance_retry_guidance_accumulates_validation_failures(
+        self,
+        mock_run_guidance_judge: Any,
+        tmp_path: pathlib.Path,
+    ) -> None:
+        output_dir = tmp_path / "output"
+        output_dir.mkdir()
+        trajectory = tmp_path / "trajectory.json"
+        trajectory.write_text(json.dumps({"steps": []}))
+        config = GraderConfig(
+            grading_mode="guidance",
+            instructions="test",
+            judge_guidance="Grade holistically.",
+            workdir=str(tmp_path),
+            trajectory_path=str(trajectory),
+            output_dir=str(output_dir),
+            judge_retries=2,
+        )
+        mock_run_guidance_judge.side_effect = [
+            (
+                GuidanceScore(
+                    score=None,
+                    reasoning='Guidance score missing required "Source availability audit" evidence item.',
+                    evidence=["Workspace/artifact check: read /workspace/report.xlsx."],
+                ),
+                LLMUsage(cost_usd=0.1),
+            ),
+            (
+                GuidanceScore(
+                    score=None,
+                    reasoning='Guidance score missing required "Source verification audit" evidence item.',
+                    evidence=["Source availability audit: /workspace/orders.csv was accessible."],
+                ),
+                LLMUsage(cost_usd=0.1),
+            ),
+            (GuidanceScore(score=0.7, reasoning="Recovered.", evidence=["Checked files"]), LLMUsage(cost_usd=0.1)),
+        ]
+
+        score, usage, initial_errored = run_guidance(
+            config,
+            final_output="done",
+            instructions="test",
+            judge_guidance="Grade holistically.",
+            judge_prompt=None,
+        )
+
+        assert score.score == 0.7
+        assert usage.cost_usd == pytest.approx(0.3)
+        assert initial_errored is True
+        second_retry_guidance = mock_run_guidance_judge.call_args_list[2].args[0].judge_guidance
+        assert '1. Guidance score missing required "Source availability audit" evidence item.' in second_retry_guidance
+        assert '2. Guidance score missing required "Source verification audit" evidence item.' in second_retry_guidance
+        assert "Workspace/artifact check: read /workspace/report.xlsx." in second_retry_guidance
+        assert "Source availability audit: /workspace/orders.csv was accessible." in second_retry_guidance
+
+    @patch("gandalf.orchestrator.run_batch")
+    @patch("gandalf.orchestrator.run_individual")
+    @patch("gandalf.orchestrator.run_guidance_judge")
+    @patch("gandalf.orchestrator.resolve_judge_prompt", return_value=None)
+    @patch("gandalf.orchestrator.resolve_judge_guidance", return_value="Grade holistically.")
+    @patch("gandalf.orchestrator.load_trajectory_final_output", return_value="done")
+    @patch("gandalf.orchestrator.resolve_instructions", return_value="test")
+    @patch("gandalf.orchestrator.load_rubric")
+    @patch("gandalf.orchestrator.load_config")
+    def test_main_guidance_writes_reward_and_info_without_rubric(
+        self,
+        mock_config: Any,
+        mock_load_rubric: Any,
+        mock_instructions: Any,  # noqa: ARG002
+        mock_trajectory: Any,  # noqa: ARG002
+        mock_guidance: Any,  # noqa: ARG002
+        mock_prompt: Any,  # noqa: ARG002
+        mock_run_guidance_judge: Any,
+        mock_run_individual: Any,
+        mock_run_batch: Any,
+        tmp_path: pathlib.Path,
+    ) -> None:
+        output_dir = tmp_path / "output"
+        trajectory = tmp_path / "trajectory.json"
+        trajectory.write_text(json.dumps({"steps": []}))
+        mock_config.return_value = GraderConfig(
+            grading_mode="guidance",
+            instructions="test",
+            judge_guidance="Grade holistically.",
+            workdir=str(tmp_path),
+            trajectory_path=str(trajectory),
+            output_dir=str(output_dir),
+        )
+        mock_run_guidance_judge.return_value = (
+            GuidanceScore(score=0.81234, reasoning="Good result.", evidence=["Checked artifact"]),
+            LLMUsage(cost_usd=0.4, prompt_tokens=12),
+        )
+
+        with patch("sys.argv", ["prog", "--config", "dummy.toml"]):
+            main()
+
+        mock_load_rubric.assert_not_called()
+        mock_run_individual.assert_not_called()
+        mock_run_batch.assert_not_called()
+        reward = json.loads((output_dir / "reward.json").read_text())
+        info = json.loads((output_dir / "info.json").read_text())
+        assert reward == {"reward": 0.8123}
+        assert info["grading_mode"] == "guidance"
+        assert info["reward"] == 0.8123
+        assert info["score"] == 0.8123
+        assert info["reasoning"] == "Good result."
+        assert info["evidence"] == ["Checked artifact"]
+        assert info["llm_usage"]["cost_usd"] == 0.4
+        assert info["errored"] is False
+
+    @patch("gandalf.orchestrator.run_guidance_judge")
+    @patch("gandalf.orchestrator.resolve_judge_prompt", return_value=None)
+    @patch("gandalf.orchestrator.resolve_judge_guidance", return_value="Grade holistically.")
+    @patch("gandalf.orchestrator.load_trajectory_final_output", return_value="done")
+    @patch("gandalf.orchestrator.resolve_instructions", return_value="test")
+    @patch("gandalf.orchestrator.load_config")
+    def test_main_guidance_persistent_failure_writes_info_not_reward(
+        self,
+        mock_config: Any,
+        mock_instructions: Any,  # noqa: ARG002
+        mock_trajectory: Any,  # noqa: ARG002
+        mock_guidance: Any,  # noqa: ARG002
+        mock_prompt: Any,  # noqa: ARG002
+        mock_run_guidance_judge: Any,
+        tmp_path: pathlib.Path,
+    ) -> None:
+        output_dir = tmp_path / "output"
+        trajectory = tmp_path / "trajectory.json"
+        trajectory.write_text(json.dumps({"steps": []}))
+        mock_config.return_value = GraderConfig(
+            grading_mode="guidance",
+            instructions="test",
+            judge_guidance="Grade holistically.",
+            workdir=str(tmp_path),
+            trajectory_path=str(trajectory),
+            output_dir=str(output_dir),
+            judge_retries=1,
+        )
+        mock_run_guidance_judge.return_value = (
+            GuidanceScore(score=None, reasoning="Missing score.", evidence=[]),
+            LLMUsage(cost_usd=0.1),
+        )
+
+        with patch("sys.argv", ["prog", "--config", "dummy.toml"]), pytest.raises(SystemExit) as exc_info:
+            main()
+        assert exc_info.value.code == 1
+
+        info = json.loads((output_dir / "info.json").read_text())
+        assert info["grading_mode"] == "guidance"
+        assert info["reward"] is None
+        assert info["score"] is None
+        assert info["errored"] is True
+        assert "Missing score" in info["error"]
+        assert not (output_dir / "reward.json").exists()
+        assert mock_run_guidance_judge.call_count == 2
 
 
 class TestScoring:
