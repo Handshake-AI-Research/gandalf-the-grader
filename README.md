@@ -38,7 +38,9 @@ uv tool install 'gandalf-the-grader[pinned]==1.0.0'
 
 ## Runtime dependencies
 
-**Important**: Gandalf is built on top of OpenHands, which [works best](https://github.com/OpenHands/software-agent-sdk/pull/120) when `tmux` is installed. The judge refuses to run when `tmux` is not on `PATH` rather than silently falling back to a less stable subprocess-based terminal.
+**Important**: Gandalf is built on top of OpenHands, which [works best](https://github.com/OpenHands/software-agent-sdk/pull/120) when `tmux` is installed. On Linux and macOS the judge refuses to run when `tmux` is not on `PATH` rather than silently falling back to a less stable subprocess-based terminal.
+
+Native Windows has no `tmux`. The grader warns and continues so the quickstart can run, using OpenHands' subprocess terminal. For production grading, run under WSL or Linux. `sandbox_user` is also Linux-only: it launches the inner judge with `sudo`, which Windows does not provide. Omit `sandbox_user` (the quickstart already does) to run the judge as the current user.
 
 ## Quick start
 
@@ -85,7 +87,7 @@ The example uses [`gemini/gemini-2.5-flash`](examples/quickstart/grader.toml) an
 | `judge_retries` | No | `1` | Number of retry attempts for criteria that error due to infrastructure failures |
 | `batch_splits` | No | | Split criteria into N chunks in batch mode (>= 2). Each chunk is evaluated as a separate batch session. Only valid with `mode = "batch"`. |
 | `max_concurrency` | No | | Max parallel judge sessions (>= 1). Defaults to 1 for individual mode, `batch_splits` for batch mode. |
-| `sandbox_user` | No | | Username for running the inner judge (via sudo). When omitted the judge runs as the current user. |
+| `sandbox_user` | No | | Username for running the inner judge via sudo (Linux only). When omitted the judge runs as the current user. Not supported on Windows. |
 | `judge_prompt` | No | | Inline Jinja2 template that completely overrides the built-in judge task prompt (mutually exclusive with `judge_prompt_path`) |
 | `judge_prompt_path` | No | | Path to a Jinja2 template file that completely overrides the built-in judge task prompt (mutually exclusive with `judge_prompt`) |
 

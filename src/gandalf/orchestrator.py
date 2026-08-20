@@ -658,11 +658,23 @@ def check_tmux_available() -> None:
     """Verify tmux is installed and usable.
 
     OpenHands silently falls back to a less stable subprocess-based terminal
-    when tmux is missing; we refuse to run in that mode.
+    when tmux is missing; on POSIX we refuse to run in that mode.
+
+    Native Windows has no tmux. We warn and continue so the quickstart can
+    run; production grading should use WSL or Linux.
 
     Raises:
-        RuntimeError: If tmux is missing or cannot be run.
+        RuntimeError: If tmux is missing or cannot be run on POSIX.
     """
+    if sys.platform == "win32":
+        print(  # noqa: T201
+            "Warning: tmux is not available on native Windows. "
+            "OpenHands will use its subprocess terminal, which is less stable. "
+            "For production grading, run under WSL or Linux.",
+            file=sys.stderr,
+        )
+        return
+
     # Same probe as OpenHands terminal factory (_is_tmux_available): run tmux and
     # require exit 0. OpenHands silently falls back to a subprocess terminal
     # when this fails; we fail fast instead.
@@ -682,9 +694,26 @@ def check_tmux_available() -> None:
         raise RuntimeError(msg)
 
 
-def preflight_check() -> None:
+def check_sandbox_user_supported(sandbox_user: str | None) -> None:
+    """Reject sandbox_user on platforms that have no sudo.
+
+    Raises:
+        RuntimeError: If sandbox_user is set on Windows.
+    """
+    if sandbox_user is None:
+        return
+    if sys.platform == "win32":
+        msg = (
+            "sandbox_user requires sudo, which is not available on Windows. "
+            "Omit sandbox_user to run the judge as the current user, or run under WSL."
+        )
+        raise RuntimeError(msg)
+
+
+def preflight_check(sandbox_user: str | None = None) -> None:
     """Validate runtime prerequisites before doing any real work."""
     check_tmux_available()
+    check_sandbox_user_supported(sandbox_user)
 
 
 def main() -> None:
@@ -692,9 +721,8 @@ def main() -> None:
     parser.add_argument("--config", required=True, help="Path to grader config TOML file")
     args = parser.parse_args()
 
-    preflight_check()
-
     config = load_config(args.config)
+    preflight_check(sandbox_user=config.sandbox_user)
 
     instructions = resolve_instructions(config)
 

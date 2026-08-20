@@ -24,6 +24,7 @@ from gandalf.models import (
 )
 from gandalf.orchestrator import (
     JUDGE_ENV_ALLOWLIST,
+    check_sandbox_user_supported,
     check_tmux_available,
     clone_workspace,
     judge_env_vars,
@@ -318,12 +319,16 @@ class TestCheckTmuxAvailable:
 
     def test_passes_when_tmux_runs_successfully(self) -> None:
         ok = subprocess.CompletedProcess(args=["tmux", "-V"], returncode=0, stdout="tmux 3.3a\n", stderr="")
-        with patch("gandalf.orchestrator.subprocess.run", return_value=ok):
+        with (
+            patch("gandalf.orchestrator.sys.platform", "linux"),
+            patch("gandalf.orchestrator.subprocess.run", return_value=ok),
+        ):
             check_tmux_available()  # does not raise
 
     def test_raises_on_nonzero_returncode(self) -> None:
         bad = subprocess.CompletedProcess(args=["tmux", "-V"], returncode=1, stdout="", stderr="broken")
         with (
+            patch("gandalf.orchestrator.sys.platform", "linux"),
             patch("gandalf.orchestrator.subprocess.run", return_value=bad),
             pytest.raises(RuntimeError, match="tmux"),
         ):
@@ -331,13 +336,24 @@ class TestCheckTmuxAvailable:
 
     def test_raises_when_tmux_not_found(self) -> None:
         with (
+            patch("gandalf.orchestrator.sys.platform", "linux"),
             patch("gandalf.orchestrator.subprocess.run", side_effect=FileNotFoundError),
             pytest.raises(RuntimeError, match="tmux"),
         ):
             check_tmux_available()
 
+    def test_windows_warns_and_skips_probe(self, capsys: pytest.CaptureFixture[str]) -> None:
+        with (
+            patch("gandalf.orchestrator.sys.platform", "win32"),
+            patch("gandalf.orchestrator.subprocess.run") as mock_run,
+        ):
+            check_tmux_available()  # does not raise
+        mock_run.assert_not_called()
+        assert "WSL" in capsys.readouterr().err
+
     def test_raises_on_timeout(self) -> None:
         with (
+            patch("gandalf.orchestrator.sys.platform", "linux"),
             patch(
                 "gandalf.orchestrator.subprocess.run",
                 side_effect=subprocess.TimeoutExpired(cmd="tmux", timeout=5.0),
@@ -348,18 +364,48 @@ class TestCheckTmuxAvailable:
 
     def test_invokes_tmux_dash_v(self) -> None:
         ok = subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
-        with patch("gandalf.orchestrator.subprocess.run", return_value=ok) as mock_run:
+        with (
+            patch("gandalf.orchestrator.sys.platform", "linux"),
+            patch("gandalf.orchestrator.subprocess.run", return_value=ok) as mock_run,
+        ):
             check_tmux_available()
         assert mock_run.call_args[0][0] == ["tmux", "-V"]
+
+
+class TestCheckSandboxUserSupported:
+    def test_none_is_always_ok(self) -> None:
+        check_sandbox_user_supported(None)
+
+    def test_rejects_sandbox_user_on_windows(self) -> None:
+        with (
+            patch("gandalf.orchestrator.sys.platform", "win32"),
+            pytest.raises(RuntimeError, match="sudo"),
+        ):
+            check_sandbox_user_supported("sandbox")
+
+    def test_allows_sandbox_user_on_linux(self) -> None:
+        with patch("gandalf.orchestrator.sys.platform", "linux"):
+            check_sandbox_user_supported("sandbox")
 
 
 class TestPreflightCheck:
     """preflight_check is the single entry point for runtime prerequisites."""
 
     def test_calls_check_tmux_available(self) -> None:
-        with patch("gandalf.orchestrator.check_tmux_available") as mock_check:
+        with (
+            patch("gandalf.orchestrator.check_tmux_available") as mock_check,
+            patch("gandalf.orchestrator.check_sandbox_user_supported"),
+        ):
             preflight_check()
         mock_check.assert_called_once_with()
+
+    def test_passes_sandbox_user_through(self) -> None:
+        with (
+            patch("gandalf.orchestrator.check_tmux_available"),
+            patch("gandalf.orchestrator.check_sandbox_user_supported") as mock_sandbox,
+        ):
+            preflight_check(sandbox_user="sandbox")
+        mock_sandbox.assert_called_once_with("sandbox")
 
     def test_propagates_check_failure(self) -> None:
         with (
