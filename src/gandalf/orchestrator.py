@@ -27,7 +27,7 @@ import sys
 import tempfile
 from concurrent.futures import ThreadPoolExecutor
 
-from pydantic import TypeAdapter
+from pydantic import TypeAdapter, ValidationError
 
 from gandalf.models import (
     BatchJudgeInput,
@@ -325,17 +325,21 @@ def run_judge(
         with open(output_path) as f:
             data = json.load(f)
 
-    except subprocess.TimeoutExpired:
-        save_trace(trace_path, "", "Judge execution timed out.", -1)
-        return fail("Judge execution timed out.")
-    except (json.JSONDecodeError, FileNotFoundError) as e:
-        return fail(f"Failed to read judge output: {e}")
-    else:
+        if not isinstance(data, dict):
+            return fail(f"Failed to read judge output: expected object, got {type(data).__name__}")
+
         if batch:
             verdicts = TypeAdapter(list[Verdict]).validate_python(data["verdicts"])
         else:
             verdicts = [Verdict.model_validate(data["verdict"])]
         usage = LLMUsage.model_validate(data["llm_usage"])
+
+    except subprocess.TimeoutExpired:
+        save_trace(trace_path, "", "Judge execution timed out.", -1)
+        return fail("Judge execution timed out.")
+    except (json.JSONDecodeError, FileNotFoundError, KeyError, TypeError, ValidationError) as e:
+        return fail(f"Failed to read judge output: {e}")
+    else:
         return verdicts, usage
     finally:
         shutil.rmtree(clone_dir, ignore_errors=True)
