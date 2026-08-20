@@ -131,6 +131,8 @@ def read_batch_verdict(verdict_path: str, n_criteria: int) -> list[Verdict]:
 
         by_index: dict[int, Verdict] = {}
         for v in verdicts_raw:
+            if not isinstance(v, dict):
+                continue
             idx = v.get("index")
             if idx is None:
                 continue

@@ -359,6 +359,22 @@ class TestReadBatchVerdict:
         results = read_batch_verdict(str(p), 1)
         assert results[0].met is None
 
+    def test_non_object_entries_are_skipped(self, tmp_path: pathlib.Path) -> None:
+        """A string or null in the array must not raise AttributeError."""
+        p = tmp_path / "verdict.json"
+        p.write_text(
+            json.dumps(
+                [
+                    "not an object",
+                    None,
+                    {"index": 1, "met": True, "reasoning": "ok", "evidence": []},
+                ]
+            )
+        )
+        results = read_batch_verdict(str(p), 2)
+        assert results[0].met is None
+        assert results[1].met is True
+
 
 def make_judge_input_json(tmp_path: pathlib.Path, criterion: str = "check something") -> str:
     """Write a minimal JudgeInput JSON file and return its path."""
