@@ -45,8 +45,15 @@ from gandalf.models import (
 
 def load_trajectory_final_output(path: str) -> str:
     """Load an ATIF trajectory file and extract the final agent message."""
-    with open(path) as f:
-        data = json.load(f)
+    try:
+        with open(path) as f:
+            data = json.load(f)
+    except json.JSONDecodeError as e:
+        print(  # noqa: T201
+            f"ERROR: Invalid JSON in trajectory file: {path}\n  {e}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
     steps = data.get("steps", [])
 
