@@ -5,6 +5,7 @@ import os
 import pathlib
 import shutil
 import subprocess
+import sys
 import threading
 import time
 from collections.abc import Callable
@@ -38,6 +39,19 @@ from gandalf.orchestrator import (
     write_info,
 )
 from tests.conftest import cr, make_batch_input, make_config
+
+requires_posix_permissions = pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="POSIX permission bits are not enforced for the file owner on Windows",
+)
+requires_symlinks = pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="Creating symlinks requires SeCreateSymbolicLinkPrivilege on Windows",
+)
+requires_unix_env = pytest.mark.skipif(
+    sys.platform == "win32" or shutil.which("env") is None,
+    reason="run_judge still launches via Unix env(1); Windows launch is a separate change",
+)
 
 
 class TestResolveInstructions:
@@ -528,13 +542,14 @@ with open(args.output, "w") as f:
 """,
     )
     script.chmod(0o755)
-    monkeypatch.setenv("PATH", f"{script.parent}:{os.environ.get('PATH', '')}")
+    monkeypatch.setenv("PATH", f"{script.parent}{os.pathsep}{os.environ.get('PATH', '')}")
     return script
 
 
 class TestSandboxUserNone:
     """When sandbox_user is None the judge runs as the ambient user (no sudo)."""
 
+    @requires_unix_env
     @pytest.mark.usefixtures("fake_judge")
     def test_evaluate_criterion_no_sudo(self, tmp_path: pathlib.Path) -> None:
         workdir = tmp_path / "workspace"
@@ -555,6 +570,7 @@ class TestSandboxUserNone:
         assert verdicts[0].met is True
         assert verdicts[0].reasoning == "ok"
 
+    @requires_unix_env
     @pytest.mark.usefixtures("fake_judge")
     def test_evaluate_all_criteria_no_sudo(self, tmp_path: pathlib.Path) -> None:
         workdir = tmp_path / "workspace"
@@ -1092,6 +1108,7 @@ class TestCloneWorkspace:
         finally:
             shutil.rmtree(clone_dir, ignore_errors=True)
 
+    @requires_posix_permissions
     def test_unreadable_files_are_skipped_not_fatal(self, tmp_path: pathlib.Path) -> None:
         workspace = tmp_path / "workspace"
         workspace.mkdir()
@@ -1110,6 +1127,7 @@ class TestCloneWorkspace:
             restricted.chmod(0o644)
             shutil.rmtree(clone_dir, ignore_errors=True)
 
+    @requires_posix_permissions
     def test_skipped_files_are_logged(self, tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]) -> None:
         workspace = tmp_path / "workspace"
         workspace.mkdir()
@@ -1126,6 +1144,7 @@ class TestCloneWorkspace:
             restricted.chmod(0o644)
             shutil.rmtree(clone_dir, ignore_errors=True)
 
+    @requires_posix_permissions
     def test_unreadable_directory_is_skipped_not_fatal(self, tmp_path: pathlib.Path) -> None:
         workspace = tmp_path / "workspace"
         workspace.mkdir()
@@ -1147,6 +1166,7 @@ class TestCloneWorkspace:
             restricted_dir.chmod(0o755)
             shutil.rmtree(clone_dir, ignore_errors=True)
 
+    @requires_posix_permissions
     def test_unreadable_directory_is_logged(self, tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]) -> None:
         workspace = tmp_path / "workspace"
         workspace.mkdir()
@@ -1219,6 +1239,7 @@ class TestCloneWorkspace:
         finally:
             shutil.rmtree(clone_dir, ignore_errors=True)
 
+    @requires_posix_permissions
     def test_executable_bits_are_preserved(self, tmp_path: pathlib.Path) -> None:
         """Cloned files must retain execute bits so scripts/binaries remain runnable."""
         workspace = tmp_path / "workspace"
@@ -1245,6 +1266,7 @@ class TestCloneWorkspace:
         finally:
             shutil.rmtree(clone_dir, ignore_errors=True)
 
+    @requires_symlinks
     def test_broken_symlink_is_skipped_not_fatal(self, tmp_path: pathlib.Path) -> None:
         """A broken symlink in the workspace must be skipped, not crash the clone.
 
@@ -1265,6 +1287,7 @@ class TestCloneWorkspace:
         finally:
             shutil.rmtree(clone_dir, ignore_errors=True)
 
+    @requires_symlinks
     def test_symlink_to_directory_is_skipped_not_fatal(self, tmp_path: pathlib.Path) -> None:
         """A symlink-to-directory in filenames must be skipped, not crash the clone.
 
@@ -1288,6 +1311,7 @@ class TestCloneWorkspace:
         finally:
             shutil.rmtree(clone_dir, ignore_errors=True)
 
+    @requires_symlinks
     def test_symlink_loop_is_skipped_not_fatal(self, tmp_path: pathlib.Path) -> None:
         """Circular symlinks in the workspace must be skipped, not crash the clone."""
         workspace = tmp_path / "workspace"

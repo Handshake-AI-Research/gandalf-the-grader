@@ -55,3 +55,15 @@ jobs:
           python-version: "3.13"
       - uses: pypa/hatch@install
       - run: hatch fmt --check
+
+  test-windows:
+    runs-on: windows-latest
+    name: "Test: Windows Python 3.12"
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - uses: pypa/hatch@install
+      - name: Run tests
+        run: hatch test -v -m "not llm" --include python=3.12

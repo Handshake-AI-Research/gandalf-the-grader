@@ -90,4 +90,4 @@ See [`hatch build`][hatch-build] and [`hatch publish`][hatch-publish] for more d
 
 ## Continuous integration
 
-Testing, type checking, and formatting/linting is [checked in CI](.github/workflows/ci.yml).
+Testing, type checking, and formatting/linting is [checked in CI](.github/workflows/ci.yml) on Ubuntu for Python 3.12–3.14. A Windows job runs the unit tests on Python 3.12 (POSIX permission and symlink clone tests are skipped there). Locally on Windows, use `hatch test --include python=3.12` when only 3.12 is installed.
