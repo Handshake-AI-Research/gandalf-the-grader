@@ -45,7 +45,7 @@ from gandalf.models import (
 
 def load_trajectory_final_output(path: str) -> str:
     """Load an ATIF trajectory file and extract the final agent message."""
-    with open(path) as f:
+    with open(path, encoding="utf-8") as f:
         data = json.load(f)
 
     steps = data.get("steps", [])
@@ -109,7 +109,7 @@ def resolve_optional_file(
             file=sys.stderr,
         )
         sys.exit(1)
-    with open(path) as f:
+    with open(path, encoding="utf-8") as f:
         return f.read()
 
 
@@ -269,6 +269,7 @@ def run_judge(
     prefix = "judge_batch_" if batch else "judge_"
     with tempfile.NamedTemporaryFile(
         mode="w",
+        encoding="utf-8",
         suffix=".json",
         prefix=f"{prefix}input_",
         dir=clone_dir,
@@ -281,6 +282,7 @@ def run_judge(
     # needing general write access to /tmp (which may not be world-writable).
     with tempfile.NamedTemporaryFile(
         mode="w",
+        encoding="utf-8",
         suffix=".json",
         prefix=f"{prefix}output_",
         dir=clone_dir,
@@ -308,21 +310,24 @@ def run_judge(
         if batch:
             cmd.append("--batch")
 
-        result = subprocess.run(
-            cmd,
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            cwd=clone_dir,
-        )
+        try:
+            result = subprocess.run(
+                cmd,
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                cwd=clone_dir,
+            )
+        except FileNotFoundError as e:
+            return fail(f"Judge executable not found: {e}")
 
         save_trace(trace_path, result.stdout, result.stderr, result.returncode)
 
         if result.returncode != 0:
             return fail(f"Judge process failed (exit {result.returncode}): {result.stderr[:500]}")
 
-        with open(output_path) as f:
+        with open(output_path, encoding="utf-8") as f:
             data = json.load(f)
 
     except subprocess.TimeoutExpired:
@@ -343,7 +348,7 @@ def run_judge(
 
 def save_trace(trace_path: str, stdout: str, stderr: str, returncode: int) -> None:
     """Write the judge's stdout/stderr to a trace file."""
-    with contextlib.suppress(OSError), open(trace_path, "w") as f:
+    with contextlib.suppress(OSError), open(trace_path, "w", encoding="utf-8") as f:
         f.write(f"exit_code: {returncode}\n")
         f.write("=== stdout ===\n")
         f.write(stdout)
@@ -648,7 +653,7 @@ def write_info(
         errored_criterion_count=errored_criterion_count,
         evaluated_criteria_pct=evaluated_pct,
     )
-    with open(os.path.join(config.output_dir, "info.json"), "w") as f:
+    with open(os.path.join(config.output_dir, "info.json"), "w", encoding="utf-8") as f:
         f.write(info.model_dump_json(indent=2))
 
     return reward, raw_score
@@ -679,6 +684,10 @@ def check_tmux_available() -> None:
         ok = False
     if not ok:
         msg = "tmux is not installed or not on PATH."
+        if sys.platform == "win32":
+            msg += (
+                " Gandalf needs tmux for the OpenHands terminal and does not run on native Windows; use WSL or Linux."
+            )
         raise RuntimeError(msg)
 
 
@@ -760,7 +769,7 @@ def main() -> None:
         sys.exit(1)
 
     # 6. All resolved — write reward.json
-    with open(os.path.join(config.output_dir, "reward.json"), "w") as f:
+    with open(os.path.join(config.output_dir, "reward.json"), "w", encoding="utf-8") as f:
         json.dump({"reward": reward}, f, indent=2)
 
     print(f"\nReward: {reward} (raw: {raw_score})")  # noqa: T201
