@@ -490,6 +490,67 @@ class TestEvaluateAllCriteria:
         assert all(v.met is None for v in verdicts)
         assert usage == LLMUsage()
 
+    @patch("gandalf.orchestrator.clone_workspace")
+    @patch("gandalf.orchestrator.subprocess.run")
+    def test_missing_verdicts_key_returns_fail_all(
+        self, mock_run: Any, mock_clone: Any, tmp_path: pathlib.Path
+    ) -> None:
+        """Valid JSON missing the verdicts key must not raise KeyError out of run_judge."""
+        mock_clone.return_value = str(tmp_path)
+        mock_run.side_effect = make_run_writing({"llm_usage": {"cost_usd": 0.1}})
+
+        judge_input = make_batch_input(tmp_path, n=2)
+        trace_path = str(tmp_path / "trace.txt")
+
+        verdicts, usage = run_judge(judge_input, sandbox_user="sandbox", trace_path=trace_path)
+
+        assert len(verdicts) == 2
+        assert all(v.met is None for v in verdicts)
+        assert "Failed to read judge output" in verdicts[0].reasoning
+        assert usage == LLMUsage()
+
+    @patch("gandalf.orchestrator.clone_workspace")
+    @patch("gandalf.orchestrator.subprocess.run")
+    def test_missing_llm_usage_key_returns_fail_all(
+        self, mock_run: Any, mock_clone: Any, tmp_path: pathlib.Path
+    ) -> None:
+        """Valid JSON missing llm_usage must not raise KeyError out of run_judge."""
+        mock_clone.return_value = str(tmp_path)
+        mock_run.side_effect = make_run_writing(
+            {
+                "verdicts": [
+                    {"index": 0, "met": True, "reasoning": "ok", "evidence": []},
+                ]
+            }
+        )
+
+        judge_input = make_batch_input(tmp_path, n=1)
+        trace_path = str(tmp_path / "trace.txt")
+
+        verdicts, usage = run_judge(judge_input, sandbox_user="sandbox", trace_path=trace_path)
+
+        assert len(verdicts) == 1
+        assert verdicts[0].met is None
+        assert "Failed to read judge output" in verdicts[0].reasoning
+        assert usage == LLMUsage()
+
+    @patch("gandalf.orchestrator.clone_workspace")
+    @patch("gandalf.orchestrator.subprocess.run")
+    def test_non_object_output_returns_fail_all(self, mock_run: Any, mock_clone: Any, tmp_path: pathlib.Path) -> None:
+        """A JSON array in the output file must not crash run_judge."""
+        mock_clone.return_value = str(tmp_path)
+        mock_run.side_effect = make_run_writing([{"met": True, "reasoning": "ok"}])
+
+        judge_input = make_batch_input(tmp_path, n=1)
+        trace_path = str(tmp_path / "trace.txt")
+
+        verdicts, usage = run_judge(judge_input, sandbox_user="sandbox", trace_path=trace_path)
+
+        assert len(verdicts) == 1
+        assert verdicts[0].met is None
+        assert "expected object" in verdicts[0].reasoning
+        assert usage == LLMUsage()
+
 
 @pytest.fixture
 def fake_judge(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> pathlib.Path:
