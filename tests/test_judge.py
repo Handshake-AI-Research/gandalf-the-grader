@@ -258,6 +258,19 @@ class TestReadVerdict:
         result = read_verdict(str(p))
         assert result.met is None
 
+    def test_string_false_is_not_met(self, tmp_path: pathlib.Path) -> None:
+        """bool('false') is True; a string false from the judge must stay unmet."""
+        p = tmp_path / "verdict.json"
+        p.write_text(json.dumps({"met": "false", "reasoning": "not present", "evidence": []}))
+        result = read_verdict(str(p))
+        assert result.met is False
+
+    def test_string_true_is_met(self, tmp_path: pathlib.Path) -> None:
+        p = tmp_path / "verdict.json"
+        p.write_text(json.dumps({"met": "true", "reasoning": "present", "evidence": []}))
+        result = read_verdict(str(p))
+        assert result.met is True
+
     def test_empty_file(self, tmp_path: pathlib.Path) -> None:
         p = tmp_path / "verdict.json"
         p.write_text("")

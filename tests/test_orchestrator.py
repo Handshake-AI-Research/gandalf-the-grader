@@ -5,6 +5,7 @@ import os
 import pathlib
 import shutil
 import subprocess
+import sys
 import threading
 import time
 from collections.abc import Callable
@@ -38,6 +39,15 @@ from gandalf.orchestrator import (
     write_info,
 )
 from tests.conftest import cr, make_batch_input, make_config
+
+requires_posix_permissions = pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="POSIX permission bits are not enforced for the file owner on Windows",
+)
+requires_symlinks = pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="Creating symlinks requires SeCreateSymbolicLinkPrivilege on Windows",
+)
 
 
 class TestResolveInstructions:
@@ -491,20 +501,8 @@ class TestEvaluateAllCriteria:
         assert usage == LLMUsage()
 
 
-@pytest.fixture
-def fake_judge(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> pathlib.Path:
-    """Create a fake ``gandalf-the-grader-judge`` on PATH.
-
-    The script reads --input/--output args and writes a valid verdict to the
-    output file.  When ``--batch`` is passed it writes the dict-with-verdicts
-    format; otherwise a single-criterion verdict dict.
-    """
-    script = tmp_path / "bin" / "gandalf-the-grader-judge"
-    script.parent.mkdir()
-    script.write_text(
-        """\
-#!/usr/bin/env python3
-import argparse, json, sys
+_FAKE_JUDGE_PY = """\
+import argparse, json
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--input", required=True)
@@ -525,10 +523,29 @@ else:
 
 with open(args.output, "w") as f:
     json.dump(result, f)
-""",
-    )
-    script.chmod(0o755)
-    monkeypatch.setenv("PATH", f"{script.parent}:{os.environ.get('PATH', '')}")
+"""
+
+
+@pytest.fixture
+def fake_judge(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> pathlib.Path:
+    """Create a fake ``gandalf-the-grader-judge`` on PATH.
+
+    The script reads --input/--output args and writes a valid verdict to the
+    output file.  When ``--batch`` is passed it writes the dict-with-verdicts
+    format; otherwise a single-criterion verdict dict.
+    """
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    if sys.platform == "win32":
+        impl = bin_dir / "_fake_judge.py"
+        impl.write_text(_FAKE_JUDGE_PY, encoding="utf-8")
+        script = bin_dir / "gandalf-the-grader-judge.cmd"
+        script.write_text(f'@echo off\r\n"{sys.executable}" "{impl}" %*\r\n', encoding="utf-8")
+    else:
+        script = bin_dir / "gandalf-the-grader-judge"
+        script.write_text("#!/usr/bin/env python3\n" + _FAKE_JUDGE_PY, encoding="utf-8")
+        script.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}")
     return script
 
 
@@ -570,6 +587,34 @@ class TestSandboxUserNone:
         assert len(verdicts) == 2
         assert all(v.met is True for v in verdicts)
         assert usage.cost_usd == 0.01
+
+    @patch("gandalf.orchestrator.clone_workspace")
+    @patch("gandalf.orchestrator.subprocess.run")
+    def test_no_sudo_invokes_judge_directly(self, mock_run: Any, mock_clone: Any, tmp_path: pathlib.Path) -> None:
+        """Without sandbox_user, do not shell out to Unix env(1) or sudo."""
+        mock_clone.return_value = str(tmp_path)
+        mock_run.side_effect = make_run_writing(
+            {
+                "verdict": {"met": True, "reasoning": "ok", "evidence": []},
+                "llm_usage": {"cost_usd": 0},
+            }
+        )
+        judge_input = JudgeInput(
+            model="test-model",
+            instructions="test",
+            final_output="done",
+            criterion="check something",
+            workdir=str(tmp_path),
+        )
+        run_judge(judge_input, sandbox_user=None, trace_path=str(tmp_path / "trace.txt"))
+
+        cmd = mock_run.call_args[0][0]
+        assert cmd[0] == "gandalf-the-grader-judge"
+        assert "env" not in cmd
+        assert "sudo" not in cmd
+        env = mock_run.call_args.kwargs["env"]
+        assert env is not None
+        assert env["HOME"] == str(tmp_path)
 
 
 class TestScoring:
@@ -1092,6 +1137,7 @@ class TestCloneWorkspace:
         finally:
             shutil.rmtree(clone_dir, ignore_errors=True)
 
+    @requires_posix_permissions
     def test_unreadable_files_are_skipped_not_fatal(self, tmp_path: pathlib.Path) -> None:
         workspace = tmp_path / "workspace"
         workspace.mkdir()
@@ -1110,6 +1156,7 @@ class TestCloneWorkspace:
             restricted.chmod(0o644)
             shutil.rmtree(clone_dir, ignore_errors=True)
 
+    @requires_posix_permissions
     def test_skipped_files_are_logged(self, tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]) -> None:
         workspace = tmp_path / "workspace"
         workspace.mkdir()
@@ -1126,6 +1173,7 @@ class TestCloneWorkspace:
             restricted.chmod(0o644)
             shutil.rmtree(clone_dir, ignore_errors=True)
 
+    @requires_posix_permissions
     def test_unreadable_directory_is_skipped_not_fatal(self, tmp_path: pathlib.Path) -> None:
         workspace = tmp_path / "workspace"
         workspace.mkdir()
@@ -1147,6 +1195,7 @@ class TestCloneWorkspace:
             restricted_dir.chmod(0o755)
             shutil.rmtree(clone_dir, ignore_errors=True)
 
+    @requires_posix_permissions
     def test_unreadable_directory_is_logged(self, tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]) -> None:
         workspace = tmp_path / "workspace"
         workspace.mkdir()
@@ -1219,6 +1268,7 @@ class TestCloneWorkspace:
         finally:
             shutil.rmtree(clone_dir, ignore_errors=True)
 
+    @requires_posix_permissions
     def test_executable_bits_are_preserved(self, tmp_path: pathlib.Path) -> None:
         """Cloned files must retain execute bits so scripts/binaries remain runnable."""
         workspace = tmp_path / "workspace"
@@ -1245,6 +1295,7 @@ class TestCloneWorkspace:
         finally:
             shutil.rmtree(clone_dir, ignore_errors=True)
 
+    @requires_symlinks
     def test_broken_symlink_is_skipped_not_fatal(self, tmp_path: pathlib.Path) -> None:
         """A broken symlink in the workspace must be skipped, not crash the clone.
 
@@ -1265,6 +1316,7 @@ class TestCloneWorkspace:
         finally:
             shutil.rmtree(clone_dir, ignore_errors=True)
 
+    @requires_symlinks
     def test_symlink_to_directory_is_skipped_not_fatal(self, tmp_path: pathlib.Path) -> None:
         """A symlink-to-directory in filenames must be skipped, not crash the clone.
 
@@ -1288,6 +1340,7 @@ class TestCloneWorkspace:
         finally:
             shutil.rmtree(clone_dir, ignore_errors=True)
 
+    @requires_symlinks
     def test_symlink_loop_is_skipped_not_fatal(self, tmp_path: pathlib.Path) -> None:
         """Circular symlinks in the workspace must be skipped, not crash the clone."""
         workspace = tmp_path / "workspace"

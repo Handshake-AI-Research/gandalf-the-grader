@@ -246,6 +246,22 @@ class TestPydanticModels:
         restored = Verdict.model_validate_json(raw)
         assert restored.met is None
 
+    def test_from_raw_bool_met(self) -> None:
+        assert Verdict.from_raw({"met": True, "reasoning": "ok"}).met is True
+        assert Verdict.from_raw({"met": False, "reasoning": "no"}).met is False
+
+    def test_from_raw_string_false_is_unmet(self) -> None:
+        v = Verdict.from_raw({"met": "false", "reasoning": "missing"})
+        assert v.met is False
+
+    def test_from_raw_string_true_is_met(self) -> None:
+        v = Verdict.from_raw({"met": "True", "reasoning": "present"})
+        assert v.met is True
+
+    def test_from_raw_null_met_stays_none(self) -> None:
+        v = Verdict.from_raw({"met": None, "reasoning": "errored"})
+        assert v.met is None
+
     def test_criterion_result(self) -> None:
         r = CriterionResult(
             criterion="test",

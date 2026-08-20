@@ -291,14 +291,23 @@ def run_judge(
 
     try:
         os.chmod(input_path, 0o644)
-        env_vars = [f"HOME={clone_dir}", *judge_env_vars()]
+        home_and_allowlist = [f"HOME={clone_dir}", *judge_env_vars()]
 
-        cmd = []
+        cmd: list[str] = []
+        run_env: dict[str, str] | None = None
         if sandbox_user is not None:
-            cmd += ["sudo", "-u", sandbox_user]
+            # sudo resets the environment; env(1) re-injects the allowlisted vars.
+            cmd += ["sudo", "-u", sandbox_user, "env", *home_and_allowlist]
+        else:
+            # Overlay HOME + allowlist onto the current environment. Equivalent to
+            # `env KEY=VAL cmd` without `-i`, and does not require Unix env(1)
+            # (which is not on PATH on Windows).
+            run_env = os.environ.copy()
+            for item in home_and_allowlist:
+                key, _, value = item.partition("=")
+                run_env[key] = value
+
         cmd += [
-            "env",
-            *env_vars,
             "gandalf-the-grader-judge",
             "--input",
             input_path,
@@ -308,13 +317,19 @@ def run_judge(
         if batch:
             cmd.append("--batch")
 
-        result = subprocess.run(
+        # CreateProcess on Windows appends .exe and ignores PATHEXT, so a
+        # gandalf-the-grader-judge.cmd stub on PATH is skipped in favor of an
+        # installed .exe. cmd.exe honors PATHEXT, which is what we need here.
+        use_shell = sys.platform == "win32" and sandbox_user is None
+        result = subprocess.run(  # noqa: S602
             cmd,
             check=False,
             capture_output=True,
             text=True,
             timeout=timeout,
             cwd=clone_dir,
+            env=run_env,
+            shell=use_shell,
         )
 
         save_trace(trace_path, result.stdout, result.stderr, result.returncode)
