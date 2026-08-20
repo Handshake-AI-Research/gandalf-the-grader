@@ -258,6 +258,12 @@ class TestReadVerdict:
         result = read_verdict(str(p))
         assert result.met is None
 
+    def test_string_evidence_is_not_split(self, tmp_path: pathlib.Path) -> None:
+        p = tmp_path / "verdict.json"
+        p.write_text(json.dumps({"met": True, "reasoning": "ok", "evidence": "checked foo.txt"}))
+        result = read_verdict(str(p))
+        assert result.evidence == ["checked foo.txt"]
+
     def test_empty_file(self, tmp_path: pathlib.Path) -> None:
         p = tmp_path / "verdict.json"
         p.write_text("")

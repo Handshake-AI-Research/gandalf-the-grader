@@ -176,8 +176,25 @@ class Verdict(BaseModel):
         return cls(
             met=bool(raw_met) if raw_met is not None else None,
             reasoning=str(data.get("reasoning", "No reasoning provided.")),
-            evidence=list(data.get("evidence", [])),
+            evidence=cls._coerce_evidence(data.get("evidence", [])),
         )
+
+    @staticmethod
+    def _coerce_evidence(raw: Any) -> list[str]:
+        """Normalize evidence to a list of strings.
+
+        If the judge writes evidence as a single string instead of a JSON
+        array, ``list(that_string)`` would split it into characters. We keep
+        the string as one evidence item instead.
+        """
+        if raw is None:
+            return []
+        if isinstance(raw, str):
+            text = raw.strip()
+            return [text] if text else []
+        if isinstance(raw, list):
+            return [str(item) for item in raw]
+        return [str(raw)]
 
     @classmethod
     def errors(cls, n: int, reason: str) -> list["Verdict"]:

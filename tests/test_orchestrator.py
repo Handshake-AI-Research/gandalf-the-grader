@@ -336,6 +336,14 @@ class TestCheckTmuxAvailable:
         ):
             check_tmux_available()
 
+    def test_windows_error_mentions_wsl(self) -> None:
+        with (
+            patch("gandalf.orchestrator.sys.platform", "win32"),
+            patch("gandalf.orchestrator.subprocess.run", side_effect=FileNotFoundError),
+            pytest.raises(RuntimeError, match="WSL"),
+        ):
+            check_tmux_available()
+
     def test_raises_on_timeout(self) -> None:
         with (
             patch(
@@ -447,6 +455,24 @@ class TestEvaluateAllCriteria:
         assert len(verdicts) == 2
         assert all(v.met is None for v in verdicts)
         assert "timed out" in verdicts[0].reasoning.lower()
+        assert usage == LLMUsage()
+
+    @patch("gandalf.orchestrator.clone_workspace")
+    @patch("gandalf.orchestrator.subprocess.run")
+    def test_missing_executable_is_not_read_error(self, mock_run: Any, mock_clone: Any, tmp_path: pathlib.Path) -> None:
+        """A missing judge binary must not be reported as a failed output read."""
+        mock_clone.return_value = str(tmp_path)
+        mock_run.side_effect = FileNotFoundError("gandalf-the-grader-judge")
+
+        judge_input = make_batch_input(tmp_path, n=2)
+        trace_path = str(tmp_path / "trace.txt")
+
+        verdicts, usage = run_judge(judge_input, sandbox_user="sandbox", trace_path=trace_path)
+
+        assert len(verdicts) == 2
+        assert all(v.met is None for v in verdicts)
+        assert "executable not found" in verdicts[0].reasoning.lower()
+        assert "read judge output" not in verdicts[0].reasoning.lower()
         assert usage == LLMUsage()
 
     @patch("gandalf.orchestrator.clone_workspace")

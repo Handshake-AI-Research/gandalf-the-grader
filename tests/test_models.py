@@ -246,6 +246,14 @@ class TestPydanticModels:
         restored = Verdict.model_validate_json(raw)
         assert restored.met is None
 
+    def test_from_raw_string_evidence_is_not_split(self) -> None:
+        v = Verdict.from_raw({"met": True, "reasoning": "ok", "evidence": "checked foo.txt"})
+        assert v.evidence == ["checked foo.txt"]
+
+    def test_from_raw_null_evidence_is_empty(self) -> None:
+        v = Verdict.from_raw({"met": True, "reasoning": "ok", "evidence": None})
+        assert v.evidence == []
+
     def test_criterion_result(self) -> None:
         r = CriterionResult(
             criterion="test",

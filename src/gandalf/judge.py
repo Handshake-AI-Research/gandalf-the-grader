@@ -41,7 +41,9 @@ def render_template(
     If *judge_prompt* is provided (a raw Jinja2 template string),
     it is used instead of the built-in template identified by *template_name*.
     """
-    template_str = judge_prompt if judge_prompt is not None else (TEMPLATES_DIR / template_name).read_text()
+    template_str = (
+        judge_prompt if judge_prompt is not None else (TEMPLATES_DIR / template_name).read_text(encoding="utf-8")
+    )
     rendered: str = jinja2.Template(template_str).render(**variables)
     return rendered
 
@@ -93,7 +95,7 @@ def build_batch_judge_prompt(
 def read_verdict(verdict_path: str) -> Verdict:
     """Read and validate the verdict file written by the judge agent."""
     try:
-        with open(verdict_path) as f:
+        with open(verdict_path, encoding="utf-8") as f:
             content = f.read().strip()
         if not content:
             return Verdict(met=None, reasoning="Judge agent wrote an empty verdict file.")
@@ -114,7 +116,7 @@ def read_batch_verdict(verdict_path: str, n_criteria: int) -> list[Verdict]:
     indices get a default fail verdict.
     """
     try:
-        with open(verdict_path) as f:
+        with open(verdict_path, encoding="utf-8") as f:
             content = f.read().strip()
         if not content:
             return Verdict.errors(
@@ -261,7 +263,7 @@ def run_agent_session(
 
 def run_judge(input_path: str, output_path: str) -> None:
     """Run the agent-as-judge for a single rubric criterion."""
-    with open(input_path) as f:
+    with open(input_path, encoding="utf-8") as f:
         judge_input = JudgeInput.model_validate_json(f.read())
 
     verdict_path = make_verdict_path(prefix="verdict_", directory=judge_input.workdir)
@@ -286,7 +288,7 @@ def run_judge(input_path: str, output_path: str) -> None:
             os.unlink(verdict_path)
 
     output = {"verdict": verdict.model_dump(), "llm_usage": llm_usage.model_dump()}
-    with open(output_path, "w") as f:
+    with open(output_path, "w", encoding="utf-8") as f:
         json.dump(output, f)
 
 
@@ -300,7 +302,7 @@ def run_judge_batch(input_path: str, output_path: str) -> None:
     verdict objects, one per criterion index) and ``llm_usage`` (aggregate
     token/cost dict for the session).
     """
-    with open(input_path) as f:
+    with open(input_path, encoding="utf-8") as f:
         judge_input = BatchJudgeInput.model_validate_json(f.read())
 
     n_criteria = len(judge_input.criteria)
@@ -333,7 +335,7 @@ def run_judge_batch(input_path: str, output_path: str) -> None:
         "verdicts": TypeAdapter(list[Verdict]).dump_python(verdicts),
         "llm_usage": llm_usage.model_dump(),
     }
-    with open(output_path, "w") as f:
+    with open(output_path, "w", encoding="utf-8") as f:
         json.dump(output, f, indent=2)
 
 
