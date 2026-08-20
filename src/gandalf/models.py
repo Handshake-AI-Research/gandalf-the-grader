@@ -172,12 +172,32 @@ class Verdict(BaseModel):
     @classmethod
     def from_raw(cls, data: dict[str, Any]) -> "Verdict":
         """Create a Verdict from a raw JSON-parsed dict, normalizing types."""
-        raw_met = data.get("met")
         return cls(
-            met=bool(raw_met) if raw_met is not None else None,
+            met=cls._coerce_met(data.get("met")),
             reasoning=str(data.get("reasoning", "No reasoning provided.")),
             evidence=list(data.get("evidence", [])),
         )
+
+    @staticmethod
+    def _coerce_met(raw_met: Any) -> bool | None:
+        """Normalize a raw ``met`` value.
+
+        LLMs sometimes write JSON booleans as strings. ``bool("false")`` is
+        True, which would flip an unmet criterion to met — so strings are
+        parsed explicitly instead of being truthiness-coerced.
+        """
+        if raw_met is None:
+            return None
+        if isinstance(raw_met, bool):
+            return raw_met
+        if isinstance(raw_met, str):
+            lowered = raw_met.strip().lower()
+            if lowered in {"true", "1", "yes"}:
+                return True
+            if lowered in {"false", "0", "no"}:
+                return False
+            return None
+        return bool(raw_met)
 
     @classmethod
     def errors(cls, n: int, reason: str) -> list["Verdict"]:
