@@ -1,8 +1,8 @@
-# Infinity Grader [![Build Status](https://github.com/Infinity-Megatron/infinity-grader/actions/workflows/ci.yml/badge.svg)](https://github.com/Infinity-Megatron/infinity-grader/actions/workflows/ci.yml) [![Coverage](https://codecov.io/gh/Infinity-Megatron/infinity-grader/branch/main/graph/badge.svg)](https://app.codecov.io/gh/Infinity-Megatron/infinity-grader) [![PyPI](https://img.shields.io/pypi/v/infinity-grader.svg)](https://pypi.org/pypi/infinity-grader/) [![PyPI - Python version](https://img.shields.io/pypi/pyversions/infinity-grader.svg)](https://pypi.org/pypi/infinity-grader/)
+# Infinity Grader [![Build Status](https://github.com/Numan5837/infinity-grader/actions/workflows/ci.yml/badge.svg)](https://github.com/Numan5837/infinity-grader/actions/workflows/ci.yml) [![Coverage](https://codecov.io/gh/Numan5837/infinity-grader/branch/main/graph/badge.svg)](https://app.codecov.io/gh/Numan5837/infinity-grader) [![PyPI](https://img.shields.io/pypi/v/infinity-grader.svg)](https://pypi.org/pypi/infinity-grader/) [![PyPI - Python version](https://img.shields.io/pypi/pyversions/infinity-grader.svg)](https://pypi.org/pypi/infinity-grader/)
 
 ### Your verifier is probably the bottleneck. We built one that isn't.
 
-![Infinity Grader vs. baseline verifiers on BankerVerifierBench (cost vs. F1)](https://raw.githubusercontent.com/Infinity-Megatron/assets/main/infinity-grader/pareto_frontier.png)
+![Infinity Grader vs. baseline verifiers on BankerVerifierBench (cost vs. F1)](https://raw.githubusercontent.com/Numan5837/assets/main/infinity-grader/pareto_frontier.png)
 
 Read the [launch blog post](https://infinitymegatron.com/research/ai/infinity-grader/) for the motivation, benchmark results, and design rationale behind Infinity Grader.
 
@@ -20,7 +20,7 @@ Infinity Grader is built around three design choices:
 
 In our evaluation, this design beat text-only, snapshot-based, and workflow-based agentic verifiers at a fraction of the cost — see the [blog post](https://infinitymegatron.com/research/ai/infinity-grader/) for the full meta-eval.
 
-**Examples and integrations:** [BankerToolBench](https://github.com/Infinity-Megatron/bankertoolbench) is a public agentic RL benchmark environment that uses Infinity Grader as the verifier. [rle-pkg](https://github.com/Infinity-Megatron/rle-pkg) is a reference runtime that integrates Infinity Grader. Both run under the [Harbor](https://github.com/harbor-framework/harbor) framework, but Infinity Grader's design and implementation are framework-agnostic.
+**Examples and integrations:** [BankerToolBench](https://github.com/Numan5837/bankertoolbench) is a public agentic RL benchmark environment that uses Infinity Grader as the verifier. [rle-pkg](https://github.com/Numan5837/rle-pkg) is a reference runtime that integrates Infinity Grader. Both run under the [Harbor](https://github.com/harbor-framework/harbor) framework, but Infinity Grader's design and implementation are framework-agnostic.
 
 ## Installation
 
