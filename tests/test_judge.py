@@ -215,8 +215,8 @@ class TestMakeVerdictPath:
             return p
 
         with (
-            patch("gandalf.judge.make_verdict_path", side_effect=fake_make_verdict_path),
-            patch("gandalf.judge.run_agent_session", return_value=LLMUsage()),
+            patch("infinity_grader.judge.make_verdict_path", side_effect=fake_make_verdict_path),
+            patch("infinity_grader.judge.run_agent_session", return_value=LLMUsage()),
         ):
             run_judge(input_path, output_path)
 
@@ -407,7 +407,7 @@ def make_batch_judge_input_json(tmp_path: pathlib.Path, n: int = 2) -> str:
 class TestRunJudge:
     """Tests for run_judge — mocks run_agent_session to avoid OpenHands."""
 
-    @patch("gandalf.judge.run_agent_session", return_value=MOCK_USAGE)
+    @patch("infinity_grader.judge.run_agent_session", return_value=MOCK_USAGE)
     def test_success_includes_usage(self, mock_session: Any, tmp_path: pathlib.Path) -> None:  # noqa: ARG002
         input_path = make_judge_input_json(tmp_path)
         output_path = str(tmp_path / "output.json")
@@ -416,7 +416,7 @@ class TestRunJudge:
         # make_verdict_path uses tempfile.gettempdir(), so we patch it.
         verdict_data = {"met": True, "reasoning": "ok", "evidence": ["e1"]}
         with patch(
-            "gandalf.judge.make_verdict_path",
+            "infinity_grader.judge.make_verdict_path",
             return_value=str(tmp_path / "verdict.json"),
         ):
             (tmp_path / "verdict.json").write_text(json.dumps(verdict_data))
@@ -426,14 +426,14 @@ class TestRunJudge:
         assert result["verdict"]["met"] is True
         assert result["llm_usage"]["cost_usd"] == 0.05
 
-    @patch("gandalf.judge.run_agent_session", return_value=MOCK_USAGE)
+    @patch("infinity_grader.judge.run_agent_session", return_value=MOCK_USAGE)
     def test_preserves_usage_when_verdict_missing(self, mock_session: Any, tmp_path: pathlib.Path) -> None:  # noqa: ARG002
         """If run_agent_session succeeds but verdict file is missing, cost is kept."""
         input_path = make_judge_input_json(tmp_path)
         output_path = str(tmp_path / "output.json")
 
         with patch(
-            "gandalf.judge.make_verdict_path",
+            "infinity_grader.judge.make_verdict_path",
             return_value=str(tmp_path / "no_such_verdict.json"),
         ):
             run_judge(input_path, output_path)
@@ -444,7 +444,7 @@ class TestRunJudge:
         assert result["llm_usage"]["prompt_tokens"] == 1000
 
     @patch(
-        "gandalf.judge.run_agent_session",
+        "infinity_grader.judge.run_agent_session",
         side_effect=RuntimeError("LLM exploded"),
     )
     def test_session_failure_has_empty_usage(self, mock_session: Any, tmp_path: pathlib.Path) -> None:  # noqa: ARG002
@@ -453,7 +453,7 @@ class TestRunJudge:
         output_path = str(tmp_path / "output.json")
 
         with patch(
-            "gandalf.judge.make_verdict_path",
+            "infinity_grader.judge.make_verdict_path",
             return_value=str(tmp_path / "verdict.json"),
         ):
             run_judge(input_path, output_path)
@@ -464,9 +464,9 @@ class TestRunJudge:
         assert result["llm_usage"] == LLMUsage().model_dump()
         assert "LLM exploded" in verdict["reasoning"]
 
-    @patch("gandalf.judge.run_agent_session", return_value=MOCK_USAGE)
+    @patch("infinity_grader.judge.run_agent_session", return_value=MOCK_USAGE)
     @patch(
-        "gandalf.judge.read_verdict",
+        "infinity_grader.judge.read_verdict",
         side_effect=RuntimeError("Unexpected parsing error"),
     )
     def test_preserves_usage_when_read_verdict_raises(
@@ -480,7 +480,7 @@ class TestRunJudge:
         output_path = str(tmp_path / "output.json")
 
         with patch(
-            "gandalf.judge.make_verdict_path",
+            "infinity_grader.judge.make_verdict_path",
             return_value=str(tmp_path / "verdict.json"),
         ):
             run_judge(input_path, output_path)
@@ -496,7 +496,7 @@ class TestRunJudge:
 class TestRunJudgeBatch:
     """Tests for run_judge_batch — mocks run_agent_session to avoid OpenHands."""
 
-    @patch("gandalf.judge.run_agent_session", return_value=MOCK_USAGE)
+    @patch("infinity_grader.judge.run_agent_session", return_value=MOCK_USAGE)
     def test_output_wraps_verdicts_and_usage(self, mock_session: Any, tmp_path: pathlib.Path) -> None:  # noqa: ARG002
         input_path = make_batch_judge_input_json(tmp_path, n=2)
         output_path = str(tmp_path / "output.json")
@@ -506,7 +506,7 @@ class TestRunJudgeBatch:
             {"index": 1, "met": False, "reasoning": "bad", "evidence": []},
         ]
         with patch(
-            "gandalf.judge.make_verdict_path",
+            "infinity_grader.judge.make_verdict_path",
             return_value=str(tmp_path / "verdict.json"),
         ):
             (tmp_path / "verdict.json").write_text(json.dumps(verdict_data))
@@ -519,7 +519,7 @@ class TestRunJudgeBatch:
         assert data["verdicts"][0]["met"] is True
         assert data["llm_usage"]["cost_usd"] == 0.05
 
-    @patch("gandalf.judge.run_agent_session", return_value=MOCK_USAGE)
+    @patch("infinity_grader.judge.run_agent_session", return_value=MOCK_USAGE)
     def test_session_usage_is_top_level(self, mock_session: Any, tmp_path: pathlib.Path) -> None:  # noqa: ARG002
         """Session-level llm_usage should be a sibling of verdicts, not duplicated per-verdict."""
         input_path = make_batch_judge_input_json(tmp_path, n=1)
@@ -527,7 +527,7 @@ class TestRunJudgeBatch:
 
         verdict_data = [{"index": 0, "met": True, "reasoning": "ok"}]
         with patch(
-            "gandalf.judge.make_verdict_path",
+            "infinity_grader.judge.make_verdict_path",
             return_value=str(tmp_path / "verdict.json"),
         ):
             (tmp_path / "verdict.json").write_text(json.dumps(verdict_data))
@@ -537,13 +537,13 @@ class TestRunJudgeBatch:
         assert data["llm_usage"]["cost_usd"] == 0.05
         assert data["verdicts"][0]["met"] is True
 
-    @patch("gandalf.judge.run_agent_session", return_value=MOCK_USAGE)
+    @patch("infinity_grader.judge.run_agent_session", return_value=MOCK_USAGE)
     def test_preserves_usage_when_verdict_missing(self, mock_session: Any, tmp_path: pathlib.Path) -> None:  # noqa: ARG002
         input_path = make_batch_judge_input_json(tmp_path, n=2)
         output_path = str(tmp_path / "output.json")
 
         with patch(
-            "gandalf.judge.make_verdict_path",
+            "infinity_grader.judge.make_verdict_path",
             return_value=str(tmp_path / "no_such_verdict.json"),
         ):
             run_judge_batch(input_path, output_path)
@@ -553,7 +553,7 @@ class TestRunJudgeBatch:
         assert all(v["met"] is None for v in data["verdicts"])
 
     @patch(
-        "gandalf.judge.run_agent_session",
+        "infinity_grader.judge.run_agent_session",
         side_effect=RuntimeError("LLM exploded"),
     )
     def test_session_failure_has_empty_usage(self, mock_session: Any, tmp_path: pathlib.Path) -> None:  # noqa: ARG002
@@ -561,7 +561,7 @@ class TestRunJudgeBatch:
         output_path = str(tmp_path / "output.json")
 
         with patch(
-            "gandalf.judge.make_verdict_path",
+            "infinity_grader.judge.make_verdict_path",
             return_value=str(tmp_path / "verdict.json"),
         ):
             run_judge_batch(input_path, output_path)
@@ -570,9 +570,9 @@ class TestRunJudgeBatch:
         assert data["llm_usage"] == LLMUsage().model_dump()
         assert all(v["met"] is None for v in data["verdicts"])
 
-    @patch("gandalf.judge.run_agent_session", return_value=MOCK_USAGE)
+    @patch("infinity_grader.judge.run_agent_session", return_value=MOCK_USAGE)
     @patch(
-        "gandalf.judge.read_batch_verdict",
+        "infinity_grader.judge.read_batch_verdict",
         side_effect=RuntimeError("Batch parsing blew up"),
     )
     def test_preserves_usage_when_read_batch_verdict_raises(
@@ -586,7 +586,7 @@ class TestRunJudgeBatch:
         output_path = str(tmp_path / "output.json")
 
         with patch(
-            "gandalf.judge.make_verdict_path",
+            "infinity_grader.judge.make_verdict_path",
             return_value=str(tmp_path / "verdict.json"),
         ):
             run_judge_batch(input_path, output_path)
