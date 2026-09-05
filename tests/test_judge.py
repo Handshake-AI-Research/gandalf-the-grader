@@ -1,4 +1,4 @@
-"""Tests for gandalf.judge."""
+"""Tests for infinity_grader.judge."""
 
 import json
 import os
@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 import pytest
 
-from gandalf.judge import (
+from infinity_grader.judge import (
     build_batch_judge_prompt,
     build_judge_prompt,
     make_verdict_path,
@@ -19,7 +19,7 @@ from gandalf.judge import (
     run_judge,
     run_judge_batch,
 )
-from gandalf.models import LLMUsage, MCPServer
+from infinity_grader.models import LLMUsage, MCPServer
 from tests.conftest import MOCK_USAGE
 
 

@@ -1,65 +1,65 @@
-# Gandalf the Grader [![Build Status](https://github.com/Handshake-AI-Research/gandalf-the-grader/actions/workflows/ci.yml/badge.svg)](https://github.com/Handshake-AI-Research/gandalf-the-grader/actions/workflows/ci.yml) [![Coverage](https://codecov.io/gh/Handshake-AI-Research/gandalf-the-grader/branch/main/graph/badge.svg)](https://app.codecov.io/gh/Handshake-AI-Research/gandalf-the-grader) [![PyPI](https://img.shields.io/pypi/v/gandalf-the-grader.svg)](https://pypi.org/pypi/gandalf-the-grader/) [![PyPI - Python version](https://img.shields.io/pypi/pyversions/gandalf-the-grader.svg)](https://pypi.org/pypi/gandalf-the-grader/)
+# Infinity Grader [![Build Status](https://github.com/Infinity-Megatron/infinity-grader/actions/workflows/ci.yml/badge.svg)](https://github.com/Infinity-Megatron/infinity-grader/actions/workflows/ci.yml) [![Coverage](https://codecov.io/gh/Infinity-Megatron/infinity-grader/branch/main/graph/badge.svg)](https://app.codecov.io/gh/Infinity-Megatron/infinity-grader) [![PyPI](https://img.shields.io/pypi/v/infinity-grader.svg)](https://pypi.org/pypi/infinity-grader/) [![PyPI - Python version](https://img.shields.io/pypi/pyversions/infinity-grader.svg)](https://pypi.org/pypi/infinity-grader/)
 
 ### Your verifier is probably the bottleneck. We built one that isn't.
 
-![Gandalf vs. baseline verifiers on BankerVerifierBench (cost vs. F1)](https://raw.githubusercontent.com/Handshake-AI-Research/assets/main/gandalf-the-grader/pareto_frontier.png)
+![Infinity Grader vs. baseline verifiers on BankerVerifierBench (cost vs. F1)](https://raw.githubusercontent.com/Infinity-Megatron/assets/main/infinity-grader/pareto_frontier.png)
 
-Read the [launch blog post](https://joinhandshake.com/research/ai/gandalf-the-grader/) for the motivation, benchmark results, and design rationale behind Gandalf.
+Read the [launch blog post](https://infinitymegatron.com/research/ai/infinity-grader/) for the motivation, benchmark results, and design rationale behind Infinity Grader.
 
-Gandalf is a reactive agent-as-judge for rubric-graded agent environments. Given a rubric of binary criteria, it runs inside the rollout environment, uses the same tools as the rollout agent, and decides at inference time which files to open and which tool state to query.
+Infinity Grader is a reactive agent-as-judge for rubric-graded agent environments. Given a rubric of binary criteria, it runs inside the rollout environment, uses the same tools as the rollout agent, and decides at inference time which files to open and which tool state to query.
 
-That lets Gandalf grade criteria that depend on artifacts or state — formulas in a workbook, charts in a deck, files on disk, MCP tool state, or whether an email was actually sent — rather than just the final text response.
+That lets Infinity Grader grade criteria that depend on artifacts or state — formulas in a workbook, charts in a deck, files on disk, MCP tool state, or whether an email was actually sent — rather than just the final text response.
 
-Gandalf is built around three design choices:
+Infinity Grader is built around three design choices:
 
-- **Environment alignment:** Gandalf runs in the same filesystem, Python interpreter, installed packages, and tool environment as the rollout agent, using the [OpenHands](https://github.com/All-Hands-AI/OpenHands) SDK as the agent harness.
+- **Environment alignment:** Infinity Grader runs in the same filesystem, Python interpreter, installed packages, and tool environment as the rollout agent, using the [OpenHands](https://github.com/All-Hands-AI/OpenHands) SDK as the agent harness.
 
-- **Reactive verification:** Gandalf chooses what evidence to inspect while grading, instead of relying on a precomputed transcript or serialized snapshot.
+- **Reactive verification:** Infinity Grader chooses what evidence to inspect while grading, instead of relying on a precomputed transcript or serialized snapshot.
 
 - **Swappable domain guidance:** Domain knowledge enters as natural-language guidance at runtime, making the same verifier portable across domains.
 
-In our evaluation, this design beat text-only, snapshot-based, and workflow-based agentic verifiers at a fraction of the cost — see the [blog post](https://joinhandshake.com/research/ai/gandalf-the-grader/) for the full meta-eval.
+In our evaluation, this design beat text-only, snapshot-based, and workflow-based agentic verifiers at a fraction of the cost — see the [blog post](https://infinitymegatron.com/research/ai/infinity-grader/) for the full meta-eval.
 
-**Examples and integrations:** [BankerToolBench](https://github.com/Handshake-AI-Research/bankertoolbench) is a public agentic RL benchmark environment that uses Gandalf as the verifier. [rle-pkg](https://github.com/Handshake-AI-Research/rle-pkg) is a reference runtime that integrates Gandalf. Both run under the [Harbor](https://github.com/harbor-framework/harbor) framework, but Gandalf's design and implementation are framework-agnostic.
+**Examples and integrations:** [BankerToolBench](https://github.com/Infinity-Megatron/bankertoolbench) is a public agentic RL benchmark environment that uses Infinity Grader as the verifier. [rle-pkg](https://github.com/Infinity-Megatron/rle-pkg) is a reference runtime that integrates Infinity Grader. Both run under the [Harbor](https://github.com/harbor-framework/harbor) framework, but Infinity Grader's design and implementation are framework-agnostic.
 
 ## Installation
 
-Gandalf is published [on PyPI](https://pypi.org/project/gandalf-the-grader/).
+Infinity Grader is published [on PyPI](https://pypi.org/project/infinity-grader/).
 
 ```bash
-uv tool install gandalf-the-grader
+uv tool install infinity-grader
 ```
 
-For production use, we recommend that you pin a specific version of Gandalf, and furthermore use the `[pinned]` version to [pin all transitive dependencies](https://github.com/edgarrmondragon/hatch-pinned-extra).
+For production use, we recommend that you pin a specific version of Infinity Grader, and furthermore use the `[pinned]` version to [pin all transitive dependencies](https://github.com/edgarrmondragon/hatch-pinned-extra).
 
 ```bash
-uv tool install 'gandalf-the-grader[pinned]==1.0.0'
+uv tool install 'infinity-grader[pinned]==1.0.0'
 ```
 
 ## Runtime dependencies
 
-**Important**: Gandalf is built on top of OpenHands, which [works best](https://github.com/OpenHands/software-agent-sdk/pull/120) when `tmux` is installed. The judge refuses to run when `tmux` is not on `PATH` rather than silently falling back to a less stable subprocess-based terminal.
+**Important**: Infinity Grader is built on top of OpenHands, which [works best](https://github.com/OpenHands/software-agent-sdk/pull/120) when `tmux` is installed. The judge refuses to run when `tmux` is not on `PATH` rather than silently falling back to a less stable subprocess-based terminal.
 
 ## Quick start
 
-The repo ships a runnable example under [`examples/quickstart/`](examples/quickstart) that grades a pre-staged workspace + ATIF trajectory against a 3-criterion rubric. Two criteria are designed to be met and one is designed to fail, so you can see Gandalf's partial-credit grading and per-criterion reasoning in one run. From a fresh clone:
+The repo ships a runnable example under [`examples/quickstart/`](examples/quickstart) that grades a pre-staged workspace + ATIF trajectory against a 3-criterion rubric. Two criteria are designed to be met and one is designed to fail, so you can see Infinity Grader's partial-credit grading and per-criterion reasoning in one run. From a fresh clone:
 
 ```bash
 # 1. Install
-uv tool install gandalf-the-grader
+uv tool install infinity-grader
 
 # 2. Provide a Gemini API key (any litellm-compatible model works; see Configuration)
 export LLM_API_KEY="<your-gemini-api-key>"
 
 # 3. Run from the repo root
-gandalf-the-grader --config examples/quickstart/grader.toml
+infinity-grader --config examples/quickstart/grader.toml
 
 # 4. Inspect the result
 cat examples/quickstart/output/reward.json   # -> {"reward": 0.75}
 cat examples/quickstart/output/info.json     # per-criterion verdicts + reasoning
 ```
 
-Expected verdicts: the `welcome.txt` file exists (met), the message mentions Gandalf (met), and the message is *not* longer than 50 words (unmet, by design). Raw score 3.0 of a possible 4.0, for a reward of 0.75.
+Expected verdicts: the `welcome.txt` file exists (met), the message mentions Infinity Grader (met), and the message is *not* longer than 50 words (unmet, by design). Raw score 3.0 of a possible 4.0, for a reward of 0.75.
 
 The example uses [`gemini/gemini-2.5-flash`](examples/quickstart/grader.toml) and runs the inner judge as the current user (no `sandbox_user`, no sudo). To adapt it to your own setup, edit [`examples/quickstart/grader.toml`](examples/quickstart/grader.toml). See the [Configuration](#configuration) section below for the full field reference.
 
@@ -167,7 +167,7 @@ The grader extracts the final agent message (last `"source": "agent"` step with 
 
 ### Tracing / Observability
 
-Gandalf builds on top of OpenHands, which has built-in OpenTelemetry tracing that automatically instruments LLM calls, tool executions, and agent steps. Set the `OTEL_EXPORTER_OTLP_*` variables above to export traces to any OTEL-compatible backend with no code changes required.
+Infinity Grader builds on top of OpenHands, which has built-in OpenTelemetry tracing that automatically instruments LLM calls, tool executions, and agent steps. Set the `OTEL_EXPORTER_OTLP_*` variables above to export traces to any OTEL-compatible backend with no code changes required.
 
 **Example: Langfuse**
 
@@ -193,9 +193,9 @@ The `reward` in `reward.json` is `clip(0, 1, raw_score / sum_of_positive_weights
 
 ## Next steps
 
-- **Try the benchmark environment.** [BankerToolBench on Hugging Face](https://huggingface.co/datasets/handshake-ai-research/bankertoolbench) is the public RL environment that Gandalf was originally evaluated against. Clone it, run rollouts, and grade them with Gandalf.
-- **Adapt Gandalf to a new rollout environment.** Edit [`examples/quickstart/grader.toml`](examples/quickstart/grader.toml) to point at your workspace, trajectory, and rubric. See the [Configuration](#configuration) and [Custom Judge Prompt](#custom-judge-prompt) sections for the full reference, including domain-specific judge guidance.
+- **Try the benchmark environment.** [BankerToolBench on Hugging Face](https://huggingface.co/datasets/infinity-megatron/bankertoolbench) is the public RL environment that Infinity Grader was originally evaluated against. Clone it, run rollouts, and grade them with Infinity Grader.
+- **Adapt Infinity Grader to a new rollout environment.** Edit [`examples/quickstart/grader.toml`](examples/quickstart/grader.toml) to point at your workspace, trajectory, and rubric. See the [Configuration](#configuration) and [Custom Judge Prompt](#custom-judge-prompt) sections for the full reference, including domain-specific judge guidance.
 
 ## License
 
-Copyright (c) Handshake. Released under the Apache-2.0 license. See [LICENSE.txt](LICENSE.txt) for details.
+Copyright (c) Infinity Megatron. Released under the Apache-2.0 license. See [LICENSE.txt](LICENSE.txt) for details.

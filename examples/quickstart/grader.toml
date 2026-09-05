@@ -1,8 +1,8 @@
 # Quick-start grader config.
 #
 # Runs from the repo root: paths are relative to the working directory of the
-# `gandalf-the-grader` invocation, so all of these resolve correctly when you
-# run `gandalf-the-grader --config examples/quickstart/grader.toml`
+# `infinity-grader` invocation, so all of these resolve correctly when you
+# run `infinity-grader --config examples/quickstart/grader.toml`
 # from the repository root.
 #
 # Notes:

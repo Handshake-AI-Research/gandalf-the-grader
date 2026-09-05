@@ -25,7 +25,7 @@ from openhands.tools.file_editor import FileEditorTool
 from openhands.tools.terminal import TerminalTool
 from pydantic import TypeAdapter
 
-from gandalf.models import BatchJudgeInput, JudgeInput, LLMUsage, MCPServer, Verdict
+from infinity_grader.models import BatchJudgeInput, JudgeInput, LLMUsage, MCPServer, Verdict
 
 TEMPLATES_DIR = Path(__file__).parent / "templates"
 
