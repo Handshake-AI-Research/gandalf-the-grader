@@ -193,7 +193,7 @@ The `reward` in `reward.json` is `clip(0, 1, raw_score / sum_of_positive_weights
 
 ## Next steps
 
-- **Try the benchmark environment.** [BankerToolBench on Hugging Face](https://huggingface.co/datasets/infinity-megatron/bankertoolbench) is the public RL environment that Infinity Grader was originally evaluated against. Clone it, run rollouts, and grade them with Infinity Grader.
+- **Try the benchmark environment.** [BankerToolBench on Hugging Face](https://huggingface.co/datasets/numan5837/bankertoolbench) is the public RL environment that Infinity Grader was originally evaluated against. Clone it, run rollouts, and grade them with Infinity Grader.
 - **Adapt Infinity Grader to a new rollout environment.** Edit [`examples/quickstart/grader.toml`](examples/quickstart/grader.toml) to point at your workspace, trajectory, and rubric. See the [Configuration](#configuration) and [Custom Judge Prompt](#custom-judge-prompt) sections for the full reference, including domain-specific judge guidance.
 
 ## License
