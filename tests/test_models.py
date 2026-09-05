@@ -7,7 +7,7 @@ from typing import Any, ClassVar
 import pytest
 from pydantic import ValidationError
 
-from gandalf.models import (
+from infinity_grader.models import (
     BatchJudgeInput,
     CriterionResult,
     EvaluationInfo,

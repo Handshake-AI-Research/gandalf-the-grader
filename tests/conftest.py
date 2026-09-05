@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 import pytest
 
-from gandalf.models import (
+from infinity_grader.models import (
     BatchJudgeInput,
     CriterionResult,
     GraderConfig,
@@ -22,7 +22,7 @@ def _stub_preflight() -> Iterator[None]:
     Tests that exercise the preflight or the underlying probes import them by
     name and therefore bypass this patch of the orchestrator attribute.
     """
-    with patch("gandalf.orchestrator.preflight_check"):
+    with patch("infinity_grader.orchestrator.preflight_check"):
         yield
 
 

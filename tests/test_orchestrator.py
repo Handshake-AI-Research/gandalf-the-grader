@@ -13,7 +13,7 @@ from unittest.mock import patch
 
 import pytest
 
-from gandalf.models import (
+from infinity_grader.models import (
     BatchJudgeInput,
     CriterionResult,
     GraderConfig,
@@ -22,7 +22,7 @@ from gandalf.models import (
     RubricItem,
     Verdict,
 )
-from gandalf.orchestrator import (
+from infinity_grader.orchestrator import (
     JUDGE_ENV_ALLOWLIST,
     check_tmux_available,
     clone_workspace,
@@ -318,20 +318,20 @@ class TestCheckTmuxAvailable:
 
     def test_passes_when_tmux_runs_successfully(self) -> None:
         ok = subprocess.CompletedProcess(args=["tmux", "-V"], returncode=0, stdout="tmux 3.3a\n", stderr="")
-        with patch("gandalf.orchestrator.subprocess.run", return_value=ok):
+        with patch("infinity_grader.orchestrator.subprocess.run", return_value=ok):
             check_tmux_available()  # does not raise
 
     def test_raises_on_nonzero_returncode(self) -> None:
         bad = subprocess.CompletedProcess(args=["tmux", "-V"], returncode=1, stdout="", stderr="broken")
         with (
-            patch("gandalf.orchestrator.subprocess.run", return_value=bad),
+            patch("infinity_grader.orchestrator.subprocess.run", return_value=bad),
             pytest.raises(RuntimeError, match="tmux"),
         ):
             check_tmux_available()
 
     def test_raises_when_tmux_not_found(self) -> None:
         with (
-            patch("gandalf.orchestrator.subprocess.run", side_effect=FileNotFoundError),
+            patch("infinity_grader.orchestrator.subprocess.run", side_effect=FileNotFoundError),
             pytest.raises(RuntimeError, match="tmux"),
         ):
             check_tmux_available()
@@ -339,7 +339,7 @@ class TestCheckTmuxAvailable:
     def test_raises_on_timeout(self) -> None:
         with (
             patch(
-                "gandalf.orchestrator.subprocess.run",
+                "infinity_grader.orchestrator.subprocess.run",
                 side_effect=subprocess.TimeoutExpired(cmd="tmux", timeout=5.0),
             ),
             pytest.raises(RuntimeError, match="tmux"),
@@ -348,7 +348,7 @@ class TestCheckTmuxAvailable:
 
     def test_invokes_tmux_dash_v(self) -> None:
         ok = subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
-        with patch("gandalf.orchestrator.subprocess.run", return_value=ok) as mock_run:
+        with patch("infinity_grader.orchestrator.subprocess.run", return_value=ok) as mock_run:
             check_tmux_available()
         assert mock_run.call_args[0][0] == ["tmux", "-V"]
 
@@ -357,13 +357,13 @@ class TestPreflightCheck:
     """preflight_check is the single entry point for runtime prerequisites."""
 
     def test_calls_check_tmux_available(self) -> None:
-        with patch("gandalf.orchestrator.check_tmux_available") as mock_check:
+        with patch("infinity_grader.orchestrator.check_tmux_available") as mock_check:
             preflight_check()
         mock_check.assert_called_once_with()
 
     def test_propagates_check_failure(self) -> None:
         with (
-            patch("gandalf.orchestrator.check_tmux_available", side_effect=RuntimeError("nope")),
+            patch("infinity_grader.orchestrator.check_tmux_available", side_effect=RuntimeError("nope")),
             pytest.raises(RuntimeError, match="nope"),
         ):
             preflight_check()
@@ -391,8 +391,8 @@ def make_run_writing(content: Any) -> Callable[..., subprocess.CompletedProcess[
 class TestEvaluateAllCriteria:
     """Tests for evaluate_all_criteria IPC contract: dict, list, invalid shapes, failures."""
 
-    @patch("gandalf.orchestrator.clone_workspace")
-    @patch("gandalf.orchestrator.subprocess.run")
+    @patch("infinity_grader.orchestrator.clone_workspace")
+    @patch("infinity_grader.orchestrator.subprocess.run")
     def test_new_dict_shape(self, mock_run: Any, mock_clone: Any, tmp_path: pathlib.Path) -> None:
         """New object format: {verdicts: [...], llm_usage: {...}}."""
         mock_clone.return_value = str(tmp_path)
@@ -415,8 +415,8 @@ class TestEvaluateAllCriteria:
         assert verdicts[1].met is False
         assert usage.cost_usd == 0.1
 
-    @patch("gandalf.orchestrator.clone_workspace")
-    @patch("gandalf.orchestrator.subprocess.run")
+    @patch("infinity_grader.orchestrator.clone_workspace")
+    @patch("infinity_grader.orchestrator.subprocess.run")
     def test_nonzero_exit_returns_fail_all(self, mock_run: Any, mock_clone: Any, tmp_path: pathlib.Path) -> None:
         """Non-zero exit code from subprocess returns fail-all with empty usage."""
         mock_clone.return_value = str(tmp_path)
@@ -432,8 +432,8 @@ class TestEvaluateAllCriteria:
         assert "exit 1" in verdicts[0].reasoning
         assert usage == LLMUsage()
 
-    @patch("gandalf.orchestrator.clone_workspace")
-    @patch("gandalf.orchestrator.subprocess.run")
+    @patch("infinity_grader.orchestrator.clone_workspace")
+    @patch("infinity_grader.orchestrator.subprocess.run")
     def test_timeout_returns_fail_all(self, mock_run: Any, mock_clone: Any, tmp_path: pathlib.Path) -> None:
         """Subprocess timeout returns fail-all with empty usage."""
         mock_clone.return_value = str(tmp_path)
@@ -449,8 +449,8 @@ class TestEvaluateAllCriteria:
         assert "timed out" in verdicts[0].reasoning.lower()
         assert usage == LLMUsage()
 
-    @patch("gandalf.orchestrator.clone_workspace")
-    @patch("gandalf.orchestrator.subprocess.run")
+    @patch("infinity_grader.orchestrator.clone_workspace")
+    @patch("infinity_grader.orchestrator.subprocess.run")
     def test_invalid_json_in_output_file(self, mock_run: Any, mock_clone: Any, tmp_path: pathlib.Path) -> None:
         """Non-JSON content in output file returns fail-all."""
         mock_clone.return_value = str(tmp_path)
@@ -473,8 +473,8 @@ class TestEvaluateAllCriteria:
         assert verdicts[0].met is None
         assert usage == LLMUsage()
 
-    @patch("gandalf.orchestrator.clone_workspace")
-    @patch("gandalf.orchestrator.subprocess.run")
+    @patch("infinity_grader.orchestrator.clone_workspace")
+    @patch("infinity_grader.orchestrator.subprocess.run")
     def test_empty_output_file(self, mock_run: Any, mock_clone: Any, tmp_path: pathlib.Path) -> None:
         """If the judge wrote nothing to the output file, return fail-all."""
         mock_clone.return_value = str(tmp_path)
@@ -678,8 +678,8 @@ class TestOutputFilePermissions:
     existing file, not *create* one in a restricted directory.
     """
 
-    @patch("gandalf.orchestrator.clone_workspace")
-    @patch("gandalf.orchestrator.subprocess.run")
+    @patch("infinity_grader.orchestrator.clone_workspace")
+    @patch("infinity_grader.orchestrator.subprocess.run")
     def test_output_file_exists_before_subprocess(self, mock_run: Any, mock_clone: Any, tmp_path: pathlib.Path) -> None:
         """Output file must be pre-created so sandbox_user can write it without /tmp access."""
         mock_clone.return_value = str(tmp_path)
@@ -716,8 +716,8 @@ class TestOutputFilePermissions:
             "sandbox_user would need to create it in /tmp (may not be world-writable)"
         )
 
-    @patch("gandalf.orchestrator.clone_workspace")
-    @patch("gandalf.orchestrator.subprocess.run")
+    @patch("infinity_grader.orchestrator.clone_workspace")
+    @patch("infinity_grader.orchestrator.subprocess.run")
     def test_output_file_is_world_writable(self, mock_run: Any, mock_clone: Any, tmp_path: pathlib.Path) -> None:
         """Pre-created output file must have world-write so sandbox_user can overwrite it.
 
@@ -766,12 +766,12 @@ class TestOutputFilePermissions:
 class TestRetryLogic:
     """Tests for retry and hard-fail logic in main()."""
 
-    @patch("gandalf.orchestrator.resolve_instructions", return_value="test")
-    @patch("gandalf.orchestrator.resolve_judge_guidance", return_value="")
-    @patch("gandalf.orchestrator.load_trajectory_final_output", return_value="done")
-    @patch("gandalf.orchestrator.load_rubric")
-    @patch("gandalf.orchestrator.load_config")
-    @patch("gandalf.orchestrator.run_judge")
+    @patch("infinity_grader.orchestrator.resolve_instructions", return_value="test")
+    @patch("infinity_grader.orchestrator.resolve_judge_guidance", return_value="")
+    @patch("infinity_grader.orchestrator.load_trajectory_final_output", return_value="done")
+    @patch("infinity_grader.orchestrator.load_rubric")
+    @patch("infinity_grader.orchestrator.load_config")
+    @patch("infinity_grader.orchestrator.run_judge")
     def test_sequential_retry_resolves_errored_criterion(
         self,
         mock_eval: Any,
@@ -821,12 +821,12 @@ class TestRetryLogic:
         reward = json.loads((tmp_path / "output" / "reward.json").read_text())
         assert reward["reward"] == 1.0  # all met: 2.0 / 2.0 = 1.0
 
-    @patch("gandalf.orchestrator.resolve_instructions", return_value="test")
-    @patch("gandalf.orchestrator.resolve_judge_guidance", return_value="")
-    @patch("gandalf.orchestrator.load_trajectory_final_output", return_value="done")
-    @patch("gandalf.orchestrator.load_rubric")
-    @patch("gandalf.orchestrator.load_config")
-    @patch("gandalf.orchestrator.run_judge")
+    @patch("infinity_grader.orchestrator.resolve_instructions", return_value="test")
+    @patch("infinity_grader.orchestrator.resolve_judge_guidance", return_value="")
+    @patch("infinity_grader.orchestrator.load_trajectory_final_output", return_value="done")
+    @patch("infinity_grader.orchestrator.load_rubric")
+    @patch("infinity_grader.orchestrator.load_config")
+    @patch("infinity_grader.orchestrator.run_judge")
     def test_batch_retry_resolves_errored_criteria(
         self,
         mock_eval_all: Any,
@@ -882,12 +882,12 @@ class TestRetryLogic:
         reward = json.loads((tmp_path / "output" / "reward.json").read_text())
         assert reward["reward"] == 1.0  # all met: 3.0 / 3.0 = 1.0
 
-    @patch("gandalf.orchestrator.resolve_instructions", return_value="test")
-    @patch("gandalf.orchestrator.resolve_judge_guidance", return_value="")
-    @patch("gandalf.orchestrator.load_trajectory_final_output", return_value="done")
-    @patch("gandalf.orchestrator.load_rubric")
-    @patch("gandalf.orchestrator.load_config")
-    @patch("gandalf.orchestrator.run_judge")
+    @patch("infinity_grader.orchestrator.resolve_instructions", return_value="test")
+    @patch("infinity_grader.orchestrator.resolve_judge_guidance", return_value="")
+    @patch("infinity_grader.orchestrator.load_trajectory_final_output", return_value="done")
+    @patch("infinity_grader.orchestrator.load_rubric")
+    @patch("infinity_grader.orchestrator.load_config")
+    @patch("infinity_grader.orchestrator.run_judge")
     def test_judge_retries_zero_disables_retry(
         self,
         mock_eval: Any,
@@ -925,12 +925,12 @@ class TestRetryLogic:
         assert not (tmp_path / "output" / "reward.json").exists()
         assert mock_eval.call_count == 1
 
-    @patch("gandalf.orchestrator.resolve_instructions", return_value="test")
-    @patch("gandalf.orchestrator.resolve_judge_guidance", return_value="")
-    @patch("gandalf.orchestrator.load_trajectory_final_output", return_value="done")
-    @patch("gandalf.orchestrator.load_rubric")
-    @patch("gandalf.orchestrator.load_config")
-    @patch("gandalf.orchestrator.run_judge")
+    @patch("infinity_grader.orchestrator.resolve_instructions", return_value="test")
+    @patch("infinity_grader.orchestrator.resolve_judge_guidance", return_value="")
+    @patch("infinity_grader.orchestrator.load_trajectory_final_output", return_value="done")
+    @patch("infinity_grader.orchestrator.load_rubric")
+    @patch("infinity_grader.orchestrator.load_config")
+    @patch("infinity_grader.orchestrator.run_judge")
     def test_hard_fail_writes_info_not_reward(
         self,
         mock_eval: Any,
@@ -969,12 +969,12 @@ class TestRetryLogic:
         assert info["errored_criterion_count"] == 1
         assert not (tmp_path / "output" / "reward.json").exists()
 
-    @patch("gandalf.orchestrator.resolve_instructions", return_value="test")
-    @patch("gandalf.orchestrator.resolve_judge_guidance", return_value="")
-    @patch("gandalf.orchestrator.load_trajectory_final_output", return_value="done")
-    @patch("gandalf.orchestrator.load_rubric")
-    @patch("gandalf.orchestrator.load_config")
-    @patch("gandalf.orchestrator.run_judge")
+    @patch("infinity_grader.orchestrator.resolve_instructions", return_value="test")
+    @patch("infinity_grader.orchestrator.resolve_judge_guidance", return_value="")
+    @patch("infinity_grader.orchestrator.load_trajectory_final_output", return_value="done")
+    @patch("infinity_grader.orchestrator.load_rubric")
+    @patch("infinity_grader.orchestrator.load_config")
+    @patch("infinity_grader.orchestrator.run_judge")
     def test_all_resolved_after_retry(
         self,
         mock_eval: Any,
@@ -1020,12 +1020,12 @@ class TestRetryLogic:
         info = json.loads((tmp_path / "output" / "info.json").read_text())
         assert info["errored_criterion_count"] == 0
 
-    @patch("gandalf.orchestrator.resolve_instructions", return_value="test")
-    @patch("gandalf.orchestrator.resolve_judge_guidance", return_value="")
-    @patch("gandalf.orchestrator.load_trajectory_final_output", return_value="done")
-    @patch("gandalf.orchestrator.load_rubric")
-    @patch("gandalf.orchestrator.load_config")
-    @patch("gandalf.orchestrator.run_judge")
+    @patch("infinity_grader.orchestrator.resolve_instructions", return_value="test")
+    @patch("infinity_grader.orchestrator.resolve_judge_guidance", return_value="")
+    @patch("infinity_grader.orchestrator.load_trajectory_final_output", return_value="done")
+    @patch("infinity_grader.orchestrator.load_rubric")
+    @patch("infinity_grader.orchestrator.load_config")
+    @patch("infinity_grader.orchestrator.run_judge")
     def test_reward_json_with_negative_weights(
         self,
         mock_eval: Any,
@@ -1310,13 +1310,13 @@ class TestCloneWorkspace:
 class TestBatchRetryNegativeWeights:
     """Issue 9: batch mode + retries + negative weights combined."""
 
-    @patch("gandalf.orchestrator.resolve_instructions", return_value="test")
-    @patch("gandalf.orchestrator.resolve_judge_guidance", return_value="")
-    @patch("gandalf.orchestrator.resolve_judge_prompt", return_value=None)
-    @patch("gandalf.orchestrator.load_trajectory_final_output", return_value="done")
-    @patch("gandalf.orchestrator.load_rubric")
-    @patch("gandalf.orchestrator.load_config")
-    @patch("gandalf.orchestrator.run_judge")
+    @patch("infinity_grader.orchestrator.resolve_instructions", return_value="test")
+    @patch("infinity_grader.orchestrator.resolve_judge_guidance", return_value="")
+    @patch("infinity_grader.orchestrator.resolve_judge_prompt", return_value=None)
+    @patch("infinity_grader.orchestrator.load_trajectory_final_output", return_value="done")
+    @patch("infinity_grader.orchestrator.load_rubric")
+    @patch("infinity_grader.orchestrator.load_config")
+    @patch("infinity_grader.orchestrator.run_judge")
     def test_batch_retry_with_negative_weights(
         self,
         mock_eval_all: Any,
@@ -1381,13 +1381,13 @@ class TestBatchRetryNegativeWeights:
 class TestRetryJudgePromptPassthrough:
     """Issue 10: verify resolve_judge_prompt flows through to retry calls."""
 
-    @patch("gandalf.orchestrator.resolve_instructions", return_value="test")
-    @patch("gandalf.orchestrator.resolve_judge_guidance", return_value="")
-    @patch("gandalf.orchestrator.resolve_judge_prompt", return_value="CUSTOM {{ criterion }}")
-    @patch("gandalf.orchestrator.load_trajectory_final_output", return_value="done")
-    @patch("gandalf.orchestrator.load_rubric")
-    @patch("gandalf.orchestrator.load_config")
-    @patch("gandalf.orchestrator.run_judge")
+    @patch("infinity_grader.orchestrator.resolve_instructions", return_value="test")
+    @patch("infinity_grader.orchestrator.resolve_judge_guidance", return_value="")
+    @patch("infinity_grader.orchestrator.resolve_judge_prompt", return_value="CUSTOM {{ criterion }}")
+    @patch("infinity_grader.orchestrator.load_trajectory_final_output", return_value="done")
+    @patch("infinity_grader.orchestrator.load_rubric")
+    @patch("infinity_grader.orchestrator.load_config")
+    @patch("infinity_grader.orchestrator.run_judge")
     def test_sequential_retry_passes_judge_prompt(
         self,
         mock_eval: Any,
@@ -1431,13 +1431,13 @@ class TestRetryJudgePromptPassthrough:
             judge_input = call[0][0]
             assert judge_input.judge_prompt == "CUSTOM {{ criterion }}"
 
-    @patch("gandalf.orchestrator.resolve_instructions", return_value="test")
-    @patch("gandalf.orchestrator.resolve_judge_guidance", return_value="")
-    @patch("gandalf.orchestrator.resolve_judge_prompt", return_value="BATCH CUSTOM {{ criteria }}")
-    @patch("gandalf.orchestrator.load_trajectory_final_output", return_value="done")
-    @patch("gandalf.orchestrator.load_rubric")
-    @patch("gandalf.orchestrator.load_config")
-    @patch("gandalf.orchestrator.run_judge")
+    @patch("infinity_grader.orchestrator.resolve_instructions", return_value="test")
+    @patch("infinity_grader.orchestrator.resolve_judge_guidance", return_value="")
+    @patch("infinity_grader.orchestrator.resolve_judge_prompt", return_value="BATCH CUSTOM {{ criteria }}")
+    @patch("infinity_grader.orchestrator.load_trajectory_final_output", return_value="done")
+    @patch("infinity_grader.orchestrator.load_rubric")
+    @patch("infinity_grader.orchestrator.load_config")
+    @patch("infinity_grader.orchestrator.run_judge")
     def test_batch_retry_passes_judge_prompt(
         self,
         mock_eval_all: Any,
@@ -1489,13 +1489,13 @@ class TestBatchConcurrent:
     def _make_rubric(self, n: int) -> list[RubricItem]:
         return [RubricItem(criterion=f"criterion {i}", weight=1.0) for i in range(n)]
 
-    @patch("gandalf.orchestrator.run_batch")
-    @patch("gandalf.orchestrator.resolve_instructions", return_value="test")
-    @patch("gandalf.orchestrator.resolve_judge_guidance", return_value="")
-    @patch("gandalf.orchestrator.resolve_judge_prompt", return_value=None)
-    @patch("gandalf.orchestrator.load_trajectory_final_output", return_value="done")
-    @patch("gandalf.orchestrator.load_rubric")
-    @patch("gandalf.orchestrator.load_config")
+    @patch("infinity_grader.orchestrator.run_batch")
+    @patch("infinity_grader.orchestrator.resolve_instructions", return_value="test")
+    @patch("infinity_grader.orchestrator.resolve_judge_guidance", return_value="")
+    @patch("infinity_grader.orchestrator.resolve_judge_prompt", return_value=None)
+    @patch("infinity_grader.orchestrator.load_trajectory_final_output", return_value="done")
+    @patch("infinity_grader.orchestrator.load_rubric")
+    @patch("infinity_grader.orchestrator.load_config")
     def test_no_concurrency_dispatches_to_run_batch(
         self,
         mock_config: Any,
@@ -1551,7 +1551,7 @@ class TestBatchConcurrent:
         assert results == []
         assert usage == LLMUsage()
 
-    @patch("gandalf.orchestrator.run_judge")
+    @patch("infinity_grader.orchestrator.run_judge")
     def test_splits_2_even(self, mock_run_judge: Any, tmp_path: pathlib.Path) -> None:
         """4 criteria split into 2 chunks of 2, results merged in order."""
         config = make_config(
@@ -1587,7 +1587,7 @@ class TestBatchConcurrent:
         # Verify run_judge was called twice (one per split)
         assert mock_run_judge.call_count == 2
 
-    @patch("gandalf.orchestrator.run_judge")
+    @patch("infinity_grader.orchestrator.run_judge")
     def test_split_uses_local_indices(self, mock_run_judge: Any, tmp_path: pathlib.Path) -> None:
         """Chunks must use 0-based local indices, not global rubric positions.
 
@@ -1626,7 +1626,7 @@ class TestBatchConcurrent:
         for i, r in enumerate(results):
             assert r.criterion == f"criterion {i}"
 
-    @patch("gandalf.orchestrator.run_judge")
+    @patch("infinity_grader.orchestrator.run_judge")
     def test_splits_3_uneven(self, mock_run_judge: Any, tmp_path: pathlib.Path) -> None:
         """7 criteria split into chunks of [3, 3, 1]."""
         config = make_config(
@@ -1653,7 +1653,7 @@ class TestBatchConcurrent:
         assert mock_run_judge.call_count == 3
         assert usage.cost_usd == pytest.approx(0.3)
 
-    @patch("gandalf.orchestrator.run_judge")
+    @patch("infinity_grader.orchestrator.run_judge")
     def test_splits_exceeds_rubric_size(self, mock_run_judge: Any, tmp_path: pathlib.Path) -> None:
         """batch_splits=5 with 3 criteria → 3 chunks of 1 each."""
         config = make_config(
@@ -1677,7 +1677,7 @@ class TestBatchConcurrent:
         assert mock_run_judge.call_count == 3
         assert usage.cost_usd == pytest.approx(0.15)
 
-    @patch("gandalf.orchestrator.run_judge")
+    @patch("infinity_grader.orchestrator.run_judge")
     def test_trace_file_naming(self, mock_run_judge: Any, tmp_path: pathlib.Path) -> None:
         """Each split gets a unique trace path."""
         config = make_config(
@@ -1709,7 +1709,7 @@ class TestBatchConcurrent:
         assert trace_basenames[0] == "judge_trace_batch_split0.txt"
         assert trace_basenames[1] == "judge_trace_batch_split1.txt"
 
-    @patch("gandalf.orchestrator.run_judge")
+    @patch("infinity_grader.orchestrator.run_judge")
     def test_errored_criteria_in_split(self, mock_run_judge: Any, tmp_path: pathlib.Path) -> None:
         """Errors in one split are properly reflected in merged results."""
         config = make_config(
@@ -1742,7 +1742,7 @@ class TestBatchConcurrent:
         assert results[2].met is None  # errored in second split
         assert results[3].met is True
 
-    @patch("gandalf.orchestrator.run_judge")
+    @patch("infinity_grader.orchestrator.run_judge")
     def test_timeout_per_split(self, mock_run_judge: Any, tmp_path: pathlib.Path) -> None:
         """Each split's timeout is based on its chunk size, not total rubric."""
         config = make_config(
@@ -1769,7 +1769,7 @@ class TestBatchConcurrent:
         # Each split has 2 criteria → timeout = 100 * 2 = 200
         assert all(t == 200 for t in timeouts)
 
-    @patch("gandalf.orchestrator.run_judge")
+    @patch("infinity_grader.orchestrator.run_judge")
     def test_batch_timeout_cap_per_split(self, mock_run_judge: Any, tmp_path: pathlib.Path) -> None:
         """batch_timeout caps each split's timeout independently."""
         config = make_config(
@@ -1797,13 +1797,13 @@ class TestBatchConcurrent:
         # 2 criteria * 100s = 200, capped to 150
         assert all(t == 150 for t in timeouts)
 
-    @patch("gandalf.orchestrator.resolve_instructions", return_value="test")
-    @patch("gandalf.orchestrator.resolve_judge_guidance", return_value="")
-    @patch("gandalf.orchestrator.resolve_judge_prompt", return_value=None)
-    @patch("gandalf.orchestrator.load_trajectory_final_output", return_value="done")
-    @patch("gandalf.orchestrator.load_rubric")
-    @patch("gandalf.orchestrator.load_config")
-    @patch("gandalf.orchestrator.run_judge")
+    @patch("infinity_grader.orchestrator.resolve_instructions", return_value="test")
+    @patch("infinity_grader.orchestrator.resolve_judge_guidance", return_value="")
+    @patch("infinity_grader.orchestrator.resolve_judge_prompt", return_value=None)
+    @patch("infinity_grader.orchestrator.load_trajectory_final_output", return_value="done")
+    @patch("infinity_grader.orchestrator.load_rubric")
+    @patch("infinity_grader.orchestrator.load_config")
+    @patch("infinity_grader.orchestrator.run_judge")
     def test_main_dispatches_batch_concurrent(
         self,
         mock_run_judge: Any,
@@ -1847,7 +1847,7 @@ class TestBatchConcurrent:
         reward = json.loads((tmp_path / "output" / "reward.json").read_text())
         assert reward["reward"] == 1.0
 
-    @patch("gandalf.orchestrator.run_judge")
+    @patch("infinity_grader.orchestrator.run_judge")
     def test_split_future_raises_exception(self, mock_run_judge: Any, tmp_path: pathlib.Path) -> None:
         """When run_judge raises an unhandled exception, all criteria fail gracefully."""
         config = make_config(
@@ -1877,7 +1877,7 @@ class TestBatchConcurrent:
         # Usage must be reset to stay consistent with all-error results
         assert usage == LLMUsage()
 
-    @patch("gandalf.orchestrator.run_judge")
+    @patch("infinity_grader.orchestrator.run_judge")
     def test_split_returns_fewer_verdicts(self, mock_run_judge: Any, tmp_path: pathlib.Path) -> None:
         """When a split returns fewer verdicts than criteria, missing ones get met=None."""
         config = make_config(
@@ -1907,7 +1907,7 @@ class TestBatchConcurrent:
         assert results[2].met is True  # split 1, position 0 — verdict present
         assert results[3].met is None  # split 1, position 1 — no verdict, defaults to met=None
 
-    @patch("gandalf.orchestrator.run_judge")
+    @patch("infinity_grader.orchestrator.run_judge")
     def test_batch_splits_independent_of_max_concurrency(self, mock_run_judge: Any, tmp_path: pathlib.Path) -> None:
         """batch_splits=4 with max_concurrency=2 creates 4 chunks but only 2 run at a time."""
         config = make_config(
@@ -1954,7 +1954,7 @@ class TestBatchConcurrent:
         # Total usage from 4 splits
         assert usage.cost_usd == pytest.approx(0.4)
 
-    @patch("gandalf.orchestrator.run_judge")
+    @patch("infinity_grader.orchestrator.run_judge")
     def test_max_concurrency_none_defaults_to_batch_splits(self, mock_run_judge: Any, tmp_path: pathlib.Path) -> None:
         """When max_concurrency is None and batch_splits=3, all 3 splits run in parallel."""
         config = make_config(
@@ -1991,14 +1991,14 @@ class TestBatchConcurrent:
         # All 3 should have been able to run concurrently
         assert peak_concurrent == 3
 
-    @patch("gandalf.orchestrator.run_batch_concurrent")
-    @patch("gandalf.orchestrator.run_batch")
-    @patch("gandalf.orchestrator.resolve_instructions", return_value="test")
-    @patch("gandalf.orchestrator.resolve_judge_guidance", return_value="")
-    @patch("gandalf.orchestrator.resolve_judge_prompt", return_value=None)
-    @patch("gandalf.orchestrator.load_trajectory_final_output", return_value="done")
-    @patch("gandalf.orchestrator.load_rubric")
-    @patch("gandalf.orchestrator.load_config")
+    @patch("infinity_grader.orchestrator.run_batch_concurrent")
+    @patch("infinity_grader.orchestrator.run_batch")
+    @patch("infinity_grader.orchestrator.resolve_instructions", return_value="test")
+    @patch("infinity_grader.orchestrator.resolve_judge_guidance", return_value="")
+    @patch("infinity_grader.orchestrator.resolve_judge_prompt", return_value=None)
+    @patch("infinity_grader.orchestrator.load_trajectory_final_output", return_value="done")
+    @patch("infinity_grader.orchestrator.load_rubric")
+    @patch("infinity_grader.orchestrator.load_config")
     def test_main_batch_without_splits_dispatches_run_batch(
         self,
         mock_config: Any,
@@ -2037,15 +2037,15 @@ class TestBatchConcurrent:
         mock_run_batch.assert_called_once()
         mock_run_batch_concurrent.assert_not_called()
 
-    @patch("gandalf.orchestrator.run_batch_concurrent")
-    @patch("gandalf.orchestrator.run_batch")
-    @patch("gandalf.orchestrator.run_individual")
-    @patch("gandalf.orchestrator.resolve_instructions", return_value="test")
-    @patch("gandalf.orchestrator.resolve_judge_guidance", return_value="")
-    @patch("gandalf.orchestrator.resolve_judge_prompt", return_value=None)
-    @patch("gandalf.orchestrator.load_trajectory_final_output", return_value="done")
-    @patch("gandalf.orchestrator.load_rubric")
-    @patch("gandalf.orchestrator.load_config")
+    @patch("infinity_grader.orchestrator.run_batch_concurrent")
+    @patch("infinity_grader.orchestrator.run_batch")
+    @patch("infinity_grader.orchestrator.run_individual")
+    @patch("infinity_grader.orchestrator.resolve_instructions", return_value="test")
+    @patch("infinity_grader.orchestrator.resolve_judge_guidance", return_value="")
+    @patch("infinity_grader.orchestrator.resolve_judge_prompt", return_value=None)
+    @patch("infinity_grader.orchestrator.load_trajectory_final_output", return_value="done")
+    @patch("infinity_grader.orchestrator.load_rubric")
+    @patch("infinity_grader.orchestrator.load_config")
     def test_main_individual_mode_dispatches_run_individual(
         self,
         mock_config: Any,
@@ -2086,7 +2086,7 @@ class TestBatchConcurrent:
         mock_run_batch.assert_not_called()
         mock_run_batch_concurrent.assert_not_called()
 
-    @patch("gandalf.orchestrator.run_judge")
+    @patch("infinity_grader.orchestrator.run_judge")
     def test_max_concurrency_capped_to_chunk_count(self, mock_run_judge: Any, tmp_path: pathlib.Path) -> None:
         """batch_splits=2, max_concurrency=10 — thread pool capped to 2 (the actual chunk count)."""
         config = make_config(
@@ -2123,7 +2123,7 @@ class TestBatchConcurrent:
         # Peak concurrency must be 2 (chunks), not 10 (max_concurrency)
         assert peak_concurrent <= 2
 
-    @patch("gandalf.orchestrator.run_judge")
+    @patch("infinity_grader.orchestrator.run_judge")
     def test_individual_mode_parallelizes_with_max_concurrency(
         self, mock_run_judge: Any, tmp_path: pathlib.Path
     ) -> None:

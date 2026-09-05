@@ -1,5 +1,5 @@
 [
   {"criterion": "A welcome message file (welcome.txt) exists in the workspace", "weight": 1.0},
-  {"criterion": "The message mentions Gandalf by name", "weight": 2.0},
+  {"criterion": "The message mentions Infinity Grader by name", "weight": 2.0},
   {"criterion": "The message is longer than 50 words", "weight": 1.0}
 ]

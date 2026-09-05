@@ -1,11 +1,11 @@
 [project]
-name = "gandalf-the-grader"
+name = "infinity-grader"
 dynamic = ["version", "optional-dependencies"]
 description = "Agent-as-judge grading framework for evaluating AI agent outputs against rubric criteria"
 readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.12"
-authors = [{ name = "Handshake" }]
+authors = [{ name = "Infinity Megatron" }]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
@@ -25,23 +25,23 @@ dependencies = [
 ]
 
 [project.urls]
-homepage = "https://github.com/Handshake-AI-Research/gandalf-the-grader"
-repository = "https://github.com/Handshake-AI-Research/gandalf-the-grader"
-issues = "https://github.com/Handshake-AI-Research/gandalf-the-grader/issues"
+homepage = "https://github.com/Infinity-Megatron/infinity-grader"
+repository = "https://github.com/Infinity-Megatron/infinity-grader"
+issues = "https://github.com/Infinity-Megatron/infinity-grader/issues"
 
 [project.scripts]
-gandalf-the-grader = "gandalf.orchestrator:main"
-gandalf-the-grader-judge = "gandalf.judge:main"
+infinity-grader = "infinity_grader.orchestrator:main"
+infinity-grader-judge = "infinity_grader.judge:main"
 
 [build-system]
 requires = ["hatchling", "hatch-pinned-extra>=0.2.0,<0.3.0"]
 build-backend = "hatchling.build"
 
 [tool.hatch.version]
-path = "src/gandalf/__about__.py"
+path = "src/infinity_grader/__about__.py"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/gandalf"]
+packages = ["src/infinity_grader"]
 
 [tool.hatch.envs.default]
 installer = "uv"

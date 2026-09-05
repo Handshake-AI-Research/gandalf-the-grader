@@ -25,7 +25,7 @@ from openhands.tools.file_editor import FileEditorTool
 from openhands.tools.terminal import TerminalTool
 from pydantic import TypeAdapter
 
-from gandalf.models import BatchJudgeInput, JudgeInput, LLMUsage, MCPServer, Verdict
+from infinity_grader.models import BatchJudgeInput, JudgeInput, LLMUsage, MCPServer, Verdict
 
 TEMPLATES_DIR = Path(__file__).parent / "templates"
 
@@ -131,6 +131,8 @@ def read_batch_verdict(verdict_path: str, n_criteria: int) -> list[Verdict]:
 
         by_index: dict[int, Verdict] = {}
         for v in verdicts_raw:
+            if not isinstance(v, dict):
+                continue
             idx = v.get("index")
             if idx is None:
                 continue

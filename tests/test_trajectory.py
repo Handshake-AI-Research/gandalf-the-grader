@@ -6,7 +6,7 @@ import pathlib
 
 import pytest
 
-from gandalf.orchestrator import load_trajectory_final_output
+from infinity_grader.orchestrator import load_trajectory_final_output
 
 FIXTURES = os.path.join(os.path.dirname(__file__), "fixtures")
 

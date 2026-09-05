@@ -1,6 +1,6 @@
 # Development
 
-Gandalf uses the [Hatch] project manager ([installation instructions][hatch-install]).
+Infinity Grader uses the [Hatch] project manager ([installation instructions][hatch-install]).
 
 Hatch automatically manages dependencies and runs testing, type checking, and other operations in isolated [environments][hatch-environments].
 
@@ -69,7 +69,7 @@ hatch fmt --check
 
 ## Updating the lockfile
 
-We use [hatch-pinned-extra](https://github.com/edgarrmondragon/hatch-pinned-extra) to support a `gandalf-the-grader[pinned]` extra that pins all transitive dependencies. You can upgrade the lockfile with:
+We use [hatch-pinned-extra](https://github.com/edgarrmondragon/hatch-pinned-extra) to support an `infinity-grader[pinned]` extra that pins all transitive dependencies. You can upgrade the lockfile with:
 
 ```
 uv lock --upgrade

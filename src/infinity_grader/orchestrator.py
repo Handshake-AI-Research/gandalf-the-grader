@@ -29,7 +29,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 from pydantic import TypeAdapter
 
-from gandalf.models import (
+from infinity_grader.models import (
     BatchJudgeInput,
     CriterionResult,
     EvaluationInfo,
