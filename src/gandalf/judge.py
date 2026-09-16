@@ -21,10 +21,10 @@ from typing import Any
 
 import jinja2
 from openhands.sdk import LLM, Agent, BaseConversation, Conversation, Tool
-from openhands.tools.file_editor import FileEditorTool
 from openhands.tools.terminal import TerminalTool
 from pydantic import TypeAdapter
 
+from gandalf.file_editor import GANDALF_FILE_EDITOR_TOOL
 from gandalf.models import BatchJudgeInput, JudgeInput, LLMUsage, MCPServer, Verdict
 
 TEMPLATES_DIR = Path(__file__).parent / "templates"
@@ -234,7 +234,7 @@ def run_agent_session(
 
     tools = [
         Tool(name=TerminalTool.name),
-        Tool(name=FileEditorTool.name),
+        Tool(name=GANDALF_FILE_EDITOR_TOOL),
     ]
 
     if mcp_servers:

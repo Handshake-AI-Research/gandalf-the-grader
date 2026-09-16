@@ -924,6 +924,7 @@ dependencies = [
     { name = "litellm" },
     { name = "openhands-sdk" },
     { name = "openhands-tools" },
+    { name = "pillow" },
     { name = "pydantic" },
 ]
 
@@ -940,6 +941,7 @@ requires-dist = [
     { name = "litellm", specifier = ">=1.82.0,<2" },
     { name = "openhands-sdk", specifier = ">=1.11.2,<1.16.1" },
     { name = "openhands-tools", specifier = ">=1.11.2,<1.16.1" },
+    { name = "pillow", specifier = ">=12.2,<13" },
     { name = "pydantic", specifier = ">=2.12.5,<3" },
 ]
 

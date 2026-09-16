@@ -1,0 +1,64 @@
+"""Prepare inline images for OpenAI without modifying workspace evidence."""
+
+import base64
+import logging
+from io import BytesIO
+
+from PIL import Image, ImageOps
+
+logger = logging.getLogger(__name__)
+PATCH_EDGE = 32
+MAX_PATCHES = 30_000
+
+
+def _patch_count(width: int, height: int) -> int:
+    return ((width + PATCH_EDGE - 1) // PATCH_EDGE) * ((height + PATCH_EDGE - 1) // PATCH_EDGE)
+
+
+def _fit_size(width: int, height: int) -> tuple[int, int]:
+    longest = max(width, height)
+    low, high = 1, longest - 1
+    while low < high:
+        candidate = (low + high + 1) // 2
+        if _patch_count(max(1, width * candidate // longest), max(1, height * candidate // longest)) <= MAX_PATCHES:
+            low = candidate
+        else:
+            high = candidate - 1
+    return max(1, width * low // longest), max(1, height * low // longest)
+
+
+def prepare_openai_image_url(url: str) -> str:
+    """Resize only oversized inline images; leave remote URLs and compliant bytes alone."""
+    header, separator, encoded = url.partition(",")
+    if not separator or not header.lower().startswith("data:") or not header.lower().endswith(";base64"):
+        return url
+
+    image_bytes = base64.b64decode(encoded, validate=True)
+    with Image.open(BytesIO(image_bytes)) as source:
+        width, height = source.size
+        if _patch_count(width, height) <= MAX_PATCHES:
+            return url
+        if getattr(source, "is_animated", False):
+            msg = "Cannot resize an animated image for the OpenAI patch limit. View a still frame instead."
+            raise ValueError(msg)
+
+        with ImageOps.exif_transpose(source) as oriented:
+            target = _fit_size(*oriented.size)
+            has_alpha = "A" in oriented.getbands() or "transparency" in oriented.info
+            image_format = "JPEG" if source.format == "JPEG" else "PNG"
+            mode = "RGB" if image_format == "JPEG" else "RGBA" if has_alpha else "RGB"
+            with oriented.convert(mode) as converted, converted.resize(target, Image.Resampling.LANCZOS) as resized:
+                output = BytesIO()
+                if image_format == "JPEG":
+                    resized.save(output, format=image_format, quality=95)
+                else:
+                    resized.save(output, format=image_format)
+
+    prepared = output.getvalue()
+    with Image.open(BytesIO(prepared)) as result:
+        if _patch_count(*result.size) > MAX_PATCHES:
+            msg = "Prepared image still exceeds the OpenAI patch limit"
+            raise ValueError(msg)
+    logger.info("Resized judge image from %sx%s to %sx%s for the OpenAI patch limit", width, height, *target)
+    mime_type = "image/jpeg" if image_format == "JPEG" else "image/png"
+    return f"data:{mime_type};base64,{base64.b64encode(prepared).decode('ascii')}"

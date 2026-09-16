@@ -22,6 +22,7 @@ dependencies = [
     "openhands-sdk>=1.11.2,<1.16.1",
     "openhands-tools>=1.11.2,<1.16.1",
     "pydantic>=2.12.5,<3",
+    "pillow>=12.2,<13",
 ]
 
 [project.urls]
