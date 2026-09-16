@@ -214,3 +214,29 @@ def test_fitting_preserves_aspect_ratio_with_patch_rounding(width: int, height: 
 def test_unknown_provider_keeps_upstream_behavior() -> None:
     llm = LLM(model="custom-unknown-model", api_key="unused-test-key")
     assert not _uses_openai_image_limit(llm)
+
+
+def test_oversized_webp_stays_webp_with_transparency(tmp_path: Path) -> None:
+    source = tmp_path / "chart.webp"
+    Image.new("RGBA", (5100, 6000), (20, 40, 60, 78)).save(source, lossless=True)
+    original = source.read_bytes()
+    header, prepared = image_payload(view_image(source))
+    assert header == "data:image/webp;base64"
+    with Image.open(BytesIO(prepared)) as result:
+        assert result.size == (5088, 5987)
+        assert result.format == "WEBP"
+        pixel = result.getpixel((100, 100))
+        assert isinstance(pixel, tuple)
+        assert pixel[3] == 78
+    assert source.read_bytes() == original
+
+
+def test_compliant_animation_stays_byte_identical(tmp_path: Path) -> None:
+    source = tmp_path / "animation.gif"
+    first = Image.new("P", (32, 32), 0)
+    second = Image.new("P", (32, 32), 1)
+    first.save(source, save_all=True, append_images=[second], duration=100, loop=0)
+    original = source.read_bytes()
+    header, prepared = image_payload(view_image(source))
+    assert header == "data:image/gif;base64"
+    assert prepared == original
