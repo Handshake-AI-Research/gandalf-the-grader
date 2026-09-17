@@ -4,16 +4,34 @@ import json
 import os
 import pathlib
 import tempfile
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 from unittest.mock import patch
 
+import httpx
 import pytest
+from litellm.exceptions import RateLimitError
+from openhands.sdk.llm import Message
+from openhands.sdk.llm.exceptions import (
+    LLMAuthenticationError,
+    LLMBadRequestError,
+    LLMNoResponseError,
+    LLMRateLimitError,
+    LLMServiceUnavailableError,
+    LLMTimeoutError,
+)
+from openhands.sdk.llm.message import TextContent
 
 from gandalf.judge import (
+    GatewayConfigurationError,
     build_batch_judge_prompt,
     build_judge_prompt,
+    classify_gateway_error,
+    create_llm,
     make_verdict_path,
     mcp_server_to_config,
+    parse_extra_headers,
     read_batch_verdict,
     read_verdict,
     run_judge,
@@ -699,6 +717,296 @@ class TestBuildJudgePromptCustomTemplate:
         )
         assert prompt == "ONLY THIS"
         assert "expert judge" not in prompt
+
+
+def set_gateway_env(monkeypatch: pytest.MonkeyPatch, base_url: str = "https://gateway.example/v1") -> None:
+    monkeypatch.setenv("USE_LITELLM_PROXY", "true")
+    monkeypatch.setenv("LITELLM_PROXY_API_BASE", base_url)
+    monkeypatch.setenv("LITELLM_PROXY_API_KEY", "gateway-key")
+    monkeypatch.setenv("LLM_API_KEY", "gateway-key")
+    monkeypatch.setenv("LLM_EXTRA_HEADERS_JSON", json.dumps({"CF-Access-Client-Id": "client-id"}))
+
+
+class TestGatewayConfiguration:
+    def test_gateway_llm_uses_model_key_and_headers(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        set_gateway_env(monkeypatch)
+        monkeypatch.setenv("LLM_BASE_URL", "https://stale-direct.example/v1")
+
+        with patch("gandalf.judge.LLM") as mock_llm:
+            create_llm("gemini/gemini-2.5-pro")
+
+        mock_llm.assert_called_once_with(
+            model="gemini/gemini-2.5-pro",
+            api_key="gateway-key",
+            extra_headers={"CF-Access-Client-Id": "client-id"},
+        )
+
+    def test_direct_mode_ignores_stale_gateway_values(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        set_gateway_env(monkeypatch)
+        monkeypatch.setenv("USE_LITELLM_PROXY", "false")
+        monkeypatch.setenv("LLM_API_KEY", "direct-key")
+        monkeypatch.setenv("LLM_BASE_URL", "https://direct.example/v1")
+        monkeypatch.setenv("LLM_EXTRA_HEADERS_JSON", "not-json")
+
+        with patch("gandalf.judge.LLM") as mock_llm:
+            create_llm("anthropic/test-model")
+
+        mock_llm.assert_called_once_with(
+            model="anthropic/test-model",
+            api_key="direct-key",
+            base_url="https://direct.example/v1",
+        )
+
+    @pytest.mark.parametrize(
+        "missing_name",
+        ["LITELLM_PROXY_API_BASE", "LITELLM_PROXY_API_KEY", "LLM_API_KEY", "LLM_EXTRA_HEADERS_JSON"],
+    )
+    def test_gateway_requires_each_value(self, missing_name: str, monkeypatch: pytest.MonkeyPatch) -> None:
+        set_gateway_env(monkeypatch)
+        monkeypatch.delenv(missing_name)
+
+        with pytest.raises(GatewayConfigurationError, match="Gateway configuration is incomplete"):
+            create_llm("gemini/gemini-2.5-pro")
+
+    @pytest.mark.parametrize(
+        "headers",
+        ["not-json", "[]", '{"header": 1}', '{"header": true}'],
+    )
+    def test_gateway_rejects_invalid_header_json(self, headers: str, monkeypatch: pytest.MonkeyPatch) -> None:
+        set_gateway_env(monkeypatch)
+        monkeypatch.setenv("LLM_EXTRA_HEADERS_JSON", headers)
+
+        with pytest.raises(GatewayConfigurationError, match="Gateway configuration is invalid") as exc_info:
+            create_llm("gemini/gemini-2.5-pro")
+
+        assert headers not in str(exc_info.value)
+
+    def test_header_parser_does_not_expose_secret_input(self) -> None:
+        secret_input = '{"Authorization":"secret-value"'
+        with pytest.raises(GatewayConfigurationError, match="Gateway configuration is invalid") as exc_info:
+            parse_extra_headers(secret_input)
+        assert "secret-value" not in str(exc_info.value)
+
+    @pytest.mark.parametrize(
+        ("name", "value"),
+        [
+            ("USE_LITELLM_PROXY", "TRUE"),
+            ("LITELLM_PROXY_API_BASE", "https://gateway.example"),
+            ("LITELLM_PROXY_API_BASE", "https://user:secret@gateway.example/v1"),
+            ("LITELLM_PROXY_API_KEY", "different-key"),
+        ],
+    )
+    def test_gateway_rejects_invalid_transport_values(
+        self, name: str, value: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        set_gateway_env(monkeypatch)
+        monkeypatch.setenv(name, value)
+        with pytest.raises(GatewayConfigurationError, match="Gateway configuration is invalid"):
+            create_llm("gemini/gemini-2.5-pro")
+
+    @pytest.mark.parametrize(
+        ("exception", "reason"),
+        [
+            (LLMAuthenticationError(), "auth-rejected"),
+            (LLMBadRequestError(), "request-rejected"),
+            (LLMRateLimitError(), "rate-limited"),
+            (LLMServiceUnavailableError(), "gateway-server-error"),
+            (LLMTimeoutError(), "gateway-unreachable"),
+            (LLMNoResponseError(), "response-interrupted"),
+        ],
+    )
+    def test_classifies_typed_gateway_failures(self, exception: BaseException, reason: str) -> None:
+        marker = classify_gateway_error(exception)
+        assert marker is not None
+        assert marker.reason == reason
+
+    def test_does_not_classify_plain_error_message(self) -> None:
+        assert classify_gateway_error(RuntimeError("401 rate limit timeout")) is None
+
+    def test_classification_preserves_typed_http_status(self) -> None:
+        response = httpx.Response(429, request=httpx.Request("POST", "https://gateway.example/v1/chat/completions"))
+        exception = RateLimitError(
+            "secret response",
+            llm_provider="openai",
+            model="gemini/gemini-2.5-pro",
+            response=response,
+        )
+        marker = classify_gateway_error(exception)
+        assert marker is not None
+        assert marker.model_dump() == {"version": 1, "reason": "rate-limited", "http_status": 429}
+
+    @patch("gandalf.judge.run_agent_session", side_effect=LLMRateLimitError("secret response"))
+    def test_single_output_carries_sanitized_marker(
+        self,
+        mock_session: Any,  # noqa: ARG002
+        tmp_path: pathlib.Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setenv("USE_LITELLM_PROXY", "true")
+        output_path = str(tmp_path / "output.json")
+        with patch("gandalf.judge.make_verdict_path", return_value=str(tmp_path / "verdict.json")):
+            run_judge(make_judge_input_json(tmp_path), output_path)
+
+        raw_output = pathlib.Path(output_path).read_text()
+        result = json.loads(raw_output)
+        assert result["gateway_error"] == {"version": 1, "reason": "rate-limited"}
+        assert result["verdict"]["met"] is None
+        assert "gateway_error" not in result["verdict"]
+        assert "secret response" not in raw_output
+
+    @patch("gandalf.judge.run_agent_session", side_effect=LLMTimeoutError("secret response"))
+    def test_batch_output_carries_sanitized_marker(
+        self,
+        mock_session: Any,  # noqa: ARG002
+        tmp_path: pathlib.Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setenv("USE_LITELLM_PROXY", "true")
+        output_path = str(tmp_path / "output.json")
+        with patch("gandalf.judge.make_verdict_path", return_value=str(tmp_path / "verdict.json")):
+            run_judge_batch(make_batch_judge_input_json(tmp_path), output_path)
+
+        result = json.loads(pathlib.Path(output_path).read_text())
+        assert result["gateway_error"] == {"version": 1, "reason": "gateway-unreachable"}
+        assert all("gateway_error" not in verdict for verdict in result["verdicts"])
+
+
+class TestGatewayTransport:
+    def test_real_client_retries_same_gateway_route(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        requests: list[dict[str, Any]] = []
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self) -> None:
+                length = int(self.headers.get("Content-Length", "0"))
+                body = json.loads(self.rfile.read(length))
+                requests.append(
+                    {
+                        "path": self.path,
+                        "headers": {key.lower(): value for key, value in self.headers.items()},
+                        "body": body,
+                    }
+                )
+                response: dict[str, Any]
+                if len(requests) == 1:
+                    response = {"error": {"message": "retry", "type": "rate_limit_error", "code": "rate_limit"}}
+                    status = 429
+                else:
+                    response = {
+                        "id": "chatcmpl-test",
+                        "object": "chat.completion",
+                        "created": 1,
+                        "model": body["model"],
+                        "choices": [
+                            {
+                                "index": 0,
+                                "message": {"role": "assistant", "content": "ok"},
+                                "finish_reason": "stop",
+                            }
+                        ],
+                        "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+                    }
+                    status = 200
+                encoded = json.dumps(response).encode()
+                self.send_response(status)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(encoded)))
+                self.end_headers()
+                self.wfile.write(encoded)
+
+            def log_message(self, _format: str, *_args: Any) -> None:
+                return
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        server_thread = threading.Thread(target=server.serve_forever, daemon=True)
+        server_thread.start()
+        try:
+            set_gateway_env(monkeypatch, f"http://127.0.0.1:{server.server_port}/v1")
+            monkeypatch.setenv("LLM_BASE_URL", "http://127.0.0.1:1/v1")
+            headers = {
+                "CF-Access-Client-Id": "client-id",
+                "CF-Access-Client-Secret": "client-secret",
+                "x-litellm-spend-logs-metadata": '{"task":"task-id"}',
+                "x-litellm-tags": "rle,verifier",
+            }
+            monkeypatch.setenv("LLM_EXTRA_HEADERS_JSON", json.dumps(headers))
+
+            llm = create_llm("gemini/gemini-2.5-pro")
+            llm.num_retries = 1
+            llm.retry_min_wait = 0
+            llm.retry_max_wait = 0
+            llm.retry_multiplier = 0
+            llm.reasoning_effort = "none"
+            llm.completion(messages=[Message(role="user", content=[TextContent(text="hello")])])
+        finally:
+            server.shutdown()
+            server.server_close()
+            server_thread.join()
+
+        assert len(requests) == 2
+        for request in requests:
+            assert request["path"] == "/v1/chat/completions"
+            assert request["body"]["model"] == "gemini/gemini-2.5-pro"
+            assert request["headers"]["cf-access-client-id"] == "client-id"
+            assert request["headers"]["cf-access-client-secret"] == "client-secret"
+            assert request["headers"]["x-litellm-spend-logs-metadata"] == '{"task":"task-id"}'
+            assert request["headers"]["x-litellm-tags"] == "rle,verifier"
+
+    def test_real_direct_client_ignores_stale_gateway_values(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        requests: list[dict[str, Any]] = []
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self) -> None:
+                length = int(self.headers.get("Content-Length", "0"))
+                body = json.loads(self.rfile.read(length))
+                requests.append({"path": self.path, "headers": dict(self.headers), "body": body})
+                response = {
+                    "id": "chatcmpl-direct",
+                    "object": "chat.completion",
+                    "created": 1,
+                    "model": body["model"],
+                    "choices": [
+                        {
+                            "index": 0,
+                            "message": {"role": "assistant", "content": "ok"},
+                            "finish_reason": "stop",
+                        }
+                    ],
+                    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+                }
+                encoded = json.dumps(response).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(encoded)))
+                self.end_headers()
+                self.wfile.write(encoded)
+
+            def log_message(self, _format: str, *_args: Any) -> None:
+                return
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        server_thread = threading.Thread(target=server.serve_forever, daemon=True)
+        server_thread.start()
+        try:
+            monkeypatch.setenv("USE_LITELLM_PROXY", "false")
+            monkeypatch.setenv("LITELLM_PROXY_API_BASE", "http://127.0.0.1:1/v1")
+            monkeypatch.setenv("LITELLM_PROXY_API_KEY", "stale-proxy-key")
+            monkeypatch.setenv("LLM_EXTRA_HEADERS_JSON", "not-json")
+            monkeypatch.setenv("LLM_API_KEY", "direct-key")
+            monkeypatch.setenv("LLM_BASE_URL", f"http://127.0.0.1:{server.server_port}/v1")
+
+            llm = create_llm("openai/gpt-4o-mini")
+            llm.num_retries = 0
+            llm.reasoning_effort = "none"
+            llm.completion(messages=[Message(role="user", content=[TextContent(text="hello")])])
+        finally:
+            server.shutdown()
+            server.server_close()
+            server_thread.join()
+
+        assert len(requests) == 1
+        assert requests[0]["path"] == "/v1/chat/completions"
+        assert requests[0]["body"]["model"] == "gpt-4o-mini"
+        assert "CF-Access-Client-Id" not in requests[0]["headers"]
 
 
 class TestRunJudgeLLM:

@@ -17,17 +17,231 @@ import os
 import secrets
 import tempfile
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
+from urllib.parse import urlsplit
 
 import jinja2
+from litellm.exceptions import (
+    APIConnectionError,
+    APIResponseValidationError,
+    AuthenticationError,
+    BadGatewayError,
+    BadRequestError,
+    BudgetExceededError,
+    InternalServerError,
+    NotFoundError,
+    OpenAIError,
+    PermissionDeniedError,
+    RateLimitError,
+    ServiceUnavailableError,
+    Timeout,
+    UnprocessableEntityError,
+)
 from openhands.sdk import LLM, Agent, BaseConversation, Conversation, Tool
+from openhands.sdk.llm.exceptions import (
+    LLMAuthenticationError,
+    LLMBadRequestError,
+    LLMNoResponseError,
+    LLMRateLimitError,
+    LLMResponseError,
+    LLMServiceUnavailableError,
+    LLMTimeoutError,
+)
 from openhands.tools.file_editor import FileEditorTool
 from openhands.tools.terminal import TerminalTool
 from pydantic import TypeAdapter
 
-from gandalf.models import BatchJudgeInput, JudgeInput, LLMUsage, MCPServer, Verdict
+from gandalf.models import (
+    BatchJudgeInput,
+    GatewayError,
+    GatewayErrorReason,
+    JudgeInput,
+    LLMUsage,
+    MCPServer,
+    Verdict,
+)
 
 TEMPLATES_DIR = Path(__file__).parent / "templates"
+_VALID_HTTP_STATUSES = range(100, 600)
+_AUTH_REJECTION_HTTP_STATUSES = frozenset({401, 403})
+_RATE_LIMIT_HTTP_STATUS = 429
+_CLIENT_ERROR_HTTP_STATUSES = range(400, 500)
+_SERVER_ERROR_HTTP_STATUSES = range(500, 600)
+
+
+class GatewayConfigurationError(Exception):
+    def __init__(self, reason: GatewayErrorReason) -> None:
+        self.reason = reason
+        super().__init__(
+            "Gateway configuration is incomplete."
+            if reason == "configuration-missing"
+            else "Gateway configuration is invalid."
+        )
+
+
+def use_litellm_proxy() -> bool:
+    value = os.environ.get("USE_LITELLM_PROXY")
+    if value is None or value == "false":
+        return False
+    if value == "true":
+        return True
+    raise GatewayConfigurationError(reason="configuration-invalid")
+
+
+def parse_extra_headers(value: str | None) -> dict[str, str]:
+    """Parse required gateway headers without exposing input in errors."""
+    if not value:
+        raise GatewayConfigurationError(reason="configuration-missing")
+    try:
+        data = json.loads(value)
+    except (json.JSONDecodeError, TypeError) as exc:
+        raise GatewayConfigurationError(reason="configuration-invalid") from exc
+    if not isinstance(data, dict) or not all(
+        isinstance(key, str) and isinstance(item, str) for key, item in data.items()
+    ):
+        raise GatewayConfigurationError(reason="configuration-invalid")
+    return data
+
+
+def _validated_gateway_base(value: str | None) -> str:
+    if not value:
+        raise GatewayConfigurationError(reason="configuration-missing")
+    try:
+        parsed = urlsplit(value)
+        hostname = parsed.hostname
+        _ = parsed.port
+    except ValueError as exc:
+        raise GatewayConfigurationError(reason="configuration-invalid") from exc
+    if (
+        parsed.scheme not in {"http", "https"}
+        or not hostname
+        or parsed.path != "/v1"
+        or parsed.query
+        or parsed.fragment
+        or parsed.username is not None
+        or parsed.password is not None
+    ):
+        raise GatewayConfigurationError(reason="configuration-invalid")
+    return value
+
+
+def create_llm(model: str) -> LLM:
+    api_key = os.environ.get("LLM_API_KEY")
+    if not use_litellm_proxy():
+        if not api_key:
+            msg = (
+                "LLM_API_KEY environment variable is not set. "
+                "The caller must map the provider-specific key "
+                "(e.g. ANTHROPIC_API_KEY) to LLM_API_KEY."
+            )
+            raise RuntimeError(msg)
+        return LLM(
+            model=model,
+            api_key=api_key,
+            base_url=os.environ.get("LLM_BASE_URL"),
+        )
+
+    _validated_gateway_base(os.environ.get("LITELLM_PROXY_API_BASE"))
+    proxy_key = os.environ.get("LITELLM_PROXY_API_KEY")
+    if not proxy_key or not api_key:
+        raise GatewayConfigurationError(reason="configuration-missing")
+    if proxy_key != api_key:
+        raise GatewayConfigurationError(reason="configuration-invalid")
+    headers = parse_extra_headers(os.environ.get("LLM_EXTRA_HEADERS_JSON"))
+    return LLM(model=model, api_key=api_key, extra_headers=headers)
+
+
+def _exception_chain(exception: BaseException) -> list[BaseException]:
+    chain: list[BaseException] = []
+    pending = [exception]
+    seen: set[int] = set()
+    while pending:
+        current = pending.pop(0)
+        if id(current) in seen:
+            continue
+        seen.add(id(current))
+        chain.append(current)
+        if current.__cause__ is not None:
+            pending.append(current.__cause__)
+        if current.__context__ is not None:
+            pending.append(current.__context__)
+    return chain
+
+
+def _http_status(exception: BaseException) -> int | None:
+    candidates = [
+        getattr(exception, "status_code", None),
+        getattr(exception, "exception_status_code", None),
+        getattr(getattr(exception, "response", None), "status_code", None),
+    ]
+    for value in candidates:
+        if isinstance(value, int) and value in _VALID_HTTP_STATUSES:
+            return value
+    return None
+
+
+def classify_gateway_error(exception: BaseException) -> GatewayError | None:
+    """Classify a typed terminal gateway exception without reading its text."""
+    if isinstance(exception, GatewayConfigurationError):
+        return GatewayError(reason=exception.reason)
+
+    # Prefer the concrete provider cause over its OpenHands wrapper. This keeps
+    # the provider status code when OpenHands maps the final retry failure.
+    chain = list(reversed(_exception_chain(exception)))
+    classifiers: tuple[tuple[tuple[type[BaseException], ...], GatewayErrorReason], ...] = (
+        ((AuthenticationError, PermissionDeniedError), "auth-rejected"),
+        ((RateLimitError,), "rate-limited"),
+        ((BadRequestError, NotFoundError, UnprocessableEntityError, BudgetExceededError), "request-rejected"),
+        ((ServiceUnavailableError, BadGatewayError, InternalServerError), "gateway-server-error"),
+        ((Timeout, APIConnectionError), "gateway-unreachable"),
+        ((APIResponseValidationError,), "response-interrupted"),
+        ((LLMAuthenticationError,), "auth-rejected"),
+        ((LLMRateLimitError,), "rate-limited"),
+        ((LLMBadRequestError,), "request-rejected"),
+        ((LLMServiceUnavailableError,), "gateway-server-error"),
+        ((LLMTimeoutError,), "gateway-unreachable"),
+        ((LLMNoResponseError, LLMResponseError), "response-interrupted"),
+    )
+    for classes, reason in classifiers:
+        for current in chain:
+            if isinstance(current, classes):
+                return GatewayError(reason=reason, http_status=_http_status(current))
+
+    for current in chain:
+        if not isinstance(current, OpenAIError):
+            continue
+        status = _http_status(current)
+        if status in _AUTH_REJECTION_HTTP_STATUSES:
+            return GatewayError(reason="auth-rejected", http_status=status)
+        if status == _RATE_LIMIT_HTTP_STATUS:
+            return GatewayError(reason="rate-limited", http_status=status)
+        if status is not None and status in _CLIENT_ERROR_HTTP_STATUSES:
+            return GatewayError(reason="request-rejected", http_status=status)
+        if status is not None and status in _SERVER_ERROR_HTTP_STATUSES:
+            return GatewayError(reason="gateway-server-error", http_status=status)
+    return None
+
+
+def _selected_gateway_error(exception: BaseException) -> GatewayError | None:
+    if isinstance(exception, GatewayConfigurationError):
+        return classify_gateway_error(exception)
+    if os.environ.get("USE_LITELLM_PROXY") != "true":
+        return None
+    return classify_gateway_error(exception)
+
+
+def _gateway_reasoning(error: GatewayError) -> str:
+    messages: dict[GatewayErrorReason, str] = {
+        "configuration-missing": "Gateway configuration is incomplete.",
+        "configuration-invalid": "Gateway configuration is invalid.",
+        "auth-rejected": "Gateway authentication was rejected.",
+        "request-rejected": "Gateway rejected the request.",
+        "rate-limited": "Gateway rate limit was reached.",
+        "gateway-server-error": "Gateway server failed.",
+        "gateway-unreachable": "Gateway could not be reached.",
+        "response-interrupted": "Gateway response was interrupted.",
+    }
+    return messages[error.reason]
 
 
 def render_template(
@@ -217,20 +431,7 @@ def run_agent_session(
     # causing PermissionError on mkdir.
     os.environ["HOME"] = workdir
 
-    api_key = os.environ.get("LLM_API_KEY")
-    if not api_key:
-        msg = (
-            "LLM_API_KEY environment variable is not set. "
-            "The caller must map the provider-specific key "
-            "(e.g. ANTHROPIC_API_KEY) to LLM_API_KEY."
-        )
-        raise RuntimeError(msg)
-
-    llm = LLM(
-        model=model,
-        api_key=api_key,
-        base_url=os.environ.get("LLM_BASE_URL"),
-    )
+    llm = create_llm(model)
 
     tools = [
         Tool(name=TerminalTool.name),
@@ -243,7 +444,7 @@ def run_agent_session(
     else:
         agent = Agent(llm=llm, tools=tools)
 
-    conversation: BaseConversation = Conversation(agent=agent, workspace=workdir)
+    conversation = cast("BaseConversation", Conversation(agent=agent, workspace=workdir))
     conversation.send_message(prompt)
     conversation.run()
 
@@ -276,16 +477,27 @@ def run_judge(input_path: str, output_path: str) -> None:
     )
 
     llm_usage = LLMUsage()
+    gateway_error: GatewayError | None = None
     try:
         llm_usage = run_agent_session(judge_input.model, judge_input.mcp_servers, judge_input.workdir, prompt)
         verdict = read_verdict(verdict_path)
     except Exception as e:  # noqa: BLE001
-        verdict = Verdict(met=None, reasoning=f"Judge execution error: {e}")
+        gateway_error = _selected_gateway_error(e)
+        if gateway_error is None:
+            verdict = Verdict(met=None, reasoning=f"Judge execution error: {e}")
+        else:
+            verdict = Verdict(
+                met=None,
+                reasoning=_gateway_reasoning(gateway_error),
+                gateway_error=gateway_error,
+            )
     finally:
         with contextlib.suppress(OSError):
             os.unlink(verdict_path)
 
     output = {"verdict": verdict.model_dump(), "llm_usage": llm_usage.model_dump()}
+    if gateway_error is not None:
+        output["gateway_error"] = gateway_error.model_dump(exclude_none=True)
     with open(output_path, "w") as f:
         json.dump(output, f)
 
@@ -317,14 +529,26 @@ def run_judge_batch(input_path: str, output_path: str) -> None:
     )
 
     llm_usage = LLMUsage()
+    gateway_error: GatewayError | None = None
     try:
         llm_usage = run_agent_session(judge_input.model, judge_input.mcp_servers, judge_input.workdir, prompt)
         verdicts = read_batch_verdict(verdict_path, n_criteria)
     except Exception as e:  # noqa: BLE001
-        verdicts = Verdict.errors(
-            n_criteria,
-            f"Judge execution error: {e}",
-        )
+        gateway_error = _selected_gateway_error(e)
+        if gateway_error is None:
+            verdicts = Verdict.errors(
+                n_criteria,
+                f"Judge execution error: {e}",
+            )
+        else:
+            verdicts = [
+                Verdict(
+                    met=None,
+                    reasoning=_gateway_reasoning(gateway_error),
+                    gateway_error=gateway_error,
+                )
+                for _ in range(n_criteria)
+            ]
     finally:
         with contextlib.suppress(OSError):
             os.unlink(verdict_path)
@@ -333,6 +557,8 @@ def run_judge_batch(input_path: str, output_path: str) -> None:
         "verdicts": TypeAdapter(list[Verdict]).dump_python(verdicts),
         "llm_usage": llm_usage.model_dump(),
     }
+    if gateway_error is not None:
+        output["gateway_error"] = gateway_error.model_dump(exclude_none=True)
     with open(output_path, "w") as f:
         json.dump(output, f, indent=2)
 

@@ -27,12 +27,13 @@ import sys
 import tempfile
 from concurrent.futures import ThreadPoolExecutor
 
-from pydantic import TypeAdapter
+from pydantic import TypeAdapter, ValidationError
 
 from gandalf.models import (
     BatchJudgeInput,
     CriterionResult,
     EvaluationInfo,
+    GatewayError,
     GraderConfig,
     JudgeInput,
     LLMUsage,
@@ -70,6 +71,10 @@ JUDGE_ENV_ALLOWLIST = frozenset(
         "PATH",
         "LLM_API_KEY",
         "LLM_BASE_URL",
+        "USE_LITELLM_PROXY",
+        "LITELLM_PROXY_API_BASE",
+        "LITELLM_PROXY_API_KEY",
+        "LLM_EXTRA_HEADERS_JSON",
         "PYTHONPATH",
         "UV_TOOL_DIR",
         "UV_TOOL_BIN_DIR",
@@ -331,11 +336,16 @@ def run_judge(
     except (json.JSONDecodeError, FileNotFoundError) as e:
         return fail(f"Failed to read judge output: {e}")
     else:
-        if batch:
-            verdicts = TypeAdapter(list[Verdict]).validate_python(data["verdicts"])
-        else:
-            verdicts = [Verdict.model_validate(data["verdict"])]
-        usage = LLMUsage.model_validate(data["llm_usage"])
+        try:
+            gateway_error = GatewayError.model_validate(data["gateway_error"]) if "gateway_error" in data else None
+            if batch:
+                verdicts = TypeAdapter(list[Verdict]).validate_python(data["verdicts"])
+            else:
+                verdicts = [Verdict.model_validate(data["verdict"])]
+            verdicts = [verdict.model_copy(update={"gateway_error": gateway_error}) for verdict in verdicts]
+            usage = LLMUsage.model_validate(data["llm_usage"])
+        except (KeyError, TypeError, ValidationError):
+            return fail("Failed to validate judge output.")
         return verdicts, usage
     finally:
         shutil.rmtree(clone_dir, ignore_errors=True)
@@ -368,6 +378,7 @@ def verdict_to_result(item: RubricItem, verdict: Verdict) -> CriterionResult:
         met=verdict.met,
         reasoning=verdict.reasoning,
         evidence=verdict.evidence,
+        gateway_error=verdict.gateway_error,
     )
 
 
@@ -608,11 +619,16 @@ def apply_retries(
     return [retry_map.get(i, r) for i, r in enumerate(results)]
 
 
+def get_terminal_gateway_error(results: list[CriterionResult]) -> GatewayError | None:
+    return next((result.gateway_error for result in results if result.gateway_error is not None), None)
+
+
 def write_info(
     config: GraderConfig,
     results: list[CriterionResult],
     llm_usage: LLMUsage,
     errored_criterion_count: int,
+    gateway_error: GatewayError | None = None,
 ) -> tuple[float, float]:
     """Compute reward and raw score and write info.json. Returns (reward, raw_score).
 
@@ -639,17 +655,22 @@ def write_info(
     evaluated_pct = round((n_evaluated / n_total * 100.0) if n_total > 0 else 100.0, 2)
 
     info = EvaluationInfo(
-        reward=reward,
-        raw_score=raw_score,
+        reward=None if gateway_error is not None else reward,
+        raw_score=None if gateway_error is not None else raw_score,
         minimum_score=minimum_score,
         maximum_score=maximum_score,
         criterion_results=results,
         llm_usage=llm_usage,
         errored_criterion_count=errored_criterion_count,
         evaluated_criteria_pct=evaluated_pct,
+        gateway_error=gateway_error,
     )
     with open(os.path.join(config.output_dir, "info.json"), "w") as f:
-        f.write(info.model_dump_json(indent=2))
+        excluded_fields = {"reward", "raw_score"} if gateway_error is not None else {"gateway_error"}
+        serialized = info.model_dump(exclude=excluded_fields)
+        if gateway_error is not None and gateway_error.http_status is None:
+            serialized["gateway_error"].pop("http_status", None)
+        json.dump(serialized, f, indent=2)
 
     return reward, raw_score
 
@@ -747,7 +768,18 @@ def main() -> None:
     # 4. ALWAYS write info.json (even on hard fail)
     final_errored = get_errored_indices(results)
     errored_count = len(final_errored)
-    reward, raw_score = write_info(config, results, llm_usage, errored_count)
+    gateway_error = get_terminal_gateway_error(results)
+    reward, raw_score = write_info(config, results, llm_usage, errored_count, gateway_error)
+
+    if gateway_error is not None:
+        with contextlib.suppress(FileNotFoundError):
+            os.unlink(os.path.join(config.output_dir, "reward.json"))
+        print(  # noqa: T201
+            f"\nERROR: The selected gateway failed ({gateway_error.reason}).",
+            file=sys.stderr,
+        )
+        print(f"info.json written to {config.output_dir}/ (reward.json NOT written)", file=sys.stderr)  # noqa: T201
+        sys.exit(1)
 
     # 5. If any criteria still errored: do NOT write reward.json, exit 1
     if final_errored:

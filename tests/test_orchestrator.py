@@ -16,6 +16,7 @@ import pytest
 from gandalf.models import (
     BatchJudgeInput,
     CriterionResult,
+    GatewayError,
     GraderConfig,
     JudgeInput,
     LLMUsage,
@@ -280,6 +281,15 @@ class TestResolveJudgePrompt:
 class TestJudgeEnvVars:
     """Tests for the env-var allowlist forwarded to the judge subprocess."""
 
+    def test_gateway_contract_is_allowlisted(self) -> None:
+        assert {
+            "USE_LITELLM_PROXY",
+            "LITELLM_PROXY_API_BASE",
+            "LITELLM_PROXY_API_KEY",
+            "LLM_API_KEY",
+            "LLM_EXTRA_HEADERS_JSON",
+        } <= JUDGE_ENV_ALLOWLIST
+
     def test_only_allowlisted_vars_are_forwarded(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("LLM_API_KEY", "sk-test-123")
         monkeypatch.setenv("PATH", "/usr/bin")
@@ -489,6 +499,54 @@ class TestEvaluateAllCriteria:
         assert len(verdicts) == 2
         assert all(v.met is None for v in verdicts)
         assert usage == LLMUsage()
+
+    @patch("gandalf.orchestrator.clone_workspace")
+    @patch("gandalf.orchestrator.subprocess.run")
+    def test_zero_exit_gateway_marker_is_preserved(
+        self, mock_run: Any, mock_clone: Any, tmp_path: pathlib.Path
+    ) -> None:
+        mock_clone.return_value = str(tmp_path)
+        mock_run.side_effect = make_run_writing(
+            {
+                "verdicts": [{"met": False, "reasoning": "diagnostic", "evidence": ["evidence"]}],
+                "llm_usage": {},
+                "gateway_error": {"version": 1, "reason": "rate-limited", "http_status": 429},
+            }
+        )
+
+        verdicts, _ = run_judge(
+            make_batch_input(tmp_path, n=1),
+            sandbox_user="sandbox",
+            trace_path=str(tmp_path / "trace.txt"),
+        )
+
+        assert verdicts[0].met is False
+        assert verdicts[0].gateway_error == GatewayError(reason="rate-limited", http_status=429)
+
+    @patch("gandalf.orchestrator.clone_workspace")
+    @patch("gandalf.orchestrator.subprocess.run")
+    def test_malformed_gateway_marker_is_output_validation_error(
+        self, mock_run: Any, mock_clone: Any, tmp_path: pathlib.Path
+    ) -> None:
+        mock_clone.return_value = str(tmp_path)
+        mock_run.side_effect = make_run_writing(
+            {
+                "verdicts": [{"met": True, "reasoning": "ok"}],
+                "llm_usage": {},
+                "gateway_error": {"version": 2, "reason": "rate-limited", "secret": "must-not-appear"},
+            }
+        )
+
+        verdicts, _ = run_judge(
+            make_batch_input(tmp_path, n=1),
+            sandbox_user="sandbox",
+            trace_path=str(tmp_path / "trace.txt"),
+        )
+
+        assert verdicts[0].met is None
+        assert verdicts[0].gateway_error is None
+        assert verdicts[0].reasoning == "Failed to validate judge output."
+        assert "must-not-appear" not in verdicts[0].reasoning
 
 
 @pytest.fixture
@@ -1073,6 +1131,93 @@ class TestRetryLogic:
         assert info["raw_score"] == 2.0
         assert info["reward"] == 0.6667
         assert reward["reward"] == info["reward"]
+
+
+class TestGatewayTerminalOutcome:
+    def test_mixed_results_keep_diagnostics_but_publish_no_grade(self, tmp_path: pathlib.Path) -> None:
+        output_dir = tmp_path / "output"
+        output_dir.mkdir()
+        (output_dir / "reward.json").write_text('{"reward": 1}')
+        config = GraderConfig(
+            instructions="test",
+            rubric_path="/rubric.json",
+            workdir=str(tmp_path),
+            trajectory_path="/logs/trajectory.json",
+            sandbox_user="sandbox",
+            output_dir=str(output_dir),
+            judge_retries=0,
+            mode="batch",
+        )
+        rubric = [
+            RubricItem(criterion="successful", weight=1.0),
+            RubricItem(criterion="gateway failed", weight=1.0),
+        ]
+        marker = GatewayError(reason="auth-rejected", http_status=401)
+        verdicts = [
+            Verdict(met=True, reasoning="criterion succeeded", evidence=["proof"]),
+            Verdict(met=False, reasoning="gateway failed", gateway_error=marker),
+        ]
+
+        with (
+            patch("gandalf.orchestrator.load_config", return_value=config),
+            patch("gandalf.orchestrator.load_rubric", return_value=rubric),
+            patch("gandalf.orchestrator.load_trajectory_final_output", return_value="done"),
+            patch("gandalf.orchestrator.resolve_instructions", return_value="test"),
+            patch("gandalf.orchestrator.resolve_judge_guidance", return_value=""),
+            patch("gandalf.orchestrator.run_judge", return_value=(verdicts, LLMUsage())),
+            patch("sys.argv", ["prog", "--config", "dummy.toml"]),
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            main()
+
+        assert exc_info.value.code == 1
+        info = json.loads((output_dir / "info.json").read_text())
+        assert info["gateway_error"] == {"version": 1, "reason": "auth-rejected", "http_status": 401}
+        assert "reward" not in info
+        assert "raw_score" not in info
+        assert info["criterion_results"][0]["reasoning"] == "criterion succeeded"
+        assert info["criterion_results"][0]["evidence"] == ["proof"]
+        assert "gateway_error" not in info["criterion_results"][1]
+        assert not (output_dir / "reward.json").exists()
+
+    def test_successful_retry_removes_terminal_marker(self, tmp_path: pathlib.Path) -> None:
+        output_dir = tmp_path / "output"
+        output_dir.mkdir()
+        config = GraderConfig(
+            instructions="test",
+            rubric_path="/rubric.json",
+            workdir=str(tmp_path),
+            trajectory_path="/logs/trajectory.json",
+            sandbox_user="sandbox",
+            output_dir=str(output_dir),
+            judge_retries=1,
+            mode="batch",
+        )
+        rubric = [RubricItem(criterion="criterion", weight=1.0)]
+        marker = GatewayError(reason="gateway-unreachable")
+
+        with (
+            patch("gandalf.orchestrator.load_config", return_value=config),
+            patch("gandalf.orchestrator.load_rubric", return_value=rubric),
+            patch("gandalf.orchestrator.load_trajectory_final_output", return_value="done"),
+            patch("gandalf.orchestrator.resolve_instructions", return_value="test"),
+            patch("gandalf.orchestrator.resolve_judge_guidance", return_value=""),
+            patch(
+                "gandalf.orchestrator.run_judge",
+                side_effect=[
+                    ([Verdict(met=None, reasoning="temporary", gateway_error=marker)], LLMUsage()),
+                    ([Verdict(met=True, reasoning="recovered")], LLMUsage()),
+                ],
+            ),
+            patch("sys.argv", ["prog", "--config", "dummy.toml"]),
+        ):
+            main()
+
+        info = json.loads((output_dir / "info.json").read_text())
+        assert "gateway_error" not in info
+        assert info["reward"] == 1.0
+        assert info["raw_score"] == 1.0
+        assert json.loads((output_dir / "reward.json").read_text()) == {"reward": 1.0}
 
 
 class TestCloneWorkspace:
