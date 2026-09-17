@@ -1,4 +1,8 @@
-"""Prepare inline images for OpenAI without modifying workspace evidence."""
+"""Prepare inline images for OpenAI without modifying workspace evidence.
+
+Resize only enough to meet the rejection limit, preserving detail for judges
+that use original resolution. Reject animations rather than discard frames.
+"""
 
 import base64
 import logging
@@ -29,19 +33,19 @@ def _fit_size(width: int, height: int) -> tuple[int, int]:
 
 
 def prepare_openai_image_url(url: str) -> str:
-    """Resize only oversized inline images; leave remote URLs and compliant bytes alone."""
+    """Reject animations and resize oversized images; preserve compliant static bytes."""
     header, separator, encoded = url.partition(",")
     if not separator or not header.lower().startswith("data:") or not header.lower().endswith(";base64"):
         return url
 
     image_bytes = base64.b64decode(encoded, validate=True)
     with Image.open(BytesIO(image_bytes)) as source:
+        if getattr(source, "is_animated", False):
+            msg = "Cannot prepare an animated image for the OpenAI judge without discarding frames."
+            raise ValueError(msg)
         width, height = source.size
         if _patch_count(width, height) <= MAX_PATCHES:
             return url
-        if getattr(source, "is_animated", False):
-            msg = "Cannot resize an animated image for the OpenAI patch limit. View a still frame instead."
-            raise ValueError(msg)
 
         with ImageOps.exif_transpose(source) as oriented:
             target = _fit_size(*oriented.size)

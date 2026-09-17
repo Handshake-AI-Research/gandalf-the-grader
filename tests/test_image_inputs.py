@@ -150,13 +150,18 @@ def test_oversized_palette_transparency_survives_resize(tmp_path: Path) -> None:
         assert pixel[3] == 0
 
 
-def test_oversized_animation_returns_tool_error_without_flattening(tmp_path: Path) -> None:
-    source = tmp_path / "animation.gif"
-    first = Image.new("P", (5100, 6000), 0)
-    second = Image.new("P", (5100, 6000), 1)
+@pytest.mark.parametrize("extension", ["gif", "webp"])
+@pytest.mark.parametrize("size", [(32, 32), (5100, 6000)])
+def test_animation_returns_tool_error_without_flattening(tmp_path: Path, extension: str, size: tuple[int, int]) -> None:
+    source = tmp_path / f"animation.{extension}"
+    first = Image.new("RGB", size, "red")
+    second = Image.new("RGB", size, "blue")
     first.save(source, save_all=True, append_images=[second], duration=100, loop=0)
+    with Image.open(source) as animation:
+        assert getattr(animation, "is_animated", False)
+        assert getattr(animation, "n_frames", 1) == 2
     original = source.read_bytes()
-    observation = view_image(source)
+    observation = view_image(source, "openai/gpt-5.6-sol")
     assert observation.is_error
     assert not any(isinstance(part, ImageContent) for part in observation.content)
     assert "animated image" in observation.text
@@ -229,14 +234,3 @@ def test_oversized_webp_stays_webp_with_transparency(tmp_path: Path) -> None:
         assert isinstance(pixel, tuple)
         assert pixel[3] == 78
     assert source.read_bytes() == original
-
-
-def test_compliant_animation_stays_byte_identical(tmp_path: Path) -> None:
-    source = tmp_path / "animation.gif"
-    first = Image.new("P", (32, 32), 0)
-    second = Image.new("P", (32, 32), 1)
-    first.save(source, save_all=True, append_images=[second], duration=100, loop=0)
-    original = source.read_bytes()
-    header, prepared = image_payload(view_image(source))
-    assert header == "data:image/gif;base64"
-    assert prepared == original

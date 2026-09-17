@@ -1,4 +1,8 @@
-"""Gandalf's file-editor adapter for provider-sized image observations."""
+"""Prepare file-editor images once so later requests reuse the stored observation.
+
+This adapter covers direct OpenAI and OpenRouter OpenAI judges. MCP image results,
+Azure deployments, and opaque proxy routes retain their upstream behavior.
+"""
 
 from collections.abc import Sequence
 
