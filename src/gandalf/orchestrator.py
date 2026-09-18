@@ -666,7 +666,7 @@ def write_info(
         gateway_error=gateway_error,
     )
     with open(os.path.join(config.output_dir, "info.json"), "w") as f:
-        excluded_fields = {"reward", "raw_score"} if gateway_error is not None else {"gateway_error"}
+        excluded_fields = {"gateway_error"} if gateway_error is None else set()
         serialized = info.model_dump(exclude=excluded_fields)
         if gateway_error is not None and gateway_error.http_status is None:
             serialized["gateway_error"].pop("http_status", None)

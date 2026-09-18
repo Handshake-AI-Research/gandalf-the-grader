@@ -1173,8 +1173,8 @@ class TestGatewayTerminalOutcome:
         assert exc_info.value.code == 1
         info = json.loads((output_dir / "info.json").read_text())
         assert info["gateway_error"] == {"version": 1, "reason": "auth-rejected", "http_status": 401}
-        assert "reward" not in info
-        assert "raw_score" not in info
+        assert info["reward"] is None
+        assert info["raw_score"] is None
         assert info["criterion_results"][0]["reasoning"] == "criterion succeeded"
         assert info["criterion_results"][0]["evidence"] == ["proof"]
         assert "gateway_error" not in info["criterion_results"][1]
