@@ -4,7 +4,7 @@ import tomllib
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, TypeAdapter, model_validator
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
 
 
 class MCPServer(BaseModel):
@@ -162,12 +162,35 @@ class LLMUsage(BaseModel):
         )
 
 
+GatewayErrorReason = Literal[
+    "configuration-missing",
+    "configuration-invalid",
+    "auth-rejected",
+    "request-rejected",
+    "rate-limited",
+    "gateway-server-error",
+    "gateway-unreachable",
+    "response-interrupted",
+]
+
+
+class GatewayError(BaseModel):
+    """Sanitized terminal failure from a selected LiteLLM gateway route."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    version: Literal[1] = 1
+    reason: GatewayErrorReason
+    http_status: int | None = Field(default=None, ge=100, le=599)
+
+
 class Verdict(BaseModel):
     """Verdict returned by the inner judge."""
 
     met: bool | None
     reasoning: str
     evidence: list[str] = Field(default_factory=list)
+    gateway_error: GatewayError | None = Field(default=None, exclude=True)
 
     @classmethod
     def from_raw(cls, data: dict[str, Any]) -> "Verdict":
@@ -193,19 +216,21 @@ class CriterionResult(BaseModel):
     met: bool | None
     reasoning: str
     evidence: list[str] = Field(default_factory=list)
+    gateway_error: GatewayError | None = Field(default=None, exclude=True)
 
 
 class EvaluationInfo(BaseModel):
     """Full evaluation output with reward/raw score, per-criterion results, and LLM usage."""
 
-    reward: float
-    raw_score: float
+    reward: float | None = None
+    raw_score: float | None = None
     minimum_score: float = 0.0
     maximum_score: float = 0.0
     criterion_results: list[CriterionResult]
     llm_usage: LLMUsage = Field(default_factory=LLMUsage)
     errored_criterion_count: int = 0
     evaluated_criteria_pct: float = 100.0
+    gateway_error: GatewayError | None = None
 
 
 def load_config(path: str) -> GraderConfig:
