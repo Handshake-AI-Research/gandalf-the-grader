@@ -18,6 +18,15 @@ jobs:
           python-version: "3.13"
       - uses: pypa/hatch@install
       - name: Build
+        env:
+          # hatch-pinned-extra generates the [pinned] extra from uv.lock only when
+          # this is set. Without it the hook warns, hatch build still exits 0, and
+          # the published artifact silently ships with no pinned extra.
+          HATCH_PINNED_EXTRA_ENABLE: "1"
         run: hatch build
+      - name: Verify pinned extra is present
+        run: |
+          python -m zipfile -e dist/*.whl /tmp/whl
+          grep -q '^Provides-Extra: pinned$' /tmp/whl/*.dist-info/METADATA
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
