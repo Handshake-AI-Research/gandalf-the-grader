@@ -47,10 +47,10 @@ from openhands.sdk.llm.exceptions import (
     LLMServiceUnavailableError,
     LLMTimeoutError,
 )
-from openhands.tools.file_editor import FileEditorTool
 from openhands.tools.terminal import TerminalTool
 from pydantic import TypeAdapter
 
+from gandalf.file_editor import GANDALF_FILE_EDITOR_TOOL
 from gandalf.models import (
     BatchJudgeInput,
     GatewayError,
@@ -435,7 +435,7 @@ def run_agent_session(
 
     tools = [
         Tool(name=TerminalTool.name),
-        Tool(name=FileEditorTool.name),
+        Tool(name=GANDALF_FILE_EDITOR_TOOL),
     ]
 
     if mcp_servers:

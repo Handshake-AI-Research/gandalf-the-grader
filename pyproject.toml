@@ -21,6 +21,7 @@ dependencies = [
     "litellm>=1.83.0,<2",
     "openhands-sdk>=1.14.0,<1.16.1",
     "openhands-tools>=1.11.2,<1.16.1",
+    "pillow>=12.2,<13",
     "pydantic>=2.12.5,<3",
 ]
 
