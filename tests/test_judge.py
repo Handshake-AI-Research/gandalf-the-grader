@@ -11,7 +11,7 @@ from unittest.mock import patch
 
 import httpx
 import pytest
-from litellm.exceptions import RateLimitError
+from litellm.exceptions import BadRequestError, RateLimitError
 from openhands.sdk.llm import Message
 from openhands.sdk.llm.exceptions import (
     LLMAuthenticationError,
@@ -834,6 +834,45 @@ class TestGatewayConfiguration:
         marker = classify_gateway_error(exception)
         assert marker is not None
         assert marker.model_dump() == {"version": 1, "reason": "rate-limited", "http_status": 429}
+
+    def test_classifies_openai_bio_policy_from_structured_body(self) -> None:
+        response = httpx.Response(400, request=httpx.Request("POST", "https://gateway.example/v1/chat/completions"))
+        exception = BadRequestError(
+            "This content was flagged for possible biological risk.",
+            llm_provider="openai",
+            model="openai/gpt-5.6-sol",
+            response=response,
+            body={
+                "error": {
+                    "message": "This content was flagged for possible biological risk.",
+                    "type": "invalid_request_error",
+                    "code": "bio_policy",
+                }
+            },
+        )
+
+        marker = classify_gateway_error(exception)
+
+        assert marker is not None
+        assert marker.model_dump() == {
+            "version": 1,
+            "reason": "provider-policy-rejected",
+            "http_status": 400,
+        }
+
+    def test_does_not_infer_provider_policy_from_exception_text(self) -> None:
+        response = httpx.Response(400, request=httpx.Request("POST", "https://gateway.example/v1/chat/completions"))
+        exception = BadRequestError(
+            "code: bio_policy",
+            llm_provider="openai",
+            model="openai/gpt-5.6-sol",
+            response=response,
+        )
+
+        marker = classify_gateway_error(exception)
+
+        assert marker is not None
+        assert marker.reason == "request-rejected"
 
     @patch("gandalf.judge.run_agent_session", side_effect=LLMRateLimitError("secret response"))
     def test_single_output_carries_sanitized_marker(

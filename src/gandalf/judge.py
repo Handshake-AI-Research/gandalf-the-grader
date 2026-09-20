@@ -67,6 +67,7 @@ _AUTH_REJECTION_HTTP_STATUSES = frozenset({401, 403})
 _RATE_LIMIT_HTTP_STATUS = 429
 _CLIENT_ERROR_HTTP_STATUSES = range(400, 500)
 _SERVER_ERROR_HTTP_STATUSES = range(500, 600)
+_PROVIDER_POLICY_ERROR_CODES = frozenset({"bio_policy"})
 
 
 class GatewayConfigurationError(Exception):
@@ -180,6 +181,18 @@ def _http_status(exception: BaseException) -> int | None:
     return None
 
 
+def _provider_error_code(exception: BaseException) -> str | None:
+    """Read a provider error code from a typed LiteLLM exception body."""
+    body = getattr(exception, "body", None)
+    if not isinstance(body, dict):
+        return None
+    error = body.get("error")
+    if not isinstance(error, dict):
+        return None
+    code = error.get("code")
+    return code if isinstance(code, str) else None
+
+
 def classify_gateway_error(exception: BaseException) -> GatewayError | None:
     """Classify a typed terminal gateway exception without reading its text."""
     if isinstance(exception, GatewayConfigurationError):
@@ -205,6 +218,8 @@ def classify_gateway_error(exception: BaseException) -> GatewayError | None:
     for classes, reason in classifiers:
         for current in chain:
             if isinstance(current, classes):
+                if _provider_error_code(current) in _PROVIDER_POLICY_ERROR_CODES:
+                    return GatewayError(reason="provider-policy-rejected", http_status=_http_status(current))
                 return GatewayError(reason=reason, http_status=_http_status(current))
 
     for current in chain:
@@ -235,6 +250,9 @@ def _gateway_reasoning(error: GatewayError) -> str:
         "configuration-missing": "Gateway configuration is incomplete.",
         "configuration-invalid": "Gateway configuration is invalid.",
         "auth-rejected": "Gateway authentication was rejected.",
+        "provider-policy-rejected": (
+            "The model provider rejected the request under its content policy. Choose a different judge model."
+        ),
         "request-rejected": "Gateway rejected the request.",
         "rate-limited": "Gateway rate limit was reached.",
         "gateway-server-error": "Gateway server failed.",

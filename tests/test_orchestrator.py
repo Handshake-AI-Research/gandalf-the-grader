@@ -36,6 +36,7 @@ from gandalf.orchestrator import (
     run_batch_concurrent,
     run_individual,
     run_judge,
+    save_trace,
     write_info,
 )
 from tests.conftest import cr, make_batch_input, make_config
@@ -400,6 +401,38 @@ def make_run_writing(content: Any) -> Callable[..., subprocess.CompletedProcess[
 
 class TestEvaluateAllCriteria:
     """Tests for evaluate_all_criteria IPC contract: dict, list, invalid shapes, failures."""
+
+    def test_trace_redacts_judge_and_gateway_credentials(
+        self, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("LLM_API_KEY", "judge-api-key")
+        monkeypatch.setenv("LITELLM_PROXY_API_KEY", "gateway-api-key")
+        monkeypatch.setenv(
+            "LLM_EXTRA_HEADERS_JSON",
+            json.dumps(
+                {
+                    "CF-Access-Client-Id": "cloudflare-client-id",
+                    "CF-Access-Client-Secret": "cloudflare-client-secret",
+                    "x-litellm-tags": "rle,verifier",
+                }
+            ),
+        )
+        trace_path = tmp_path / "trace.txt"
+
+        save_trace(
+            str(trace_path),
+            "api_key=judge-api-key client=cloudflare-client-id",
+            "proxy=gateway-api-key secret=cloudflare-client-secret tags=rle,verifier",
+            1,
+        )
+
+        trace = trace_path.read_text()
+        assert "judge-api-key" not in trace
+        assert "gateway-api-key" not in trace
+        assert "cloudflare-client-id" not in trace
+        assert "cloudflare-client-secret" not in trace
+        assert trace.count("[REDACTED]") == 4
+        assert "tags=rle,verifier" in trace
 
     @patch("gandalf.orchestrator.clone_workspace")
     @patch("gandalf.orchestrator.subprocess.run")
@@ -1134,6 +1167,45 @@ class TestRetryLogic:
 
 
 class TestGatewayTerminalOutcome:
+    def test_provider_policy_rejection_is_not_retried(self, tmp_path: pathlib.Path) -> None:
+        output_dir = tmp_path / "output"
+        output_dir.mkdir()
+        config = GraderConfig(
+            instructions="test",
+            rubric_path="/rubric.json",
+            workdir=str(tmp_path),
+            trajectory_path="/logs/trajectory.json",
+            sandbox_user="sandbox",
+            output_dir=str(output_dir),
+            judge_retries=3,
+            mode="batch",
+        )
+        marker = GatewayError(reason="provider-policy-rejected", http_status=400)
+
+        with (
+            patch("gandalf.orchestrator.load_config", return_value=config),
+            patch("gandalf.orchestrator.load_rubric", return_value=[RubricItem(criterion="criterion", weight=1.0)]),
+            patch("gandalf.orchestrator.load_trajectory_final_output", return_value="done"),
+            patch("gandalf.orchestrator.resolve_instructions", return_value="test"),
+            patch("gandalf.orchestrator.resolve_judge_guidance", return_value=""),
+            patch(
+                "gandalf.orchestrator.run_judge",
+                return_value=([Verdict(met=None, reasoning="policy rejected", gateway_error=marker)], LLMUsage()),
+            ) as run,
+            patch("sys.argv", ["prog", "--config", "dummy.toml"]),
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            main()
+
+        assert exc_info.value.code == 1
+        assert run.call_count == 1
+        info = json.loads((output_dir / "info.json").read_text())
+        assert info["gateway_error"] == {
+            "version": 1,
+            "reason": "provider-policy-rejected",
+            "http_status": 400,
+        }
+
     def test_mixed_results_keep_diagnostics_but_publish_no_grade(self, tmp_path: pathlib.Path) -> None:
         output_dir = tmp_path / "output"
         output_dir.mkdir()

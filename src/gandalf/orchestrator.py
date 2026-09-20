@@ -87,10 +87,45 @@ JUDGE_ENV_ALLOWLIST = frozenset(
     }
 )
 
+_NON_RETRYABLE_GATEWAY_REASONS = frozenset(
+    {
+        "configuration-missing",
+        "configuration-invalid",
+        "auth-rejected",
+        "provider-policy-rejected",
+        "request-rejected",
+    }
+)
+_SENSITIVE_HEADER_NAME_PARTS = ("authorization", "api-key", "token", "secret", "credential", "client-id")
+
 
 def judge_env_vars() -> list[str]:
     """Build the ``KEY=VALUE`` list for the judge subprocess environment."""
     return [f"{k}={v}" for k, v in os.environ.items() if k in JUDGE_ENV_ALLOWLIST and v]
+
+
+def _trace_secret_values() -> set[str]:
+    values = {value for name in ("LLM_API_KEY", "LITELLM_PROXY_API_KEY") if (value := os.environ.get(name))}
+    try:
+        headers = json.loads(os.environ.get("LLM_EXTRA_HEADERS_JSON", ""))
+    except json.JSONDecodeError:
+        headers = {}
+    if isinstance(headers, dict):
+        values.update(
+            value
+            for name, value in headers.items()
+            if isinstance(name, str)
+            and isinstance(value, str)
+            and any(part in name.lower() for part in _SENSITIVE_HEADER_NAME_PARTS)
+        )
+    return values
+
+
+def redact_trace(value: str) -> str:
+    """Remove configured judge credentials from captured process output."""
+    for secret in sorted(_trace_secret_values(), key=len, reverse=True):
+        value = value.replace(secret, "[REDACTED]")
+    return value
 
 
 def resolve_optional_file(
@@ -356,9 +391,9 @@ def save_trace(trace_path: str, stdout: str, stderr: str, returncode: int) -> No
     with contextlib.suppress(OSError), open(trace_path, "w") as f:
         f.write(f"exit_code: {returncode}\n")
         f.write("=== stdout ===\n")
-        f.write(stdout)
+        f.write(redact_trace(stdout))
         f.write("\n=== stderr ===\n")
-        f.write(stderr)
+        f.write(redact_trace(stderr))
 
 
 def format_status(*, met: bool | None) -> str:
@@ -748,6 +783,9 @@ def main() -> None:
     # 3. Retry loop — retries always use the non-concurrent variant
     retry_run = run_batch if config.mode == "batch" else run_individual
     for attempt in range(config.judge_retries):
+        gateway_error = get_terminal_gateway_error(results)
+        if gateway_error is not None and gateway_error.reason in _NON_RETRYABLE_GATEWAY_REASONS:
+            break
         errored = get_errored_indices(results)
         if not errored:
             break
