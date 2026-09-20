@@ -166,6 +166,7 @@ GatewayErrorReason = Literal[
     "configuration-missing",
     "configuration-invalid",
     "auth-rejected",
+    "provider-policy-rejected",
     "request-rejected",
     "rate-limited",
     "gateway-server-error",
