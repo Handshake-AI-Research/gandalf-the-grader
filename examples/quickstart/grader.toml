@@ -9,10 +9,10 @@
 # - `sandbox_user` is intentionally omitted so the inner judge runs as the
 #   current user. For production setups, configure a dedicated sandbox user
 #   (see the Configuration section of the README).
-# - `model` is any litellm-compatible identifier. `gemini/gemini-2.5-flash`
+# - `model` is any litellm-compatible identifier. `gemini/gemini-3.5-flash`
 #   requires `LLM_API_KEY` (a Gemini API key) in your environment.
 
-model = "gemini/gemini-2.5-flash"
+model = "gemini/gemini-3.5-flash"
 instructions = "Write a friendly welcome message to a text file in the workspace."
 rubric_path = "examples/quickstart/rubric.json"
 workdir = "examples/quickstart/workspace"
