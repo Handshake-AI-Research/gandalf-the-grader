@@ -38,6 +38,7 @@ from litellm.exceptions import (
     UnprocessableEntityError,
 )
 from openhands.sdk import LLM, Agent, BaseConversation, Conversation, Tool
+from openhands.sdk.llm import LLMResponse
 from openhands.sdk.llm.exceptions import (
     LLMAuthenticationError,
     LLMBadRequestError,
@@ -125,8 +126,24 @@ def _validated_gateway_base(value: str | None) -> str:
     return value
 
 
+class _GPT61SolLLM(LLM):
+    def uses_responses_api(self) -> bool:
+        return True
+
+    def responses(self, *args: Any, **kwargs: Any) -> LLMResponse:
+        kwargs["additional_drop_params"] = [
+            *kwargs.get("additional_drop_params", []),
+            "temperature",
+            "top_p",
+            "top_logprobs",
+            "logprobs",
+        ]
+        return super().responses(*args, **kwargs)
+
+
 def create_llm(model: str) -> LLM:
     api_key = os.environ.get("LLM_API_KEY")
+    llm_class = _GPT61SolLLM if model == "openai/gpt-6.1-sol" else LLM
     if not use_litellm_proxy():
         if not api_key:
             msg = (
@@ -135,7 +152,7 @@ def create_llm(model: str) -> LLM:
                 "(e.g. ANTHROPIC_API_KEY) to LLM_API_KEY."
             )
             raise RuntimeError(msg)
-        return LLM(
+        return llm_class(
             model=model,
             api_key=api_key,
             base_url=os.environ.get("LLM_BASE_URL"),
@@ -148,7 +165,7 @@ def create_llm(model: str) -> LLM:
     if proxy_key != api_key:
         raise GatewayConfigurationError(reason="configuration-invalid")
     headers = parse_extra_headers(os.environ.get("LLM_EXTRA_HEADERS_JSON"))
-    return LLM(model=model, api_key=api_key, extra_headers=headers)
+    return llm_class(model=model, api_key=api_key, extra_headers=headers)
 
 
 def _exception_chain(exception: BaseException) -> list[BaseException]:

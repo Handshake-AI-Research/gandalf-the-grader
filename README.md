@@ -89,6 +89,9 @@ The example uses [`gemini/gemini-2.5-flash`](examples/quickstart/grader.toml) an
 | `judge_prompt` | No | | Inline Jinja2 template that completely overrides the built-in judge task prompt (mutually exclusive with `judge_prompt_path`) |
 | `judge_prompt_path` | No | | Path to a Jinja2 template file that completely overrides the built-in judge task prompt (mutually exclusive with `judge_prompt`) |
 
+For GPT-6.1 Sol, set `model = "openai/gpt-6.1-sol"`. The judge uses the Responses API.
+It keeps the SDK default reasoning effort (`high`) and omits unsupported sampling parameters.
+
 MCP servers can be configured as TOML array of tables:
 
 ```toml
