@@ -12,6 +12,7 @@ from unittest.mock import patch
 import httpx
 import pytest
 from litellm.exceptions import RateLimitError
+from openhands.sdk import Agent
 from openhands.sdk.llm import Message
 from openhands.sdk.llm.exceptions import (
     LLMAuthenticationError,
@@ -34,6 +35,7 @@ from gandalf.judge import (
     parse_extra_headers,
     read_batch_verdict,
     read_verdict,
+    run_agent_session,
     run_judge,
     run_judge_batch,
 )
@@ -931,7 +933,7 @@ class TestGatewayTransport:
             monkeypatch.setenv("LLM_EXTRA_HEADERS_JSON", json.dumps(headers))
 
             llm = create_llm("gemini/gemini-2.5-pro")
-            llm.num_retries = 1
+            llm.num_retries = 2
             llm.retry_min_wait = 0
             llm.retry_max_wait = 0
             llm.retry_multiplier = 0
@@ -1061,3 +1063,48 @@ class TestRunJudgeLLM:
         assert verdict["met"] is True
         assert verdict["reasoning"]
         assert isinstance(verdict["evidence"], list)
+
+
+def test_session_keeps_remote_mcp_server_settings(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    agents: list[Agent] = []
+
+    class LocalSession:
+        def __init__(self, agent: Agent, workspace: str) -> None:
+            assert workspace == str(tmp_path)
+            agents.append(agent)
+
+        def send_message(self, _prompt: str) -> None:
+            pass
+
+        def run(self) -> None:
+            pass
+
+    monkeypatch.setenv("USE_LITELLM_PROXY", "false")
+    monkeypatch.setenv("LLM_API_KEY", "test-key")
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr("gandalf.judge.Conversation", LocalSession)
+    run_agent_session(
+        "openai/gpt-6.1-sol",
+        [
+            MCPServer(
+                name="evidence",
+                url="https://evidence.example/mcp",
+                transport="streamable-http",
+                headers={"Authorization": "Bearer test-token"},
+            ),
+            MCPServer(name="local", command="python", args=["server.py"], transport="stdio"),
+        ],
+        str(tmp_path),
+        "Read the evidence.",
+    )
+
+    assert set(agents[0].mcp_config) == {"evidence", "local"}
+    server = agents[0].mcp_config["evidence"]
+    assert server.url == "https://evidence.example/mcp"
+    assert server.transport == "streamable-http"
+    assert server.headers is not None
+    assert server.headers["Authorization"].get_secret_value() == "Bearer test-token"
+
+    local_server = agents[0].mcp_config["local"]
+    assert local_server.command == "python"
+    assert local_server.args == ["server.py"]

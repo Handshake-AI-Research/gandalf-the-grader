@@ -5,6 +5,7 @@ Azure deployments, and opaque proxy routes retain their upstream behavior.
 """
 
 from collections.abc import Sequence
+from typing import ClassVar, Self, cast
 
 from litellm import get_llm_provider
 from litellm.exceptions import BadRequestError
@@ -62,11 +63,15 @@ def _uses_openai_image_limit(llm: LLM) -> bool:
     return bool(provider == "openai")
 
 
-def create_gandalf_file_editor(conv_state: ConversationState) -> Sequence[FileEditorTool]:
-    tools = FileEditorTool.create(conv_state)
-    if not _uses_openai_image_limit(conv_state.agent.llm):
-        return tools
-    return [tool.set_executor(OpenAiImageFileEditorExecutor(tool.as_executable().executor)) for tool in tools]
+class GandalfFileEditorTool(FileEditorTool):
+    name: ClassVar[str] = FileEditorTool.name
+
+    @classmethod
+    def create(cls, conv_state: ConversationState) -> Sequence[Self]:
+        tools = cast("Sequence[Self]", super().create(conv_state))
+        if not _uses_openai_image_limit(conv_state.agent.llm):
+            return tools
+        return [tool.set_executor(OpenAiImageFileEditorExecutor(tool.as_executable().executor)) for tool in tools]
 
 
-register_tool(GANDALF_FILE_EDITOR_TOOL, create_gandalf_file_editor)
+register_tool(GANDALF_FILE_EDITOR_TOOL, GandalfFileEditorTool)
