@@ -81,3 +81,41 @@ class TestLoadTrajectoryFinalOutput:
         p = tmp_path / "user_only.json"
         p.write_text(json.dumps({"steps": [{"source": "user", "message": "hello"}]}))
         assert load_trajectory_final_output(str(p)) == ""
+
+    def test_non_object_json_returns_empty(self, tmp_path: pathlib.Path) -> None:
+        p = tmp_path / "array.json"
+        p.write_text(json.dumps([{"source": "agent", "message": "hi"}]))
+        assert load_trajectory_final_output(str(p)) == ""
+
+    def test_steps_not_a_list_returns_empty(self, tmp_path: pathlib.Path) -> None:
+        p = tmp_path / "bad_steps.json"
+        p.write_text(json.dumps({"steps": {"source": "agent", "message": "hi"}}))
+        assert load_trajectory_final_output(str(p)) == ""
+
+    def test_skips_non_dict_steps(self, tmp_path: pathlib.Path) -> None:
+        p = tmp_path / "mixed_steps.json"
+        p.write_text(
+            json.dumps(
+                {
+                    "steps": [
+                        "not a step",
+                        {"source": "agent", "message": "Here is the result."},
+                    ]
+                }
+            )
+        )
+        assert load_trajectory_final_output(str(p)) == "Here is the result."
+
+    def test_non_string_message_is_skipped(self, tmp_path: pathlib.Path) -> None:
+        p = tmp_path / "non_string_msg.json"
+        p.write_text(
+            json.dumps(
+                {
+                    "steps": [
+                        {"source": "agent", "message": {"text": "nope"}},
+                        {"source": "agent", "message": "Here is the result."},
+                    ]
+                }
+            )
+        )
+        assert load_trajectory_final_output(str(p)) == "Here is the result."
