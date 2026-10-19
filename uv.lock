@@ -1106,7 +1106,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "jinja2", specifier = ">=3.1,<4" },
-    { name = "litellm", specifier = ">=1.93.0,<2" },
+    { name = "litellm", specifier = ">=1.93.0,<1.106.0" },
     { name = "openhands-sdk", specifier = ">=1.54.0,<1.55.0" },
     { name = "openhands-tools", specifier = ">=1.54.0,<1.55.0" },
     { name = "pillow", specifier = ">=12.3.0,<13" },
