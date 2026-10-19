@@ -47,6 +47,7 @@ from openhands.sdk.llm.exceptions import (
     LLMServiceUnavailableError,
     LLMTimeoutError,
 )
+from openhands.sdk.mcp.config import coerce_mcp_config
 from openhands.tools.terminal import TerminalTool
 from pydantic import TypeAdapter
 
@@ -439,7 +440,7 @@ def run_agent_session(
     ]
 
     if mcp_servers:
-        mcp_config = {"mcpServers": {srv.name: mcp_server_to_config(srv) for srv in mcp_servers}}
+        mcp_config = coerce_mcp_config({srv.name: mcp_server_to_config(srv) for srv in mcp_servers})
         agent = Agent(llm=llm, tools=tools, mcp_config=mcp_config)
     else:
         agent = Agent(llm=llm, tools=tools)

@@ -83,7 +83,7 @@ def image_payload(observation: FileEditorObservation) -> tuple[str, bytes]:
     return header, base64.b64decode(encoded)
 
 
-@pytest.mark.parametrize("model", ["openai/gpt-4.1", "openrouter/openai/gpt-4.1"])
+@pytest.mark.parametrize("model", ["openai/gpt-4.1", "openrouter/openai/gpt-4.1", "openai/gpt-6.1-sol"])
 def test_oversized_alpha_image_keeps_transparency_and_observation_metadata(tmp_path: Path, model: str) -> None:
     source = tmp_path / "chart.png"
     Image.new("RGBA", (5100, 6000), (20, 40, 60, 78)).save(source)

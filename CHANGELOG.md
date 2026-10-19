@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.1.0]
+
+### Added
+
+- Support GPT-6.1 Sol judges through OpenAI's Responses API.
+- Exercise the Sol transport, tool calls, reasoning settings, and verdict parsing
+  in an end-to-end test against a local HTTP server.
+
+### Changed
+
+- Upgrade the pinned OpenHands SDK and tools to 1.54.0.
+- Adapt file-editor registration and MCP server configuration to the supported
+  OpenHands SDK interfaces.
+- Apply the existing OpenAI image safeguards to GPT-6.1 Sol.
+
+### Fixed
+
+- Constrain LiteLLM below 1.106.0 because that release requires MCP interfaces
+  incompatible with the OpenHands 1.54.0 dependency stack.
+
 ## [1.0.2]
 
 ### Fixed
@@ -39,6 +59,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 - Initial open-source release of Gandalf the Grader.
 
+[1.1.0]: https://github.com/Handshake-AI-Research/gandalf-the-grader/releases/tag/v1.1.0
 [1.0.2]: https://github.com/Handshake-AI-Research/gandalf-the-grader/releases/tag/v1.0.2
 [1.0.1]: https://github.com/Handshake-AI-Research/gandalf-the-grader/releases/tag/v1.0.1
 [1.0.0]: https://github.com/Handshake-AI-Research/gandalf-the-grader/releases/tag/v1.0.0
