@@ -30,6 +30,13 @@ class TestLoadTrajectoryFinalOutput:
         with pytest.raises(FileNotFoundError):
             load_trajectory_final_output("/nonexistent/trajectory.json")
 
+    def test_invalid_json_exits(self, tmp_path: pathlib.Path) -> None:
+        p = tmp_path / "bad.json"
+        p.write_text("{not json")
+        with pytest.raises(SystemExit) as exc_info:
+            load_trajectory_final_output(str(p))
+        assert exc_info.value.code == 1
+
     def test_skips_trailing_empty_message(self, tmp_path: pathlib.Path) -> None:
         """When the last agent message has empty content (e.g. reasoning-only
         turn), the function should return the preceding non-empty message."""
