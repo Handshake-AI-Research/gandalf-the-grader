@@ -33,7 +33,7 @@ uv tool install gandalf-the-grader
 For production use, we recommend that you pin a specific version of Gandalf, and furthermore use the `[pinned]` version to [pin all transitive dependencies](https://github.com/edgarrmondragon/hatch-pinned-extra).
 
 ```bash
-uv tool install 'gandalf-the-grader[pinned]==1.0.0'
+uv tool install 'gandalf-the-grader[pinned]==1.1.0'
 ```
 
 ## Runtime dependencies
