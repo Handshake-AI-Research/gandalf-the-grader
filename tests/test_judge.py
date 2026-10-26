@@ -278,6 +278,13 @@ class TestReadVerdict:
         result = read_verdict(str(p))
         assert result.met is None
 
+    def test_quoted_false_is_not_met(self, tmp_path: pathlib.Path) -> None:
+        """A judge that quotes its boolean must not have "false" scored as met."""
+        p = tmp_path / "verdict.json"
+        p.write_text(json.dumps({"met": "false", "reasoning": "criterion failed"}))
+        result = read_verdict(str(p))
+        assert result.met is False
+
     def test_empty_file(self, tmp_path: pathlib.Path) -> None:
         p = tmp_path / "verdict.json"
         p.write_text("")
@@ -320,6 +327,20 @@ class TestReadBatchVerdict:
         assert len(results) == 2
         assert results[0].met is True
         assert results[1].met is False
+
+    def test_string_verdicts_are_not_read_by_truthiness(self, tmp_path: pathlib.Path) -> None:
+        p = tmp_path / "verdict.json"
+        p.write_text(
+            json.dumps(
+                [
+                    {"index": 0, "met": "false", "reasoning": "failed"},
+                    {"index": 1, "met": "no", "reasoning": "failed"},
+                ]
+            )
+        )
+        results = read_batch_verdict(str(p), 2)
+        assert results[0].met is False
+        assert results[1].met is None
 
     def test_missing_index_gets_default_fail(self, tmp_path: pathlib.Path) -> None:
         p = tmp_path / "verdict.json"

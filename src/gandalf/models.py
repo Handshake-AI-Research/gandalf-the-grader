@@ -184,6 +184,15 @@ class GatewayError(BaseModel):
     http_status: int | None = Field(default=None, ge=100, le=599)
 
 
+def _parse_met(raw_met: Any) -> bool | None:
+    """Return the judge's ``met`` as a bool if it is a JSON boolean or "true"/"false", else None."""
+    if isinstance(raw_met, bool):
+        return raw_met
+    if isinstance(raw_met, str):
+        return {"true": True, "false": False}.get(raw_met.strip().lower())
+    return None
+
+
 class Verdict(BaseModel):
     """Verdict returned by the inner judge."""
 
@@ -194,11 +203,21 @@ class Verdict(BaseModel):
 
     @classmethod
     def from_raw(cls, data: dict[str, Any]) -> "Verdict":
-        """Create a Verdict from a raw JSON-parsed dict, normalizing types."""
+        """Create a Verdict from a raw JSON-parsed dict, normalizing types.
+
+        ``met`` must be a JSON boolean, or the string ``"true"`` or ``"false"``
+        (any case). Any other value is an invalid verdict (``met=None``), so it is
+        retried like other judge errors instead of being read by truthiness,
+        which would turn ``"false"`` into ``True``.
+        """
         raw_met = data.get("met")
+        met = _parse_met(raw_met)
+        reasoning = str(data.get("reasoning", "No reasoning provided."))
+        if met is None and raw_met is not None:
+            reasoning = f"Invalid 'met' value {raw_met!r}, expected true or false. {reasoning}"
         return cls(
-            met=bool(raw_met) if raw_met is not None else None,
-            reasoning=str(data.get("reasoning", "No reasoning provided.")),
+            met=met,
+            reasoning=reasoning,
             evidence=list(data.get("evidence", [])),
         )
 

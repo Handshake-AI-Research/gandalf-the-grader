@@ -240,6 +240,29 @@ class TestPydanticModels:
         data = v.model_dump()
         assert data["met"] is None
 
+    @pytest.mark.parametrize(
+        ("raw_met", "expected"),
+        [
+            (True, True),
+            (False, False),
+            ("true", True),
+            ("false", False),
+            ("False", False),
+            (" TRUE ", True),
+            (None, None),
+        ],
+    )
+    def test_verdict_from_raw_reads_booleans(self, raw_met: Any, expected: Any) -> None:
+        assert Verdict.from_raw({"met": raw_met, "reasoning": "ok"}).met is expected
+
+    @pytest.mark.parametrize("raw_met", ["no", "not met", "0", "", 0, 1, 0.0, [], [False], {}])
+    def test_verdict_from_raw_rejects_non_booleans(self, raw_met: Any) -> None:
+        """Truthiness would score "no", "0" or [False] as met; they are invalid verdicts."""
+        v = Verdict.from_raw({"met": raw_met, "reasoning": "judge text"})
+        assert v.met is None
+        assert "Invalid 'met' value" in v.reasoning
+        assert "judge text" in v.reasoning
+
     def test_verdict_none_serialization_roundtrip(self) -> None:
         v = Verdict(met=None, reasoning="error")
         raw = v.model_dump_json()
